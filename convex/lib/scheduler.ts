@@ -35,6 +35,8 @@ export interface SchedulerTask {
   priority: number; // 0=urgent .. 3=low
   earliestMs?: number;
   noSplit?: boolean;
+  /** Task ids that must finish before this one starts (dependencies). */
+  blockedBy?: string[];
 }
 
 export interface Interval {
@@ -53,7 +55,7 @@ export interface SchedulerWarning {
   taskId: string;
   title: string;
   unscheduledMin: number;
-  reason: "no_capacity" | "past_due";
+  reason: "no_capacity" | "past_due" | "dependency_cycle";
 }
 
 export interface ScheduleResult {
@@ -155,10 +157,12 @@ function compareTasks(a: SchedulerTask, b: SchedulerTask): number {
 }
 
 /**
- * Greedy earliest-fit scheduler.
+ * Greedy earliest-fit scheduler with dependency awareness.
  * Ordering: hard deadline asc → priority desc → estimate desc (per Motion/Reclaim
- * conventions). Each placement consumes free time (plus buffer), so the loop
- * always makes forward progress.
+ * conventions), processed topologically — a task never starts before its
+ * blockers' last scheduled block ends. Notion treats dependencies as visual
+ * metadata; here they actually shape the plan. Each placement consumes free
+ * time (plus buffer), so the loop always makes forward progress.
  */
 export function computeSchedule(
   nowMs: number,
@@ -186,11 +190,42 @@ export function computeSchedule(
     .filter((t) => t.remainingMin > 0)
     .sort(compareTasks);
 
-  for (const task of ordered) {
+  // Topological processing: among tasks whose blockers are all satisfied, keep
+  // the EDF/priority order. A blocker outside the set (done, or unschedulable)
+  // counts as satisfied. If nothing is eligible, there's a cycle — schedule
+  // anyway and warn rather than dropping work.
+  const inSet = new Set(ordered.map((t) => t.id));
+  const finishedAt = new Map<string, number>();
+  const pending = [...ordered];
+
+  while (pending.length > 0) {
+    let idx = pending.findIndex((t) =>
+      (t.blockedBy ?? []).every((b) => !inSet.has(b) || finishedAt.has(b))
+    );
+    const inCycle = idx === -1;
+    if (inCycle) idx = 0;
+    const task = pending.splice(idx, 1)[0];
+    if (inCycle) {
+      warnings.push({
+        taskId: task.id,
+        title: task.title,
+        unscheduledMin: 0,
+        reason: "dependency_cycle",
+      });
+    }
+
+    const blockerEnds = (task.blockedBy ?? [])
+      .filter((b) => finishedAt.has(b))
+      .map((b) => finishedAt.get(b)!);
+    const depEarliestMs = blockerEnds.length > 0 ? Math.max(...blockerEnds) : 0;
+
     let rem = Math.max(task.remainingMin, MIN_BLOCK_FLOOR_MIN);
-    const earliest =
-      task.earliestMs !== undefined ? ceilTo(task.earliestMs, cfg.granularityMin) : 0;
+    const earliest = ceilTo(
+      Math.max(task.earliestMs ?? 0, depEarliestMs),
+      cfg.granularityMin
+    );
     let placedPastDue = false;
+    let lastEnd = earliest;
 
     let i = 0;
     while (i < free.length && rem > 0) {
@@ -211,6 +246,7 @@ export function computeSchedule(
       const pastDue = task.dueMs !== undefined && end > task.dueMs;
       if (pastDue) placedPastDue = true;
       blocks.push({ taskId: task.id, start: startSnapped, end, pastDue });
+      lastEnd = Math.max(lastEnd, end);
       rem -= chunk;
 
       // Consume the slot: keep the left remainder (other tasks may use it) and
@@ -245,6 +281,7 @@ export function computeSchedule(
         reason: "past_due",
       });
     }
+    finishedAt.set(task.id, lastEnd);
   }
 
   blocks.sort((a, b) => a.start - b.start);

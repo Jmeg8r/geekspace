@@ -193,6 +193,66 @@ describe("computeSchedule", () => {
   });
 });
 
+describe("task dependencies", () => {
+  it("schedules a blocked task after its blocker, even when it outranks it", () => {
+    const tasks = [
+      task({ id: "blocker", priority: 3, remainingMin: 120 }),
+      task({ id: "urgent-but-blocked", priority: 0, dueMs: at(0, 17), blockedBy: ["blocker"] }),
+    ];
+    const { blocks } = computeSchedule(MON_8AM, tasks, [], cfg);
+    const blockerEnd = Math.max(...blocks.filter((b) => b.taskId === "blocker").map((b) => b.end));
+    const blockedStart = Math.min(
+      ...blocks.filter((b) => b.taskId === "urgent-but-blocked").map((b) => b.start)
+    );
+    expect(blockedStart).toBeGreaterThanOrEqual(blockerEnd);
+  });
+
+  it("chains A → B → C in order", () => {
+    const tasks = [
+      task({ id: "c", blockedBy: ["b"] }),
+      task({ id: "b", blockedBy: ["a"] }),
+      task({ id: "a" }),
+    ];
+    const { blocks, warnings } = computeSchedule(MON_8AM, tasks, [], cfg);
+    expect(warnings).toEqual([]);
+    const startOf = (id: string) =>
+      Math.min(...blocks.filter((b) => b.taskId === id).map((b) => b.start));
+    const endOf = (id: string) =>
+      Math.max(...blocks.filter((b) => b.taskId === id).map((b) => b.end));
+    expect(startOf("b")).toBeGreaterThanOrEqual(endOf("a"));
+    expect(startOf("c")).toBeGreaterThanOrEqual(endOf("b"));
+  });
+
+  it("treats blockers outside the task set (done/unschedulable) as satisfied", () => {
+    const tasks = [task({ id: "a", blockedBy: ["ghost-done-task"] })];
+    const { blocks, warnings } = computeSchedule(MON_8AM, tasks, [], cfg);
+    expect(warnings).toEqual([]);
+    expect(blocks[0].start).toBe(at(0, 9));
+  });
+
+  it("survives dependency cycles with a warning instead of dropping work", () => {
+    const tasks = [
+      task({ id: "a", blockedBy: ["b"] }),
+      task({ id: "b", blockedBy: ["a"] }),
+    ];
+    const { blocks, warnings } = computeSchedule(MON_8AM, tasks, [], cfg);
+    expect(blocks.filter((b) => b.taskId === "a").length).toBeGreaterThan(0);
+    expect(blocks.filter((b) => b.taskId === "b").length).toBeGreaterThan(0);
+    expect(warnings.some((w) => w.reason === "dependency_cycle")).toBe(true);
+  });
+
+  it("stays deterministic with dependencies in the mix", () => {
+    const tasks = [
+      task({ id: "a", remainingMin: 90 }),
+      task({ id: "b", blockedBy: ["a"], priority: 0 }),
+      task({ id: "c", dueMs: at(1, 17) }),
+    ];
+    const r1 = computeSchedule(MON_8AM, tasks, [], cfg);
+    const r2 = computeSchedule(MON_8AM, tasks, [], cfg);
+    expect(r1).toEqual(r2);
+  });
+});
+
 describe("calendar date helpers", () => {
   it("round-trips calendar dates through a timezone offset", () => {
     const day = Date.UTC(2026, 5, 10); // calendar date June 10

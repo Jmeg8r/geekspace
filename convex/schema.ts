@@ -35,6 +35,17 @@ export default defineSchema({
         datePropId: v.string(),
         estimatePropId: v.string(),
         priorityPropId: v.string(),
+        blockedByPropId: v.optional(v.string()),
+        sprintPropId: v.optional(v.string()),
+        parentPropId: v.optional(v.string()),
+      })
+    ),
+    // Marks a database as the sprint container for `completeSprint` automation.
+    sprintConfig: v.optional(
+      v.object({
+        statusPropId: v.string(), // select: Upcoming / Current / Completed
+        datePropId: v.string(), // date range of the sprint
+        tasksPropId: v.string(), // relation to the tasks database
       })
     ),
   }),
@@ -69,6 +80,10 @@ export default defineSchema({
     allDay: v.optional(v.boolean()),
     color: v.optional(v.string()),
     notes: v.optional(v.string()),
+    // External calendar sync (macOS Calendar): read-only mirrors, keyed by uid.
+    source: v.optional(v.string()), // "macos"
+    externalId: v.optional(v.string()),
+    calendarName: v.optional(v.string()),
   }).index("by_start", ["start"]),
 
   timeBlocks: defineTable({
@@ -95,6 +110,10 @@ export default defineSchema({
     granularityMin: v.number(),
     tzOffsetMin: v.optional(v.number()),
     seeded: v.optional(v.boolean()),
+    pmUpgraded: v.optional(v.boolean()),
+    macCalendarSync: v.optional(v.boolean()),
+    macCalendarNames: v.optional(v.array(v.string())),
+    mailWidget: v.optional(v.boolean()),
   }).index("by_key", ["key"]),
 
   schedulerState: defineTable({

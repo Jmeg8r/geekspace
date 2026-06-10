@@ -63,6 +63,30 @@ export function TimelineView({ db, view, rows }: ViewProps) {
   }
   scheduled.sort((a, b) => a.startDay - b.startDay || a.row.order - b.row.order);
 
+  // Dependency arrows (Blocked by): blocker bar end → blocked bar start.
+  const blockedByPropId = db.taskConfig?.blockedByPropId;
+  const barPos = new Map<string, { idx: number; startDay: number; endDay: number }>();
+  scheduled.forEach((s, idx) => barPos.set(s.row._id, { idx, startDay: s.startDay, endDay: s.endDay }));
+  const arrows: Array<{ key: string; x1: number; y1: number; x2: number; y2: number }> = [];
+  if (blockedByPropId) {
+    for (const s of scheduled) {
+      const blockers = s.row.properties?.[blockedByPropId];
+      if (!Array.isArray(blockers)) continue;
+      for (const b of blockers as string[]) {
+        const from = barPos.get(b);
+        const to = barPos.get(s.row._id);
+        if (!from || !to) continue;
+        arrows.push({
+          key: `${b}->${s.row._id}`,
+          x1: ((from.endDay - rangeStart) / DAY_MS + 1) * DAY_W - 4,
+          y1: from.idx * ROW_H + ROW_H / 2 + 1,
+          x2: ((to.startDay - rangeStart) / DAY_MS) * DAY_W + 1,
+          y2: to.idx * ROW_H + ROW_H / 2 + 1,
+        });
+      }
+    }
+  }
+
   function commitDrag(d: DragState) {
     const { orig, deltaDays, mode, rowId } = d;
     if (deltaDays === 0) return;
@@ -193,6 +217,30 @@ export function TimelineView({ db, view, rows }: ViewProps) {
               <div className="absolute inset-0 flex items-center justify-center text-[13px] text-ink-3">
                 Nothing scheduled in this range
               </div>
+            )}
+            {arrows.length > 0 && (
+              <svg
+                className="pointer-events-none absolute inset-0"
+                width={RANGE_DAYS * DAY_W}
+                height={Math.max(scheduled.length, 1) * ROW_H + 12}
+              >
+                <defs>
+                  <marker id="dep-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
+                    <path d="M0,0 L7,3.5 L0,7 z" fill="var(--ink-3)" />
+                  </marker>
+                </defs>
+                {arrows.map((a) => (
+                  <path
+                    key={a.key}
+                    d={`M ${a.x1} ${a.y1} C ${a.x1 + 26} ${a.y1}, ${a.x2 - 26} ${a.y2}, ${a.x2 - 2} ${a.y2}`}
+                    fill="none"
+                    stroke="var(--ink-3)"
+                    strokeWidth="1.5"
+                    opacity="0.75"
+                    markerEnd="url(#dep-arrow)"
+                  />
+                ))}
+              </svg>
             )}
           </div>
         </div>

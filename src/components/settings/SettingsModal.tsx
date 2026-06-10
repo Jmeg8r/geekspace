@@ -1,8 +1,12 @@
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Monitor, Moon, Sun } from "lucide-react";
+import { format } from "date-fns";
+import { CalendarDays, Mail, Monitor, Moon, RefreshCw, Sun } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { cn, tzOffsetMin } from "../../lib/utils";
 import { minOfDayLabel } from "../../lib/dates";
+import { integrationsAvailable, macListCalendars } from "../../lib/integrations";
+import { syncMacCalendar } from "../../lib/macSync";
 import { useUI } from "../../state/ui";
 import { Modal } from "../common/Modal";
 
@@ -16,7 +20,7 @@ export function SettingsModal() {
 
   if (!settings) return null;
 
-  function patch(p: Record<string, number | string | number[]>) {
+  function patch(p: Record<string, number | string | number[] | string[] | boolean>) {
     void update({ ...p, tzOffsetMin: tzOffsetMin() });
   }
 
@@ -119,11 +123,136 @@ export function SettingsModal() {
           />
         </Section>
 
+        {integrationsAvailable() && (
+          <IntegrationsSection
+            macCalendarSync={settings.macCalendarSync ?? false}
+            macCalendarNames={settings.macCalendarNames ?? []}
+            mailWidget={settings.mailWidget ?? false}
+            patch={patch}
+          />
+        )}
+
         <p className="pt-2 text-[11.5px] leading-relaxed text-ink-3">
           Geekspace · an As The Geek Learns build · data lives in your local Convex deployment.
         </p>
       </div>
     </Modal>
+  );
+}
+
+function IntegrationsSection({
+  macCalendarSync,
+  macCalendarNames,
+  mailWidget,
+  patch,
+}: {
+  macCalendarSync: boolean;
+  macCalendarNames: string[];
+  mailWidget: boolean;
+  patch: (p: Record<string, boolean | string[]>) => void;
+}) {
+  const [calendars, setCalendars] = useState<string[] | null>(null);
+  const [calError, setCalError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const macSyncStatus = useUI((s) => s.macSyncStatus);
+  const setMacSyncStatus = useUI((s) => s.setMacSyncStatus);
+
+  useEffect(() => {
+    if (!macCalendarSync || calendars !== null) return;
+    void macListCalendars().then((r) => {
+      if (r.ok) setCalendars(r.data);
+      else setCalError(r.error);
+    });
+  }, [macCalendarSync, calendars]);
+
+  return (
+    <Section
+      title="macOS integrations"
+      hint="Synced appointments become fixed busy time the auto-scheduler plans around. The first sync asks for Automation permission."
+    >
+      <label className="flex items-center justify-between py-1 text-[13px]">
+        <span className="flex items-center gap-1.5">
+          <CalendarDays size={14} className="text-ink-2" /> Sync macOS Calendar
+        </span>
+        <input
+          type="checkbox"
+          checked={macCalendarSync}
+          onChange={(e) => patch({ macCalendarSync: e.target.checked })}
+          className="accent-[var(--accent)]"
+        />
+      </label>
+
+      {macCalendarSync && (
+        <div className="ml-5 space-y-1 py-1">
+          {calError && <p className="text-[12px] text-[var(--pal-red)]">{calError}</p>}
+          {calendars === null && !calError && (
+            <p className="text-[12px] text-ink-3">Loading calendars…</p>
+          )}
+          {calendars?.map((name) => {
+            const checked =
+              macCalendarNames.length === 0 || macCalendarNames.includes(name);
+            return (
+              <label key={name} className="flex items-center gap-2 text-[12.5px]">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) => {
+                    const base =
+                      macCalendarNames.length === 0 ? calendars : macCalendarNames;
+                    const next = e.target.checked
+                      ? [...base.filter((n) => n !== name), name]
+                      : base.filter((n) => n !== name);
+                    patch({ macCalendarNames: next });
+                  }}
+                  className="accent-[var(--accent)]"
+                />
+                <span className="truncate">{name}</span>
+              </label>
+            );
+          })}
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              disabled={syncing}
+              onClick={async () => {
+                setSyncing(true);
+                try {
+                  const res = await syncMacCalendar(macCalendarNames);
+                  setMacSyncStatus({ at: Date.now(), ok: res.ok, message: res.message });
+                } finally {
+                  setSyncing(false);
+                }
+              }}
+              className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-ink-2 hover:bg-hov hover:text-ink disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={cn(syncing && "animate-spin")} /> Sync now
+            </button>
+            {macSyncStatus && (
+              <span
+                className={cn(
+                  "text-[11.5px]",
+                  macSyncStatus.ok ? "text-ink-3" : "text-[var(--pal-red)]"
+                )}
+              >
+                {macSyncStatus.ok ? "✓" : "✕"} {macSyncStatus.message} ·{" "}
+                {format(macSyncStatus.at, "h:mm a")}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      <label className="flex items-center justify-between py-1 text-[13px]">
+        <span className="flex items-center gap-1.5">
+          <Mail size={14} className="text-ink-2" /> Mail inbox on Home
+        </span>
+        <input
+          type="checkbox"
+          checked={mailWidget}
+          onChange={(e) => patch({ mailWidget: e.target.checked })}
+          className="accent-[var(--accent)]"
+        />
+      </label>
+    </Section>
   );
 }
 

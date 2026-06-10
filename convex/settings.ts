@@ -23,6 +23,9 @@ export const update = mutation({
     horizonDays: v.optional(v.number()),
     granularityMin: v.optional(v.number()),
     tzOffsetMin: v.optional(v.number()),
+    macCalendarSync: v.optional(v.boolean()),
+    macCalendarNames: v.optional(v.array(v.string())),
+    mailWidget: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const patch = Object.fromEntries(

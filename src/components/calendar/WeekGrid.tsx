@@ -109,6 +109,11 @@ export function WeekGrid({
   function onItemPointerDown(e: React.PointerEvent, item: GridItem) {
     if (e.button !== 0) return;
     e.stopPropagation();
+    // Synced macOS Calendar events are read-only mirrors — show details instead.
+    if (item.kind === "event" && item.data.source) {
+      onEditEvent(item.data);
+      return;
+    }
     // Past/started blocks and events are immutable history — no dragging back in time machines.
     if (item.start <= now && item.kind === "block") return;
     const startDate = new Date(item.start);
@@ -185,6 +190,8 @@ export function WeekGrid({
       }
       return;
     }
+    // Defense in depth: never mutate synced mirrors.
+    if (d.item.kind === "event" && d.item.data.source) return;
     if (d.mode === "move") {
       if (!d.moved) {
         // A clean click: open the right detail surface.
@@ -496,13 +503,16 @@ function DayItems({
 
         if (item.kind === "event") {
           const e = item.data;
+          const external = Boolean(e.source);
           return (
             <div
               key={item.id}
               {...common}
+              title={external ? `${e.title} — ${e.calendarName ?? "macOS Calendar"} (synced)` : undefined}
               className={cn(
-                "evt group absolute cursor-grab overflow-hidden rounded-md px-1.5 py-0.5",
+                "evt group absolute overflow-hidden rounded-md px-1.5 py-0.5",
                 colorVarClass(e.color),
+                external ? "external cursor-pointer" : "cursor-grab",
                 isPast && "opacity-60",
                 isDragged && "cursor-grabbing shadow-lg"
               )}
@@ -511,10 +521,12 @@ function DayItems({
               <div className="truncate text-[10.5px] opacity-90">
                 {fmtTime(start)} – {fmtTime(end)}
               </div>
-              <span
-                className="absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize"
-                onPointerDown={(ev) => onResizePointerDown(ev, item)}
-              />
+              {!external && (
+                <span
+                  className="absolute bottom-0 left-0 right-0 h-1.5 cursor-ns-resize"
+                  onPointerDown={(ev) => onResizePointerDown(ev, item)}
+                />
+              )}
             </div>
           );
         }

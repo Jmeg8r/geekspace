@@ -97,8 +97,10 @@ export function evalRule(row: RowDoc, rule: FilterRule, def: PropertyDef): boole
       }
     }
     case "relation": {
-      const arr = Array.isArray(raw) ? raw : [];
+      const arr = Array.isArray(raw) ? (raw as string[]) : [];
       switch (rule.op) {
+        case "contains": return arr.includes(String(rule.value));
+        case "notContains": return !arr.includes(String(rule.value));
         case "isEmpty": return arr.length === 0;
         case "isNotEmpty": return arr.length > 0;
         default: return true;
@@ -254,6 +256,8 @@ export function opsForType(type: PropertyDef["type"]): Array<{ op: FilterOp; lab
       ];
     case "relation":
       return [
+        { op: "contains", label: "contains" },
+        { op: "notContains", label: "does not contain" },
         { op: "isEmpty", label: "is empty" },
         { op: "isNotEmpty", label: "is not empty" },
       ];

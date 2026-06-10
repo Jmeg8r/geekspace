@@ -27,6 +27,8 @@ interface UIState {
   setCalAnchor: (ms: number) => void;
   viewByDb: Record<string, string>;
   setViewForDb: (databaseId: string, viewId: string) => void;
+  macSyncStatus: { at: number; ok: boolean; message: string } | null;
+  setMacSyncStatus: (status: { at: number; ok: boolean; message: string }) => void;
 }
 
 export const useUI = create<UIState>()(
@@ -52,6 +54,8 @@ export const useUI = create<UIState>()(
       viewByDb: {},
       setViewForDb: (databaseId, viewId) =>
         set((s) => ({ viewByDb: { ...s.viewByDb, [databaseId]: viewId } })),
+      macSyncStatus: null,
+      setMacSyncStatus: (macSyncStatus) => set({ macSyncStatus }),
     }),
     {
       name: "geekspace-ui",

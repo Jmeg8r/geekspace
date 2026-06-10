@@ -69,7 +69,10 @@
         "dmg",
         "zip"
       ],
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "extendInfo": {
+        "NSAppleEventsUsageDescription": "Geekspace reads your macOS Calendar and Mail to show events and messages, and to auto-schedule work around your appointments."
+      }
     }
   }
 }

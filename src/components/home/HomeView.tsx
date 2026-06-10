@@ -1,12 +1,30 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { format } from "date-fns";
-import { AlertTriangle, ArrowRight, CalendarDays, Clock, Lock, Zap } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  ArrowUpRight,
+  CalendarDays,
+  Clock,
+  Lock,
+  Mail,
+  Plus,
+  Zap,
+} from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { SchedulerWarning } from "../../../convex/lib/scheduler";
 import { useUI } from "../../state/ui";
 import { cn, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration, fmtTime, fmtDateValue, todayCalendarMs, epochToCalendarMs } from "../../lib/dates";
+import {
+  integrationsAvailable,
+  macFetchInbox,
+  macIsRunning,
+  macOpenApp,
+  macOpenMessage,
+  type MacMailMessage,
+} from "../../lib/integrations";
 import { Chip } from "../common/bits";
 
 const DAY_MS = 86_400_000;
@@ -25,14 +43,17 @@ export function HomeView() {
         <WarningsBanner />
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-          <section>
-            <SectionHeader
-              icon={<CalendarDays size={14} />}
-              title="Today"
-              action={{ label: "Open calendar", onClick: () => navigate({ kind: "calendar" }) }}
-            />
-            <TodayAgenda />
-          </section>
+          <div className="space-y-10">
+            <section>
+              <SectionHeader
+                icon={<CalendarDays size={14} />}
+                title="Today"
+                action={{ label: "Open calendar", onClick: () => navigate({ kind: "calendar" }) }}
+              />
+              <TodayAgenda />
+            </section>
+            <MailWidget />
+          </div>
           <section>
             <SectionHeader icon={<Zap size={14} />} title="My Tasks" />
             <MyTasks />
@@ -243,6 +264,14 @@ function MyTasks() {
               >
                 {t.title}
               </button>
+              {t.blocked && (
+                <span
+                  className="shrink-0 rounded bg-hov px-1.5 py-0.5 text-[10.5px] font-medium text-ink-2"
+                  title="Waiting on a blocking task — auto-scheduled after it finishes"
+                >
+                  ⛓ blocked
+                </span>
+              )}
               {t.estimateMin ? (
                 <span className="shrink-0 text-[11.5px] tabular-nums text-ink-3">{fmtDuration(t.estimateMin)}</span>
               ) : (
@@ -261,6 +290,134 @@ function MyTasks() {
         </div>
       ))}
     </div>
+  );
+}
+
+function MailWidget() {
+  const settings = useQuery(api.settings.get);
+  const dbs = useQuery(api.databases.listAll) ?? [];
+  const createRow = useMutation(api.rows.create);
+  const setContent = useMutation(api.rows.setContent);
+  const openRow = useUI((s) => s.openRow);
+  const [messages, setMessages] = useState<MacMailMessage[]>([]);
+  const [state, setState] = useState<"loading" | "ok" | "not-running" | "error">("loading");
+  const [error, setError] = useState("");
+  const enabled = Boolean(integrationsAvailable() && settings?.mailWidget);
+
+  async function load() {
+    setState("loading");
+    const running = await macIsRunning("Mail");
+    if (!running.ok || !running.data) {
+      setState("not-running");
+      return;
+    }
+    const r = await macFetchInbox(10);
+    if (!r.ok) {
+      setError(r.error);
+      setState("error");
+      return;
+    }
+    setMessages(r.data);
+    setState("ok");
+  }
+
+  useEffect(() => {
+    if (enabled) void load();
+  }, [enabled]);
+
+  if (!enabled) return null;
+  const taskDb = dbs.find((d) => d.isTaskSource);
+
+  async function makeTask(m: MacMailMessage) {
+    if (!taskDb) return;
+    const rowId = await createRow({
+      databaseId: taskDb._id,
+      properties: { title: m.subject },
+      tzOffsetMin: tzOffsetMin(),
+    });
+    if (!rowId) return;
+    const link = `message://%3C${encodeURIComponent(m.id.replace(/^<|>$/g, ""))}%3E`;
+    await setContent({
+      rowId,
+      content: JSON.stringify([
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "From email: ", styles: {} },
+            { type: "link", href: link, content: [{ type: "text", text: m.subject, styles: {} }] },
+            { type: "text", text: ` (${m.sender})`, styles: {} },
+          ],
+        },
+      ]),
+    });
+    openRow(rowId);
+  }
+
+  return (
+    <section>
+      <SectionHeader
+        icon={<Mail size={14} />}
+        title="Inbox"
+        action={{ label: "Refresh", onClick: () => void load() }}
+      />
+      {state === "loading" && <p className="py-3 text-[13px] text-ink-3">Reading Mail…</p>}
+      {state === "not-running" && (
+        <p className="flex items-center gap-2 py-3 text-[13px] text-ink-3">
+          Mail isn't running.
+          <button
+            onClick={async () => {
+              await macOpenApp("Mail");
+              setTimeout(() => void load(), 2500);
+            }}
+            className="rounded-md border border-border px-2 py-0.5 text-[12px] text-ink-2 hover:bg-hov"
+          >
+            Open Mail
+          </button>
+        </p>
+      )}
+      {state === "error" && <p className="py-3 text-[12.5px] text-[var(--pal-red)]">{error}</p>}
+      {state === "ok" && messages.length === 0 && (
+        <p className="py-3 text-[13px] text-ink-3">Inbox zero. Legend.</p>
+      )}
+      {state === "ok" &&
+        messages.map((m) => (
+          <div key={m.id || m.date} className="group flex items-center gap-2.5 border-b border-border py-1.5 last:border-b-0">
+            <span
+              className={cn(
+                "h-2 w-2 shrink-0 rounded-full",
+                m.read ? "bg-transparent" : "bg-accent"
+              )}
+              title={m.read ? "Read" : "Unread"}
+            />
+            <div className="min-w-0 flex-1">
+              <div className={cn("truncate text-[13px]", !m.read && "font-semibold")}>
+                {m.subject}
+              </div>
+              <div className="truncate text-[11.5px] text-ink-3">
+                {m.sender.replace(/<.*>/, "").trim()} · {format(m.date, "MMM d, h:mm a")}
+              </div>
+            </div>
+            <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
+              {taskDb && (
+                <button
+                  title="Create task from email"
+                  onClick={() => void makeTask(m)}
+                  className="rounded-md p-1 text-ink-3 hover:bg-hov hover:text-accent"
+                >
+                  <Plus size={14} />
+                </button>
+              )}
+              <button
+                title="Open in Mail"
+                onClick={() => void macOpenMessage(m.id)}
+                className="rounded-md p-1 text-ink-3 hover:bg-hov hover:text-ink"
+              >
+                <ArrowUpRight size={14} />
+              </button>
+            </span>
+          </div>
+        ))}
+    </section>
   );
 }
 

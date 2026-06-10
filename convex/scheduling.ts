@@ -116,7 +116,18 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       const prIdx = priorityProp?.options?.findIndex((o) => o.id === prVal) ?? -1;
       if (prIdx >= 0) priority = prIdx;
 
-      tasks.push({ id: row._id, title: row.title, remainingMin: remaining, dueMs, priority });
+      const blockedByPropId = db.taskConfig.blockedByPropId;
+      const rawBlockers = blockedByPropId ? p[blockedByPropId] : undefined;
+      const blockedBy = Array.isArray(rawBlockers) ? (rawBlockers as string[]) : undefined;
+
+      tasks.push({
+        id: row._id,
+        title: row.title,
+        remainingMin: remaining,
+        dueMs,
+        priority,
+        blockedBy,
+      });
       taskDb.set(row._id, db._id);
     }
   }

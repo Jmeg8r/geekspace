@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "convex/react";
+import { format } from "date-fns";
 import { Trash2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
@@ -7,6 +8,7 @@ import { OPTION_COLOR_IDS } from "../../../convex/lib/types";
 import { calendarToEpochMs, epochToCalendarMs, fmtCalendarDate } from "../../lib/dates";
 import { cn, tzOffsetMin } from "../../lib/utils";
 import { swatchClass } from "../../lib/optionColors";
+import { integrationsAvailable, macOpenApp } from "../../lib/integrations";
 import { Modal } from "../common/Modal";
 import { Popover } from "../common/Popover";
 import { DatePicker, TimeSelect } from "../common/DatePicker";
@@ -39,6 +41,51 @@ export function EventModal({ draft, onClose }: { draft: EventDraft; onClose: () 
   });
   const [color, setColor] = useState(initial?.color ?? "blue");
   const [notes, setNotes] = useState(initial?.notes ?? "");
+
+  // Synced macOS Calendar events are read-only mirrors.
+  if (draft.mode === "edit" && draft.event.source) {
+    const ev = draft.event;
+    return (
+      <Modal onClose={onClose} width="380px" top="18vh" showClose={false}>
+        <div className="p-5">
+          <div className="flex items-center gap-2 pb-1">
+            <span className={cn("h-3 w-3 shrink-0 rounded-full", swatchClass(ev.color))} />
+            <h2 className="text-[18px] font-bold leading-tight">{ev.title}</h2>
+          </div>
+          <p className="text-[13px] text-ink-2">
+            {ev.allDay
+              ? `${format(ev.start, "EEE, MMM d")} · All day`
+              : `${format(ev.start, "EEE, MMM d · h:mm a")} – ${format(ev.end, "h:mm a")}`}
+          </p>
+          {ev.calendarName && (
+            <p className="pt-1 text-[12px] text-ink-3">
+              {ev.calendarName} · synced from macOS Calendar
+            </p>
+          )}
+          {ev.notes && <p className="pt-2 text-[13px]">{ev.notes}</p>}
+          <p className="pt-3 text-[11.5px] leading-snug text-ink-3">
+            Read-only here — edit it in Calendar and it syncs back automatically.
+          </p>
+          <div className="mt-3 flex justify-end gap-2">
+            {integrationsAvailable() && (
+              <button
+                onClick={() => void macOpenApp("Calendar")}
+                className="rounded-md border border-border px-3 py-1.5 text-[13px] text-ink-2 hover:bg-hov hover:text-ink"
+              >
+                Open Calendar
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="rounded-md bg-accent px-3.5 py-1.5 text-[13px] font-semibold text-white hover:bg-accent-2"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
 
   async function save() {
     const start = allDay ? day : calendarToEpochMs(day, startMin);

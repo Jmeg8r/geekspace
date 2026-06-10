@@ -44,22 +44,28 @@ export const addProperty = mutation({
     if (args.type === "relation" && args.targetDatabaseId) {
       const target = await ctx.db.get(args.targetDatabaseId);
       if (!target) return null;
+      const reverseId = makeId();
+      def.relation = { databaseId: args.targetDatabaseId, syncedPropId: reverseId };
+      const reverse: PropertyDef = {
+        id: reverseId,
+        // WHY: same-database pairs (sub-tasks, dependencies) get a generic
+        // reverse name the user renames; cross-db reverses are named after
+        // the source database, like Notion.
+        name:
+          args.targetDatabaseId === args.databaseId
+            ? `${def.name} (reverse)`
+            : db.name || "Related",
+        type: "relation",
+        relation: { databaseId: args.databaseId, syncedPropId: propId },
+      };
       if (args.targetDatabaseId === args.databaseId) {
-        // Self-relations stay one-way to avoid sync loops.
-        def.relation = { databaseId: args.targetDatabaseId };
-      } else {
-        const reverseId = makeId();
-        def.relation = { databaseId: args.targetDatabaseId, syncedPropId: reverseId };
-        const reverse: PropertyDef = {
-          id: reverseId,
-          name: db.name || "Related",
-          type: "relation",
-          relation: { databaseId: args.databaseId, syncedPropId: propId },
-        };
-        await ctx.db.patch(args.targetDatabaseId, {
-          properties: [...(target.properties as PropertyDef[]), reverse],
-        });
+        // Self-relation pair lives on the same properties array.
+        await ctx.db.patch(args.databaseId, { properties: [...props, def, reverse] });
+        return propId;
       }
+      await ctx.db.patch(args.targetDatabaseId, {
+        properties: [...(target.properties as PropertyDef[]), reverse],
+      });
     }
     if (args.type === "rollup") {
       def.rollup = { relationPropId: "", targetPropId: "", aggregate: "count" };

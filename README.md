@@ -17,11 +17,13 @@ Built with the ASTGL brand: Inter, burnt orange (`#E9724C`) on warm gray in ligh
 - Infinite page nesting in the sidebar, emoji icons, favorites, trash with restore
 
 ### 🗄️ Databases (Notion Projects-style PM)
-- Property types: title, text, number (incl. minutes/progress formats), select, multi-select, **status with To-do / In Progress / Complete groups**, date (optional time + end date), checkbox, URL, **relation (two-way synced)**, **rollup** (count/sum/avg/min/max/**% complete**), created/updated time
-- Views per database: **Table** (inline editing), **Board** (drag cards between status columns), **List**, **Calendar** (drag items between days), **Timeline** (drag/resize Gantt bars)
-- Per-view filters (and/or rules), sorts, hidden properties
+- Property types: title, text, number (incl. minutes/progress formats), select, multi-select, **status with To-do / In Progress / Complete groups**, date (optional time + end date), checkbox, URL, **relation (two-way synced, incl. same-database pairs)**, **rollup** (count/sum/avg/min/max/**% complete**), created/updated time
+- Views per database: **Table** (inline editing), **Board** (drag cards between status columns), **List**, **Calendar** (drag items between days), **Timeline** (drag/resize Gantt bars **with dependency arrows**)
+- Per-view filters (and/or rules, incl. filter-by-relation), sorts, hidden properties
 - Every row opens as a full page with its own block content
-- Seeded template: `Projects ⇄ Tasks` wired with a relation + a `Progress` rollup showing % of tasks complete per project
+- **Sub-tasks** (Parent task ⇄ Sub-tasks) and **dependencies** (Blocked by ⇄ Blocking) — and unlike Notion, dependencies aren't just visual: the auto-scheduler won't place blocked work before its blockers finish
+- **Sprints**: two-week iterations with progress rollups, a current-sprint board, a backlog view, and a **Complete sprint** automation that closes the sprint, spins up the next one, and rolls unfinished tasks forward
+- Seeded template: `Projects ⇄ Tasks ⇄ Sprints` wired with relations + `Progress` rollups
 
 ### 📅 The calendar that schedules itself
 The headline feature, modeled on Notion Calendar + Motion/Reclaim:
@@ -37,9 +39,16 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - Week grid: drag to create events, drag to move, resize from the bottom edge, 15-min snapping, now-line; month overview with ⚡ block counts
 - Keyboard: `T` today · `J`/`K` next/prev · `W`/`M` views
 
+### 🍎 macOS integrations (desktop app)
+- **Calendar sync**: pick your Calendar.app calendars and they mirror into Geekspace (read-only, dotted edge) — and become fixed busy time the auto-scheduler plans around. Syncs at launch, on focus, and every 5 minutes
+- **Mail inbox on Home**: recent Mail.app messages with unread dots, open-in-Mail deep links, and one-click **email → task** (the task links back to the message)
+- One-time macOS Automation permission per app on first use
+
 ### 🏠 Home + ⌘K
-- Home: today's agenda, My Tasks (Overdue / Today / Upcoming) with one-click done, schedule warnings, recent pages
+- Home: today's agenda, My Tasks (Overdue / Today / Upcoming) with one-click done + ⛓ blocked chips, Mail inbox, schedule warnings, recent pages
 - `⌘K` command palette: full-text search across pages and rows + quick actions (`⌘N` new page, `⌘1` home, `⌘2` calendar)
+
+📖 **Full walkthrough: [docs/USER-GUIDE.md](docs/USER-GUIDE.md)** (a condensed copy lives in the app sidebar).
 
 ---
 
@@ -109,10 +118,11 @@ electron/           # main.mjs + preload.cjs (no build step)
 tests/              # scheduler test suite
 ```
 
-## Known limits (v1)
+## Known limits (v1.1)
 
-- Single user, no auth, no sync — by design
+- Single user, no auth, no cloud sync — by design
 - Packaged app is unsigned (personal use; right-click → Open the first time)
+- macOS Calendar sync is one-way (Calendar → Geekspace) and needs Calendar.app running; Mail widget needs Mail.app running
 - Far-future blocks across a DST switch can sit an hour off until any reflow corrects them
 - Deleting a row leaves dangling relation ids on the other side; cells skip them gracefully
 

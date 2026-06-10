@@ -176,6 +176,10 @@ button {
 .dark .evt {
   background: color-mix(in srgb, var(--evt-c) 62%, var(--surface));
 }
+/* Synced (read-only) external events get a dotted accent edge */
+.evt.external {
+  border-left-style: dotted;
+}
 .evt-gray   { --evt-c: var(--pal-gray); }
 .evt-orange { --evt-c: var(--pal-orange); }
 .evt-blue   { --evt-c: var(--pal-blue); }

@@ -5,6 +5,8 @@ import type { Id } from "../convex/_generated/dataModel";
 import { useUI } from "./state/ui";
 import { ThemeProvider } from "./state/theme";
 import { tzOffsetMin } from "./lib/utils";
+import { integrationsAvailable } from "./lib/integrations";
+import { syncMacCalendar } from "./lib/macSync";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { HomeView } from "./components/home/HomeView";
 import { CalendarView } from "./components/calendar/CalendarView";
@@ -32,6 +34,28 @@ export default function App() {
       void reflow({ tzOffsetMin: tzOffsetMin() }).catch(() => {});
     }
   }, [reflow]);
+
+  // Background macOS Calendar sync: launch + window focus + every 5 minutes.
+  const setMacSyncStatus = useUI((s) => s.setMacSyncStatus);
+  const calNamesKey = JSON.stringify(settings?.macCalendarNames ?? []);
+  useEffect(() => {
+    if (!integrationsAvailable() || !settings?.macCalendarSync) return;
+    let cancelled = false;
+    const names = JSON.parse(calNamesKey) as string[];
+    const doSync = async () => {
+      const res = await syncMacCalendar(names);
+      if (!cancelled) setMacSyncStatus({ at: Date.now(), ok: res.ok, message: res.message });
+    };
+    void doSync();
+    const interval = setInterval(doSync, 5 * 60 * 1000);
+    const onFocus = () => void doSync();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [settings?.macCalendarSync, calNamesKey, setMacSyncStatus]);
 
   // Global shortcuts.
   useEffect(() => {

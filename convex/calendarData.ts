@@ -59,6 +59,7 @@ export const myTasks = query({
       priorityName?: string;
       priorityColor?: string;
       inProgress: boolean;
+      blocked: boolean;
       statusPropId: string;
       completeOptionId?: string;
       databaseId: string;
@@ -73,16 +74,32 @@ export const myTasks = query({
         .query("rows")
         .withIndex("by_database", (q) => q.eq("databaseId", db._id))
         .collect();
+
+      // Status group per row, so dependency checks don't re-scan.
+      const groupOf = new Map<string, string>();
       for (const row of rows) {
-        const statusVal = row.properties?.[db.taskConfig.statusPropId];
-        const group =
-          statusProp?.options?.find((o) => o.id === statusVal)?.group ?? "todo";
+        const sv = row.properties?.[db.taskConfig.statusPropId];
+        groupOf.set(
+          row._id,
+          statusProp?.options?.find((o) => o.id === sv)?.group ?? "todo"
+        );
+      }
+      const blockedByPropId = db.taskConfig.blockedByPropId;
+
+      for (const row of rows) {
+        const group = groupOf.get(row._id) ?? "todo";
         if (group === "complete") continue;
         const due = row.properties?.[db.taskConfig.datePropId] as DateValue | undefined;
         const estimate = row.properties?.[db.taskConfig.estimatePropId];
         const prOption = priorityProp?.options?.find(
           (o) => o.id === row.properties?.[db.taskConfig!.priorityPropId]
         );
+        const rawBlockers = blockedByPropId ? row.properties?.[blockedByPropId] : undefined;
+        const blocked =
+          Array.isArray(rawBlockers) &&
+          (rawBlockers as string[]).some(
+            (id) => groupOf.has(id) && groupOf.get(id) !== "complete"
+          );
         out.push({
           rowId: row._id,
           title: row.title || "Untitled",
@@ -91,6 +108,7 @@ export const myTasks = query({
           priorityName: prOption?.name,
           priorityColor: prOption?.color,
           inProgress: group === "inprogress",
+          blocked,
           statusPropId: db.taskConfig.statusPropId,
           completeOptionId: completeOption?.id,
           databaseId: db._id,

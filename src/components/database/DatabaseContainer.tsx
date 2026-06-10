@@ -6,6 +6,7 @@ import {
   ChevronDown,
   EyeOff,
   Filter,
+  Flag,
   Plus,
   Settings,
   Trash2,
@@ -181,6 +182,7 @@ export function DatabaseContainer({ databaseId }: { databaseId: Id<"databases"> 
         <SortMenu db={db} view={activeView} count={sortCount} />
         <PropsMenu db={db} view={activeView} />
         <DbConfigMenu db={db} />
+        {db.sprintConfig && <CompleteSprintButton databaseId={db._id} />}
         <button
           onClick={() => void createRow({ databaseId, tzOffsetMin: tzOffsetMin() })}
           className="ml-1 flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[13px] font-semibold text-white hover:bg-accent-2"
@@ -198,6 +200,30 @@ export function DatabaseContainer({ databaseId }: { databaseId: Id<"databases"> 
         {activeView.type === "timeline" && <TimelineView {...viewProps} />}
       </div>
     </div>
+  );
+}
+
+function CompleteSprintButton({ databaseId }: { databaseId: Id<"databases"> }) {
+  const completeSprint = useMutation(api.pm.completeSprint);
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      disabled={busy}
+      onClick={async () => {
+        if (!confirm("Complete the current sprint? Open tasks roll into the next one.")) return;
+        setBusy(true);
+        try {
+          const res = await completeSprint({ sprintsDbId: databaseId });
+          if (typeof res === "string" && !res.startsWith("completed")) alert(res);
+        } finally {
+          setBusy(false);
+        }
+      }}
+      className="flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[13px] text-ink-2 hover:bg-hov hover:text-ink disabled:opacity-50"
+      title="Close the current sprint and roll open tasks forward"
+    >
+      <Flag size={13} /> Complete sprint
+    </button>
   );
 }
 
@@ -341,6 +367,9 @@ function FilterValueInput({
   value: string | number | undefined;
   onChange: (v: string | number | undefined) => void;
 }) {
+  if (def.type === "relation" && def.relation) {
+    return <RelationValueSelect def={def} value={value} onChange={onChange} />;
+  }
   if (def.type === "select" || def.type === "status" || def.type === "multiSelect") {
     return (
       <select
@@ -387,6 +416,34 @@ function FilterValueInput({
       placeholder="Value"
       className="flex-1 rounded border border-border bg-surface px-1.5 py-1 text-[12px] outline-none"
     />
+  );
+}
+
+function RelationValueSelect({
+  def,
+  value,
+  onChange,
+}: {
+  def: PropertyDef;
+  value: string | number | undefined;
+  onChange: (v: string | number | undefined) => void;
+}) {
+  const data = useQuery(api.rows.list, {
+    databaseId: def.relation!.databaseId as Id<"databases">,
+  });
+  return (
+    <select
+      value={String(value ?? "")}
+      onChange={(e) => onChange(e.target.value || undefined)}
+      className="flex-1 rounded border border-border bg-surface px-1 py-1 text-[12px] outline-none"
+    >
+      <option value="">Choose…</option>
+      {(data?.rows ?? []).map((r) => (
+        <option key={r._id} value={r._id}>
+          {r.title || "Untitled"}
+        </option>
+      ))}
+    </select>
   );
 }
 
