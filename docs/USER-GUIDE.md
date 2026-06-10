@@ -130,6 +130,7 @@ If you denied a prompt and the integration errors out: System Settings → Priva
 | "Port 3210 still running" on `npm run dev` | `lsof -ti:3210 \| xargs kill`, retry |
 | App opens but no data | The Convex backend isn't running — use `npm run dev`, not `electron .` alone |
 | Calendar/Mail sync error mentioning permissions | System Settings → Privacy & Security → Automation |
+| Mail/Calendar "timed out" on first use | The macOS permission dialog blocks the sync and can hide **behind windows** — find it, approve, hit Refresh (one-time) |
 | "Calendar.app isn't running" | Open Calendar (sync needs it alive), or hit Sync now after opening it |
 | A task never gets scheduled | It needs both an **estimate** and ideally a due date; check the needs-attention badge |
 | Blocks an hour off after a DST switch | Any reflow self-corrects (open the app / hit Reflow) |
