@@ -154,7 +154,7 @@ function TodayAgenda() {
           )}
         >
           <span className={cn("h-8 w-1 shrink-0 rounded-full", `swatch-${item.color}`)} />
-          <span className="w-28 shrink-0 text-[12px] tabular-nums text-ink-2">
+          <span className="w-36 shrink-0 whitespace-nowrap text-[12px] tabular-nums text-ink-2">
             {item.allDay ? "All day" : `${fmtTime(item.start)} – ${fmtTime(item.end)}`}
           </span>
           <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{item.title}</span>
