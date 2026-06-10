@@ -23,6 +23,7 @@ import type * as scheduling from "../scheduling.js";
 import type * as search from "../search.js";
 import type * as seed from "../seed.js";
 import type * as settings from "../settings.js";
+import type * as templates from "../templates.js";
 import type * as timeBlocks from "../timeBlocks.js";
 import type * as views from "../views.js";
 
@@ -48,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   search: typeof search;
   seed: typeof seed;
   settings: typeof settings;
+  templates: typeof templates;
   timeBlocks: typeof timeBlocks;
   views: typeof views;
 }>;

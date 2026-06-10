@@ -7,6 +7,7 @@ import {
   EyeOff,
   Filter,
   Flag,
+  LayoutTemplate,
   Plus,
   Settings,
   Trash2,
@@ -183,6 +184,7 @@ export function DatabaseContainer({ databaseId }: { databaseId: Id<"databases"> 
         <PropsMenu db={db} view={activeView} />
         <DbConfigMenu db={db} />
         {db.sprintConfig && <CompleteSprintButton databaseId={db._id} />}
+        <TemplateButton db={db} />
         <button
           onClick={() => void createRow({ databaseId, tzOffsetMin: tzOffsetMin() })}
           className="ml-1 flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[13px] font-semibold text-white hover:bg-accent-2"
@@ -200,6 +202,29 @@ export function DatabaseContainer({ databaseId }: { databaseId: Id<"databases"> 
         {activeView.type === "timeline" && <TimelineView {...viewProps} />}
       </div>
     </div>
+  );
+}
+
+function TemplateButton({ db }: { db: Doc<"databases"> }) {
+  const allDbs = useQuery(api.databases.listAll) ?? [];
+  const setTemplatesOpen = useUI((s) => s.setTemplatesOpen);
+  // Show on the "projects" database: the relation target of a task source.
+  const isProjectsDb = allDbs.some(
+    (d) =>
+      d.isTaskSource &&
+      (d.properties as PropertyDef[]).some(
+        (p) => p.type === "relation" && p.relation?.databaseId === db._id && p.relation?.syncedPropId
+      )
+  );
+  if (!isProjectsDb) return null;
+  return (
+    <button
+      onClick={() => setTemplatesOpen(true)}
+      className="flex shrink-0 items-center gap-1 rounded-md border border-border px-2 py-1 text-[13px] text-ink-2 hover:bg-hov hover:text-ink"
+      title="Create a project from a template"
+    >
+      <LayoutTemplate size={13} /> From template
+    </button>
   );
 }
 

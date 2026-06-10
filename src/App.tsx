@@ -15,6 +15,7 @@ import { MeetingsView } from "./components/meetings/MeetingsView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
 import { KnowledgePage } from "./components/search/KnowledgePage";
 import { AgentPanel } from "./components/agent/AgentPanel";
+import { TemplatesModal } from "./components/templates/TemplatesModal";
 import { PageView } from "./components/page/PageView";
 import { RowPeek } from "./components/database/RowPeek";
 import { CommandPalette } from "./components/search/CommandPalette";
@@ -27,6 +28,8 @@ export default function App() {
   const commandOpen = useUI((s) => s.commandOpen);
   const setCommandOpen = useUI((s) => s.setCommandOpen);
   const settingsOpen = useUI((s) => s.settingsOpen);
+  const templatesOpen = useUI((s) => s.templatesOpen);
+  const setTemplatesOpen = useUI((s) => s.setTemplatesOpen);
   const createPage = useMutation(api.pages.create);
   const reflow = useMutation(api.scheduling.reflowNow);
   const setMeetingStatus = useMutation(api.meetings.setStatus);
@@ -128,6 +131,7 @@ export default function App() {
         <RecorderWidget />
         {commandOpen && <CommandPalette />}
         {settingsOpen && <SettingsModal />}
+        {templatesOpen && <TemplatesModal onClose={() => setTemplatesOpen(false)} />}
       </div>
     </ThemeProvider>
   );

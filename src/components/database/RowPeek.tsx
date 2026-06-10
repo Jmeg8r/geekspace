@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { Trash2 } from "lucide-react";
+import { LayoutTemplate, Trash2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
 import type { PropertyDef } from "../../../convex/lib/types";
@@ -45,6 +45,7 @@ function RowPeekInner({ rowId, onClose }: { rowId: Id<"rows">; onClose: () => vo
       <div className="overflow-y-auto px-10 pb-16 pt-9">
         <div className="flex items-start justify-between gap-3">
           <TitleInput row={row as RowDoc} />
+          <SaveAsTemplateButton row={row as RowDoc} />
           <button
             title="Delete row"
             onClick={() => {
@@ -92,6 +93,40 @@ function RowPeekInner({ rowId, onClose }: { rowId: Id<"rows">; onClose: () => vo
         </div>
       </div>
     </Modal>
+  );
+}
+
+function SaveAsTemplateButton({ row }: { row: RowDoc }) {
+  const allDbs = useQuery(api.databases.listAll) ?? [];
+  const saveFromProject = useMutation(api.templates.saveFromProject);
+  const isProject = allDbs.some(
+    (d) =>
+      d.isTaskSource &&
+      (d.properties as PropertyDef[]).some(
+        (p) =>
+          p.type === "relation" &&
+          p.relation?.databaseId === row.databaseId &&
+          p.relation?.syncedPropId
+      )
+  );
+  if (!isProject) return null;
+  return (
+    <button
+      title="Save this project (and its tasks) as a reusable template"
+      onClick={async () => {
+        const name = prompt("Template name", row.title || "My template");
+        if (!name) return;
+        await saveFromProject({
+          projectRowId: row._id,
+          name,
+          tzOffsetMin: tzOffsetMin(),
+        });
+        alert(`Template "${name}" saved — find it under “From template”.`);
+      }}
+      className="mt-1.5 rounded-md p-1.5 text-ink-3 hover:bg-hov hover:text-accent"
+    >
+      <LayoutTemplate size={15} />
+    </button>
   );
 }
 

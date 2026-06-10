@@ -3,7 +3,6 @@ import { Bot, Loader2, RotateCcw, Send, X } from "lucide-react";
 import { useUI } from "../../state/ui";
 import { cn } from "../../lib/utils";
 import {
-  agentAvailable,
   agentChat,
   agentReset,
   agentStatus,

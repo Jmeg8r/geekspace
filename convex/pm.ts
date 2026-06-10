@@ -5,6 +5,7 @@ import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
 import { localMsToCalendarDate, DAY_MS } from "./lib/scheduler";
 import { getMergedSettings, runReflow } from "./scheduling";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
+import { seedTemplatesHelper } from "./templates";
 
 // WHAT: Notion Projects parity — sub-tasks, dependencies, sprints — delivered
 // as an idempotent upgrade that can run on a live workspace, plus the
@@ -322,7 +323,11 @@ export const applyPmUpgrade = mutation({
       did.push("user-guide");
     }
 
-    // ---------- 7. Settings flag + reflow ----------
+    // ---------- 7. Starter project templates ----------
+    const templatesAdded = await seedTemplatesHelper(ctx);
+    if (templatesAdded > 0) did.push(`templates (${templatesAdded})`);
+
+    // ---------- 8. Settings flag + reflow ----------
     if (settingsDoc) {
       await ctx.db.patch(settingsDoc._id, { pmUpgraded: true });
     } else {

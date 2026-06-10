@@ -357,15 +357,26 @@ tool(
 
 tool(
   "list_templates",
-  "List available project templates.",
+  "List available project templates (name, description, task count).",
   {},
-  async () => {
-    // WHY try/catch: api.* is a path proxy — absence only surfaces at call time.
-    try {
-      return await convex.query(api.templates.list, {});
-    } catch {
-      return "Templates are not available yet in this build.";
-    }
+  async () => convex.query(api.templates.list, {})
+);
+
+tool(
+  "apply_template",
+  "Instantiate a project template: creates the project + its tasks with dates offset from startDate, wires dependency chains, and auto-schedules everything.",
+  {
+    templateId: z.string(),
+    title: z.string().describe("Name for the new project"),
+    startDate: z.string().describe("YYYY-MM-DD — offsets count from this day"),
+  },
+  async ({ templateId, title, startDate }) => {
+    const { start } = parseDateInput(startDate);
+    return convex.mutation(api.templates.instantiate, {
+      templateId,
+      title,
+      startDay: start,
+    });
   }
 );
 

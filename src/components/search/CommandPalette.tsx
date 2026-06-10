@@ -158,6 +158,15 @@ export function CommandPalette() {
         },
       },
       {
+        key: "a-template",
+        icon: <Plus size={15} className="text-ink-2" />,
+        label: "New project from template",
+        run: () => {
+          close();
+          useUI.getState().setTemplatesOpen(true);
+        },
+      },
+      {
         key: "a-settings",
         icon: <Settings size={15} className="text-ink-2" />,
         label: "Open settings",

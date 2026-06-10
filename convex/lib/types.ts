@@ -103,6 +103,24 @@ export interface TaskConfig {
   priorityPropId: string;
 }
 
+/**
+ * Project template payload. Stores option/property values BY NAME and dates as
+ * day offsets from instantiation, so templates survive schema edits and any
+ * start date. blockedByTitles wires dependency chains between template tasks.
+ */
+export interface TemplatePayload {
+  targetOffsetDays?: number; // project target date = start + offset
+  projectContent?: string; // BlockNote JSON for the project row body
+  tasks: Array<{
+    title: string;
+    priorityName?: string;
+    estimateMin?: number;
+    dueOffsetDays?: number;
+    blockedByTitles?: string[];
+    content?: string;
+  }>;
+}
+
 export const OPTION_COLOR_IDS = [
   "gray",
   "orange",

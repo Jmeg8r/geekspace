@@ -124,6 +124,17 @@ export default defineSchema({
     lastRun: v.number(),
   }).index("by_key", ["key"]),
 
+  // Project templates: reusable project structures with relative day offsets.
+  templates: defineTable({
+    name: v.string(),
+    description: v.optional(v.string()),
+    icon: v.optional(v.string()),
+    category: v.optional(v.string()),
+    payload: v.any(), // TemplatePayload (convex/lib/types.ts)
+    seeded: v.optional(v.boolean()),
+    trashed: v.optional(v.boolean()),
+  }).index("by_name", ["name"]),
+
   // AI Meeting Notes: recording → whisper transcription → local-LLM summary.
   meetings: defineTable({
     title: v.string(),

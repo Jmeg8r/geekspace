@@ -33,6 +33,8 @@ interface UIState {
   setMacSyncStatus: (status: { at: number; ok: boolean; message: string }) => void;
   agentPanelOpen: boolean;
   setAgentPanelOpen: (open: boolean) => void;
+  templatesOpen: boolean;
+  setTemplatesOpen: (open: boolean) => void;
 }
 
 export const useUI = create<UIState>()(
@@ -62,6 +64,8 @@ export const useUI = create<UIState>()(
       setMacSyncStatus: (macSyncStatus) => set({ macSyncStatus }),
       agentPanelOpen: false,
       setAgentPanelOpen: (agentPanelOpen) => set({ agentPanelOpen }),
+      templatesOpen: false,
+      setTemplatesOpen: (templatesOpen) => set({ templatesOpen }),
     }),
     {
       name: "geekspace-ui",
