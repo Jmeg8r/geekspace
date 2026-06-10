@@ -1,0 +1,270 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Geekspace design system — ASTGL brand
+   Light: astgl.com palette (burnt orange on warm gray)
+   Dark:  ASTGL graphics palette (vivid orange on deep navy)
+   ============================================================ */
+
+:root {
+  --bg: #f9fafb;
+  --surface: #ffffff;
+  --raised: #ffffff;
+  --sidebar: #f2f3f5;
+  --hover: rgba(54, 55, 55, 0.06);
+  --active: rgba(54, 55, 55, 0.1);
+  --border-c: #e6e7e9;
+  --ink: #363737;
+  --ink-2: #848585;
+  --ink-3: #b6b6b6;
+  --accent: #e9724c;
+  --accent-2: #e66035;
+  --accent-soft: rgba(233, 114, 76, 0.13);
+  --shadow: 0 1px 3px rgba(20, 20, 40, 0.08), 0 4px 16px rgba(20, 20, 40, 0.08);
+  --shadow-lg: 0 4px 12px rgba(20, 20, 40, 0.1), 0 16px 48px rgba(20, 20, 40, 0.18);
+
+  --pal-gray: #6b7280;
+  --pal-orange: #e9724c;
+  --pal-blue: #3b82f6;
+  --pal-purple: #8b5cf6;
+  --pal-green: #10b981;
+  --pal-red: #e03131;
+  --pal-yellow: #f59e0b;
+  --pal-pink: #ec4899;
+  --pal-teal: #14b8a6;
+  --pal-brown: #92633e;
+
+  --font-sans-stack: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "Segoe UI", Roboto, sans-serif;
+}
+
+.dark {
+  --bg: #1a1a2e;
+  --surface: #20203a;
+  --raised: #272745;
+  --sidebar: #16213e;
+  --hover: rgba(255, 255, 255, 0.06);
+  --active: rgba(255, 255, 255, 0.1);
+  --border-c: rgba(255, 255, 255, 0.09);
+  --ink: #ededf2;
+  --ink-2: #9d9db4;
+  --ink-3: #65657f;
+  --accent: #ff6b35;
+  --accent-2: #e9724c;
+  --accent-soft: rgba(255, 107, 53, 0.17);
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.4), 0 16px 48px rgba(0, 0, 0, 0.5);
+  --pal-orange: #ff6b35;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sidebar: var(--sidebar);
+  --color-hov: var(--hover);
+  --color-act: var(--active);
+  --color-border: var(--border-c);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display",
+    "Segoe UI", Roboto, sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans-stack);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* Slim scrollbars everywhere */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--border-c);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-3);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Electron window drag regions */
+.app-drag {
+  -webkit-app-region: drag;
+}
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+input,
+textarea,
+button {
+  font-family: inherit;
+}
+button {
+  cursor: pointer;
+}
+
+/* ---------- Option chip palette ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chip-gray    { background: color-mix(in srgb, var(--pal-gray) 16%, transparent);  color: color-mix(in srgb, var(--pal-gray) 72%, var(--ink)); }
+.chip-orange  { background: color-mix(in srgb, var(--pal-orange) 16%, transparent); color: color-mix(in srgb, var(--pal-orange) 75%, var(--ink)); }
+.chip-blue    { background: color-mix(in srgb, var(--pal-blue) 16%, transparent);   color: color-mix(in srgb, var(--pal-blue) 72%, var(--ink)); }
+.chip-purple  { background: color-mix(in srgb, var(--pal-purple) 16%, transparent); color: color-mix(in srgb, var(--pal-purple) 72%, var(--ink)); }
+.chip-green   { background: color-mix(in srgb, var(--pal-green) 18%, transparent);  color: color-mix(in srgb, var(--pal-green) 65%, var(--ink)); }
+.chip-red     { background: color-mix(in srgb, var(--pal-red) 14%, transparent);    color: color-mix(in srgb, var(--pal-red) 75%, var(--ink)); }
+.chip-yellow  { background: color-mix(in srgb, var(--pal-yellow) 18%, transparent); color: color-mix(in srgb, var(--pal-yellow) 60%, var(--ink)); }
+.chip-pink    { background: color-mix(in srgb, var(--pal-pink) 15%, transparent);   color: color-mix(in srgb, var(--pal-pink) 72%, var(--ink)); }
+.chip-teal    { background: color-mix(in srgb, var(--pal-teal) 17%, transparent);   color: color-mix(in srgb, var(--pal-teal) 65%, var(--ink)); }
+.chip-brown   { background: color-mix(in srgb, var(--pal-brown) 17%, transparent);  color: color-mix(in srgb, var(--pal-brown) 72%, var(--ink)); }
+
+.swatch-gray   { background: var(--pal-gray); }
+.swatch-orange { background: var(--pal-orange); }
+.swatch-blue   { background: var(--pal-blue); }
+.swatch-purple { background: var(--pal-purple); }
+.swatch-green  { background: var(--pal-green); }
+.swatch-red    { background: var(--pal-red); }
+.swatch-yellow { background: var(--pal-yellow); }
+.swatch-pink   { background: var(--pal-pink); }
+.swatch-teal   { background: var(--pal-teal); }
+.swatch-brown  { background: var(--pal-brown); }
+
+/* ---------- Calendar event/block colors ---------- */
+.evt {
+  border-left: 3px solid var(--evt-c);
+  background: color-mix(in srgb, var(--evt-c) 78%, var(--surface));
+  color: #fff;
+}
+.dark .evt {
+  background: color-mix(in srgb, var(--evt-c) 62%, var(--surface));
+}
+.evt-gray   { --evt-c: var(--pal-gray); }
+.evt-orange { --evt-c: var(--pal-orange); }
+.evt-blue   { --evt-c: var(--pal-blue); }
+.evt-purple { --evt-c: var(--pal-purple); }
+.evt-green  { --evt-c: var(--pal-green); }
+.evt-red    { --evt-c: var(--pal-red); }
+.evt-yellow { --evt-c: var(--pal-yellow); }
+.evt-pink   { --evt-c: var(--pal-pink); }
+.evt-teal   { --evt-c: var(--pal-teal); }
+.evt-brown  { --evt-c: var(--pal-brown); }
+
+/* Auto-scheduled task blocks: translucent fill + solid accent bar (engine-owned look) */
+.task-block {
+  border-left: 3px solid var(--evt-c);
+  background: color-mix(in srgb, var(--evt-c) 16%, var(--surface));
+  color: color-mix(in srgb, var(--evt-c) 80%, var(--ink));
+}
+.task-block.locked {
+  background: color-mix(in srgb, var(--evt-c) 70%, var(--surface));
+  color: #fff;
+}
+.task-block.past-due {
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--pal-red) 14%, var(--surface)),
+    color-mix(in srgb, var(--pal-red) 14%, var(--surface)) 6px,
+    color-mix(in srgb, var(--pal-red) 26%, var(--surface)) 6px,
+    color-mix(in srgb, var(--pal-red) 26%, var(--surface)) 12px
+  );
+  border-left-color: var(--pal-red);
+  color: color-mix(in srgb, var(--pal-red) 80%, var(--ink));
+}
+.task-block.done {
+  opacity: 0.55;
+}
+.task-block.done .tb-title {
+  text-decoration: line-through;
+}
+
+/* ---------- BlockNote theme bridge ---------- */
+.bn-host .bn-container {
+  --bn-colors-editor-text: var(--ink);
+  --bn-colors-editor-background: transparent;
+  --bn-colors-menu-text: var(--ink);
+  --bn-colors-menu-background: var(--raised);
+  --bn-colors-tooltip-text: var(--ink);
+  --bn-colors-tooltip-background: var(--raised);
+  --bn-colors-hovered-text: var(--ink);
+  --bn-colors-hovered-background: var(--hover);
+  --bn-colors-selected-text: #ffffff;
+  --bn-colors-selected-background: var(--accent);
+  --bn-colors-disabled-text: var(--ink-3);
+  --bn-colors-disabled-background: var(--hover);
+  --bn-colors-shadow: rgba(20, 20, 40, 0.16);
+  --bn-colors-border: var(--border-c);
+  --bn-colors-side-menu: var(--ink-3);
+  --bn-font-family: var(--font-sans-stack);
+  --bn-border-radius: 8px;
+}
+.bn-host .bn-editor {
+  padding-inline: 0;
+  background: transparent;
+}
+
+/* ---------- Misc ---------- */
+.fade-in {
+  animation: fade-in 0.14s ease-out;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.now-line {
+  background: var(--pal-red);
+}
+.now-line::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pal-red);
+}
