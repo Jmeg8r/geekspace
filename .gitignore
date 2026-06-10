@@ -27,3 +27,4 @@ coverage/
 # Editor
 .idea/
 *.swp
+tsconfig.tsbuildinfo
