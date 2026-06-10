@@ -8,6 +8,7 @@ export type Nav =
   | { kind: "home" }
   | { kind: "calendar" }
   | { kind: "meetings" }
+  | { kind: "knowledge"; initialQuery?: string }
   | { kind: "page"; pageId: string };
 
 interface UIState {

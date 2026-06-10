@@ -2,6 +2,7 @@
 // macOS Calendar/Mail integration over IPC.
 // WHY: kept dependency-free plain ESM so there is no build step for the main process.
 import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -18,9 +19,28 @@ import {
   processMeeting,
   toolStatus,
 } from "./meetingProcessor.mjs";
+import {
+  answerKnowledge,
+  prewarmKnowledge,
+  searchKnowledge,
+} from "./knowledgeSearch.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+
+// WHY: Vite injects .env.local into the renderer only; the main process needs
+// the same secrets (ASTGL_API_KEY, CLAUDECLAW_TOKEN) for its integrations.
+try {
+  const envFile = fs.readFileSync(path.join(__dirname, "..", ".env.local"), "utf8");
+  for (const line of envFile.split("\n")) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m && process.env[m[1]] === undefined) {
+      process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
+  }
+} catch {
+  /* no .env.local — fine */
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -123,8 +143,17 @@ ipcMain.handle("gs:meeting:process", async (event, args) => {
   }
 });
 
+// ----- Enterprise Search (ASTGL knowledge) -----
+handle("gs:knowledge:search", ({ query, limit }) => searchKnowledge(query, limit));
+handle("gs:knowledge:answer", ({ question }) => answerKnowledge(question));
+handle("gs:openExternal", ({ url }) => {
+  if (typeof url === "string" && /^https?:\/\//.test(url)) shell.openExternal(url);
+});
+
 app.whenReady().then(() => {
   createWindow();
+  // Warm the knowledge connector (connect + tools/list only — no quota used).
+  prewarmKnowledge().catch(() => {});
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

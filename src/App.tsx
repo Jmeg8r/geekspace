@@ -13,6 +13,7 @@ import { HomeView } from "./components/home/HomeView";
 import { CalendarView } from "./components/calendar/CalendarView";
 import { MeetingsView } from "./components/meetings/MeetingsView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
+import { KnowledgePage } from "./components/search/KnowledgePage";
 import { PageView } from "./components/page/PageView";
 import { RowPeek } from "./components/database/RowPeek";
 import { CommandPalette } from "./components/search/CommandPalette";
@@ -116,6 +117,7 @@ export default function App() {
           {nav.kind === "home" && <HomeView />}
           {nav.kind === "calendar" && <CalendarView />}
           {nav.kind === "meetings" && <MeetingsView />}
+          {nav.kind === "knowledge" && <KnowledgePage />}
           {nav.kind === "page" && (
             <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
           )}

@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
+  BookOpen,
   CalendarDays,
   ChevronDown,
   ChevronRight,
@@ -103,6 +104,12 @@ export function Sidebar() {
           right={<SidebarRecordingDot />}
           active={nav.kind === "meetings"}
           onClick={() => navigate({ kind: "meetings" })}
+        />
+        <NavButton
+          icon={BookOpen}
+          label="Knowledge"
+          active={nav.kind === "knowledge"}
+          onClick={() => navigate({ kind: "knowledge" })}
         />
       </div>
 

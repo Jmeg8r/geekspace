@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld("geekspace", {
     fetchInbox: (limit) => invoke("gs:fetchInbox", { limit }),
     openMessage: (messageId) => invoke("gs:openMessage", { messageId }),
   },
+  knowledge: {
+    search: (query, limit) => invoke("gs:knowledge:search", { query, limit }),
+    answer: (question) => invoke("gs:knowledge:answer", { question }),
+    openExternal: (url) => invoke("gs:openExternal", { url }),
+  },
   meetings: {
     tools: () => invoke("gs:meeting:tools"),
     ollama: (url) => invoke("gs:meeting:ollama", { url }),

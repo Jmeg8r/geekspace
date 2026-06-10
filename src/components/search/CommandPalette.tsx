@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
+  BookOpen,
   CalendarDays,
   Database,
   FileText,
@@ -8,10 +9,17 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { useUI } from "../../state/ui";
 import { cn } from "../../lib/utils";
+import {
+  knowledgeAvailable,
+  knowledgeSearch,
+  openExternalUrl,
+  type KnowledgeResult,
+} from "../../lib/knowledgeBridge";
 import { Modal } from "../common/Modal";
 import { Kbd } from "../common/bits";
 
@@ -34,9 +42,28 @@ export function CommandPalette() {
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
   const results = useQuery(api.search.searchAll, { q });
+  const [knowledge, setKnowledge] = useState<KnowledgeResult[]>([]);
   const listRef = useRef<HTMLDivElement>(null);
 
   const close = () => setCommandOpen(false);
+
+  // ASTGL knowledge results: debounced, ≥3 chars, desktop app only.
+  useEffect(() => {
+    if (!knowledgeAvailable() || q.trim().length < 3) {
+      setKnowledge([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void knowledgeSearch(q.trim(), 4).then((r) => {
+        if (!cancelled) setKnowledge(r.ok ? r.data.results : []);
+      });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [q]);
 
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
@@ -65,6 +92,31 @@ export function CommandPalette() {
         },
       });
     }
+    for (const k of knowledge) {
+      out.push({
+        key: `kb-${k.url}-${out.length}`,
+        icon: <BookOpen size={15} className="text-accent" />,
+        label: k.title,
+        hint: "astgl.ai ↗",
+        run: () => {
+          close();
+          if (k.url) void openExternalUrl(k.url);
+        },
+      });
+    }
+    if (knowledgeAvailable() && q.trim().length >= 3) {
+      out.push({
+        key: "kb-ask",
+        icon: <Sparkles size={15} className="text-accent" />,
+        label: `Ask ASTGL Knowledge: “${q.trim()}”`,
+        hint: "answer mode",
+        run: () => {
+          close();
+          navigate({ kind: "knowledge", initialQuery: q.trim() });
+        },
+      });
+    }
+
     const actions: Item[] = [
       {
         key: "a-home",
@@ -117,9 +169,12 @@ export function CommandPalette() {
     ].filter((a) => !q.trim() || a.label.toLowerCase().includes(q.toLowerCase()));
     return [...out, ...actions];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, q]);
+  }, [results, q, knowledge]);
 
-  useEffect(() => setIdx(0), [q, results?.pages.length, results?.rows.length]);
+  useEffect(
+    () => setIdx(0),
+    [q, results?.pages.length, results?.rows.length, knowledge.length]
+  );
 
   useEffect(() => {
     listRef.current

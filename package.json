@@ -29,6 +29,7 @@
     "@floating-ui/react": "^0.27.0",
     "@mantine/core": "^8.3.11",
     "@mantine/hooks": "^8.3.11",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "convex": "^1.41.0",
     "date-fns": "^4.1.0",
     "lucide-react": "^1.17.0",
