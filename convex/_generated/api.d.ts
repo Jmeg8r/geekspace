@@ -10,6 +10,7 @@
 
 import type * as calendarData from "../calendarData.js";
 import type * as databases from "../databases.js";
+import type * as docs from "../docs.js";
 import type * as events from "../events.js";
 import type * as files from "../files.js";
 import type * as lib_defaults from "../lib/defaults.js";
@@ -36,6 +37,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   calendarData: typeof calendarData;
   databases: typeof databases;
+  docs: typeof docs;
   events: typeof events;
   files: typeof files;
   "lib/defaults": typeof lib_defaults;

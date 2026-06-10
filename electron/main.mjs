@@ -143,6 +143,22 @@ ipcMain.handle("gs:meeting:process", async (event, args) => {
   }
 });
 
+// ----- Docs: open a stored file with the default macOS app -----
+handle("gs:docs:quickLook", async ({ url, name }) => {
+  if (typeof url !== "string" || !url.startsWith("http://127.0.0.1")) {
+    throw new Error("Only local storage URLs can be opened");
+  }
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download failed (${res.status})`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  const safeName = path.basename(String(name || "file")).replace(/[^\w.\- ]+/g, "_");
+  const tmpFile = path.join(app.getPath("temp"), `geekspace-${Date.now()}-${safeName}`);
+  await fs.promises.writeFile(tmpFile, buf);
+  await shell.openPath(tmpFile);
+  // Best-effort cleanup after the viewer has had time to read it.
+  setTimeout(() => fs.promises.unlink(tmpFile).catch(() => {}), 10 * 60 * 1000);
+});
+
 // ----- ARCHITECT agent (ClaudeClaw) -----
 const CLAUDECLAW_URL = process.env.CLAUDECLAW_URL ?? "http://127.0.0.1:3141";
 

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Database,
   FileText,
+  Folder,
   Home,
   Mic,
   MoreHorizontal,
@@ -105,6 +106,12 @@ export function Sidebar() {
           right={<SidebarRecordingDot />}
           active={nav.kind === "meetings"}
           onClick={() => navigate({ kind: "meetings" })}
+        />
+        <NavButton
+          icon={Folder}
+          label="Docs"
+          active={nav.kind === "docs"}
+          onClick={() => navigate({ kind: "docs" })}
         />
         <NavButton
           icon={BookOpen}

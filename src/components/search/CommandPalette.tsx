@@ -6,6 +6,7 @@ import {
   Database,
   FileText,
   Home,
+  Paperclip,
   Plus,
   Search,
   Settings,
@@ -89,6 +90,18 @@ export function CommandPalette() {
           close();
           navigate({ kind: "page", pageId: r.pageId });
           openRow(r._id);
+        },
+      });
+    }
+    for (const d of results?.docs ?? []) {
+      out.push({
+        key: `doc-${d._id}`,
+        icon: <Paperclip size={15} className="text-ink-2" />,
+        label: d.name,
+        hint: "Docs",
+        run: () => {
+          close();
+          navigate({ kind: "docs" });
         },
       });
     }
@@ -182,7 +195,7 @@ export function CommandPalette() {
 
   useEffect(
     () => setIdx(0),
-    [q, results?.pages.length, results?.rows.length, knowledge.length]
+    [q, results?.pages.length, results?.rows.length, results?.docs?.length, knowledge.length]
   );
 
   useEffect(() => {

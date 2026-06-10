@@ -36,6 +36,13 @@ export const searchAll = query({
         pageIcon: page.icon,
       });
     }
+    const docs = (
+      await ctx.db
+        .query("docs")
+        .withSearchIndex("search_name", (s) => s.search("name", q))
+        .take(6)
+    ).filter((d) => !d.trashed);
+
     return {
       pages: pages.map((p) => ({
         _id: p._id,
@@ -44,6 +51,7 @@ export const searchAll = query({
         kind: p.kind,
       })),
       rows,
+      docs: docs.map((d) => ({ _id: d._id, name: d.name, mime: d.mime })),
     };
   },
 });

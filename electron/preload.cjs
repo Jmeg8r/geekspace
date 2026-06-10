@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld("geekspace", {
     fetchInbox: (limit) => invoke("gs:fetchInbox", { limit }),
     openMessage: (messageId) => invoke("gs:openMessage", { messageId }),
   },
+  docs: {
+    quickLook: (url, name) => invoke("gs:docs:quickLook", { url, name }),
+  },
   agent: {
     status: () => invoke("gs:agent:status"),
     chat: (message) => invoke("gs:agent:chat", { message }),

@@ -16,6 +16,7 @@ import { RecorderWidget } from "./components/meetings/RecorderWidget";
 import { KnowledgePage } from "./components/search/KnowledgePage";
 import { AgentPanel } from "./components/agent/AgentPanel";
 import { TemplatesModal } from "./components/templates/TemplatesModal";
+import { DocsPage } from "./components/docs/DocsPage";
 import { PageView } from "./components/page/PageView";
 import { RowPeek } from "./components/database/RowPeek";
 import { CommandPalette } from "./components/search/CommandPalette";
@@ -122,6 +123,7 @@ export default function App() {
           {nav.kind === "calendar" && <CalendarView />}
           {nav.kind === "meetings" && <MeetingsView />}
           {nav.kind === "knowledge" && <KnowledgePage />}
+          {nav.kind === "docs" && <DocsPage />}
           {nav.kind === "page" && (
             <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
           )}

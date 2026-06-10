@@ -124,6 +124,19 @@ export default defineSchema({
     lastRun: v.number(),
   }).index("by_key", ["key"]),
 
+  // Docs library: uploaded files with previews, optionally linked to a project.
+  docs: defineTable({
+    name: v.string(),
+    storageId: v.id("_storage"),
+    mime: v.string(),
+    size: v.number(),
+    tags: v.optional(v.array(v.string())),
+    projectRowId: v.optional(v.id("rows")),
+    trashed: v.optional(v.boolean()),
+  })
+    .index("by_project", ["projectRowId"])
+    .searchIndex("search_name", { searchField: "name" }),
+
   // Project templates: reusable project structures with relative day offsets.
   templates: defineTable({
     name: v.string(),
