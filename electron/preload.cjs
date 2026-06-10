@@ -16,6 +16,16 @@ contextBridge.exposeInMainWorld("geekspace", {
     fetchInbox: (limit) => invoke("gs:fetchInbox", { limit }),
     openMessage: (messageId) => invoke("gs:openMessage", { messageId }),
   },
+  agent: {
+    status: () => invoke("gs:agent:status"),
+    chat: (message) => invoke("gs:agent:chat", { message }),
+    reset: () => invoke("gs:agent:reset"),
+    onEvent: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on("gs:agent:event", listener);
+      return () => ipcRenderer.removeListener("gs:agent:event", listener);
+    },
+  },
   knowledge: {
     search: (query, limit) => invoke("gs:knowledge:search", { query, limit }),
     answer: (question) => invoke("gs:knowledge:answer", { question }),

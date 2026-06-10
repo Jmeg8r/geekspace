@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
   BookOpen,
+  Bot,
   CalendarDays,
   ChevronDown,
   ChevronRight,
@@ -111,6 +112,7 @@ export function Sidebar() {
           active={nav.kind === "knowledge"}
           onClick={() => navigate({ kind: "knowledge" })}
         />
+        <AgentNavButton />
       </div>
 
       <div className="mt-3 flex-1 overflow-y-auto px-2 pb-2">
@@ -163,6 +165,19 @@ export function Sidebar() {
         <NavButton icon={Settings} label="Settings" onClick={() => setSettingsOpen(true)} />
       </div>
     </aside>
+  );
+}
+
+function AgentNavButton() {
+  const open = useUI((s) => s.agentPanelOpen);
+  const setOpen = useUI((s) => s.setAgentPanelOpen);
+  return (
+    <NavButton
+      icon={Bot}
+      label="Agent"
+      active={open}
+      onClick={() => setOpen(!open)}
+    />
   );
 }
 

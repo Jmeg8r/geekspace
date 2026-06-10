@@ -14,6 +14,7 @@ import { CalendarView } from "./components/calendar/CalendarView";
 import { MeetingsView } from "./components/meetings/MeetingsView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
 import { KnowledgePage } from "./components/search/KnowledgePage";
+import { AgentPanel } from "./components/agent/AgentPanel";
 import { PageView } from "./components/page/PageView";
 import { RowPeek } from "./components/database/RowPeek";
 import { CommandPalette } from "./components/search/CommandPalette";
@@ -122,6 +123,7 @@ export default function App() {
             <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
           )}
         </main>
+        <AgentPanel />
         <RowPeek />
         <RecorderWidget />
         {commandOpen && <CommandPalette />}

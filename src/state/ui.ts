@@ -31,6 +31,8 @@ interface UIState {
   setViewForDb: (databaseId: string, viewId: string) => void;
   macSyncStatus: { at: number; ok: boolean; message: string } | null;
   setMacSyncStatus: (status: { at: number; ok: boolean; message: string }) => void;
+  agentPanelOpen: boolean;
+  setAgentPanelOpen: (open: boolean) => void;
 }
 
 export const useUI = create<UIState>()(
@@ -58,6 +60,8 @@ export const useUI = create<UIState>()(
         set((s) => ({ viewByDb: { ...s.viewByDb, [databaseId]: viewId } })),
       macSyncStatus: null,
       setMacSyncStatus: (macSyncStatus) => set({ macSyncStatus }),
+      agentPanelOpen: false,
+      setAgentPanelOpen: (agentPanelOpen) => set({ agentPanelOpen }),
     }),
     {
       name: "geekspace-ui",
