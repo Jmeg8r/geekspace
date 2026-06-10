@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+release/
+build/icon.iconset/
+
+# Environment — Convex deployment URL lives here; never commit env files
+.env
+.env.local
+.env.*.local
+
+# Convex local artifacts
+.convex/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test coverage
+coverage/
+
+# macOS
+.DS_Store
+
+# Editor
+.idea/
+*.swp
