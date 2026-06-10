@@ -55,6 +55,8 @@ Your workspace follows Notion's Projects setup:
   - **The auto-scheduler refuses to schedule blocked work before its blockers finish** (this is beyond Notion, where dependencies are just visual). Blocked tasks show a ⛓ chip in My Tasks. Completing the blocker unblocks them automatically.
 - **Sprints:** the Sprints database holds two-week iterations (Upcoming / Current / Completed) with their own progress rollups. On the Tasks page, **Sprint Board** shows the current sprint as a kanban and **Backlog** lists unassigned open tasks. When a sprint ends, open the Sprints page and hit **🏁 Complete sprint** — it closes the current one, promotes (or creates) the next, **rolls every unfinished task forward**, and repoints the Sprint Board.
 
+- **Templates:** on the Projects page, **From template** stamps out a whole project — tasks land with due dates *offset from your chosen start date*, dependency chains pre-wired, and the auto-scheduler blocks time immediately. Three built-ins ship (ASTGL Article, Podcast Episode, Home-Lab Project); save your own from any project's peek view (the template icon next to delete). Also in `⌘K` → "New project from template".
+
 **My Tasks** on Home aggregates open tasks across every task database — Overdue / Today / Upcoming — with one-click done checkboxes.
 
 ## 5. The self-scheduling calendar
@@ -106,13 +108,35 @@ Open **Settings → macOS integrations** (visible only in the desktop app):
 
 If you denied a prompt and the integration errors out: System Settings → Privacy & Security → **Automation** → enable Calendar/Mail under Geekspace (or Electron during `npm run dev`).
 
-## 8. Settings
+
+## 8. Enterprise Search (Knowledge)
+
+**Knowledge** in the sidebar searches your ASTGL knowledge base (the local `mcp-astgl-knowledge` server) — semantic search over every article, tutorial, and FAQ, with relevance scores and source links that open in your browser. The **Answer** button asks for a single sourced answer (explicit click — it costs a daily-quota query). `⌘K` also shows ASTGL results inline for any query of 3+ characters.
+
+Quota: 50 queries/day anonymous; set `ASTGL_API_KEY=<key>` in `.env.local` for 500/day (get a key via the server's `register` tool). If Ollama is down, results silently degrade to keyword-only.
+
+## 9. The ARCHITECT agent
+
+**Agent** in the sidebar opens a chat with ARCHITECT — a ClaudeClaw agent that is the resident Geekspace expert. It designs, creates, and configures your workspace on request ("set up a database for tracking podcast guests", "create a project for next week's article with a dependency chain") through the `geekspace-mcp` server. Its changes appear live, it can read your schedule and warnings, and it **cannot delete anything** by design.
+
+One-time setup:
+1. Review + merge the `feat/architect-geekspace-agent` branch in `~/Projects/claudeclaw`
+2. Rebuild the ClaudeClaw dashboard and restart the daemon
+3. Put `CLAUDECLAW_TOKEN=<your dashboard token>` in `geekspace/.env.local`, restart Geekspace
+
+The same agent is also available in ClaudeClaw's own dashboard under the new **Geekspace** domain. And because the workspace is exposed as a standard MCP server (`node mcp/index.mjs`), Claude Code or Claude Desktop can use the identical tools.
+
+## 10. Docs library
+
+**Docs** in the sidebar is the file library: drag files anywhere on the page (or hit Upload). PDFs render natively, images/video/audio play in-app, markdown and code get formatted previews — anything else opens via the **Open** button in its default macOS app. Files can be linked to a project (uploads inherit the active project filter) and `⌘K` finds them by name. Deleting a doc removes the file from storage.
+
+## 11. Settings
 
 - **Appearance:** Light / Dark / System (ASTGL light = warm gray + burnt orange; dark = deep navy + vivid orange).
 - **Working hours:** which days and what window the scheduler may use.
 - **Auto-scheduling:** smallest/largest block size, buffer between items, planning horizon.
 
-## 9. Keyboard shortcuts
+## 12. Keyboard shortcuts
 
 | Key | Action |
 |---|---|
@@ -123,7 +147,7 @@ If you denied a prompt and the integration errors out: System Settings → Priva
 | `/` | Block menu in any page |
 | `Esc` | Close any modal |
 
-## 10. Troubleshooting
+## 13. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -133,6 +157,8 @@ If you denied a prompt and the integration errors out: System Settings → Priva
 | Mail/Calendar "timed out" | Three causes, same symptom: ① the macOS permission dialog is blocking — it can hide **behind windows**; find it, approve once. ② The app is **unresponsive** — quit and reopen Mail/Calendar. ③ A very large mailbox/calendar — just Refresh and wait. |
 | "Calendar.app isn't running" | Open Calendar (sync needs it alive), or hit Sync now after opening it |
 | A task never gets scheduled | It needs both an **estimate** and ideally a due date; check the needs-attention badge |
+| Agent panel says "offline" | Start the ClaudeClaw daemon; "token missing" → add `CLAUDECLAW_TOKEN` to `.env.local` and restart |
+| Knowledge search errors | The mcp-astgl-knowledge build may be stale (`npm run build` there) or the daily quota is spent |
 | Blocks an hour off after a DST switch | Any reflow self-corrects (open the app / hit Reflow) |
 | Meeting stuck in "Transcribing" after a crash | Open the meeting → **Re-run AI** (audio is always saved first) |
 | Summary fails with an Ollama error | Make sure `ollama serve` is running; check Settings → AI meeting notes |

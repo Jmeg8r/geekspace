@@ -39,6 +39,21 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - Week grid: drag to create events, drag to move, resize from the bottom edge, 15-min snapping, now-line; month overview with ⚡ block counts
 - Keyboard: `T` today · `J`/`K` next/prev · `W`/`M` views
 
+### 🤖 ARCHITECT — your workspace agent
+- A ClaudeClaw agent that's the resident Geekspace expert: chat with it in-app (Agent in the sidebar) and it designs, creates, and configures pages/databases/projects/tasks for you — changes appear live
+- Powered by **`geekspace-mcp`** (`mcp/index.mjs`): a standard MCP server exposing the workspace (name-keyed properties, option validation, schedule awareness, template instantiation) to *any* agent — ClaudeClaw, Claude Code, Claude Desktop
+- Create/edit only — no delete tools by design; Phase B (source-code powers) is a ClaudeClaw config change away
+
+### 🔎 Enterprise Search (ASTGL)
+- Knowledge page + ⌘K section searching your local `mcp-astgl-knowledge` server — semantic results with scores + an explicit sourced-Answer mode; pluggable connector design for future sources
+
+### 🗂 Project Templates
+- Stamp out projects with offset due dates + pre-wired dependency chains; tasks auto-schedule the moment they're created
+- 3 built-ins (ASTGL Article, Podcast Episode, Home-Lab Project) + save your own from any project
+
+### 📁 Docs library
+- Drag-drop file library with in-app previews (PDF/images/AV/markdown/code), project linking, ⌘K search, and default-app handoff for everything else
+
 ### 🎙️ AI Meeting Notes — 100% local
 - One-click meeting recording with a floating recorder (pause/resume, live level meter)
 - **whisper.cpp** transcription + **local Ollama** summarization — audio never leaves the Mac
