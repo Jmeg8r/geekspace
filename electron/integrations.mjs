@@ -7,12 +7,21 @@ import { execFile } from "node:child_process";
 const OSASCRIPT = "/usr/bin/osascript";
 const ALLOWED_APPS = new Set(["Calendar", "Mail"]);
 
-function run(cmd, args, timeout = 45_000) {
+function run(cmd, args, timeout = 90_000) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         const msg = String(stderr || err.message || "");
-        if (msg.includes("-1743") || /not authori[sz]ed/i.test(msg)) {
+        // WHY: a timeout kill produces a bare "Command failed: …" with no
+        // stderr — usually the macOS Automation dialog sitting unanswered
+        // (it blocks the script and loves hiding behind windows).
+        if (err.killed || err.signal) {
+          reject(
+            new Error(
+              "Timed out — if a macOS permission dialog is open (it may be behind a window), approve it and hit Refresh. Otherwise check System Settings → Privacy & Security → Automation."
+            )
+          );
+        } else if (msg.includes("-1743") || /not authori[sz]ed/i.test(msg)) {
           reject(
             new Error(
               "Permission needed: System Settings → Privacy & Security → Automation → allow Geekspace (or Electron) to control Calendar/Mail."
@@ -30,7 +39,16 @@ function run(cmd, args, timeout = 45_000) {
   });
 }
 
-const runJxa = (script) => run(OSASCRIPT, ["-l", "JavaScript", "-e", script]);
+const runJxa = (script, timeout) => run(OSASCRIPT, ["-l", "JavaScript", "-e", script], timeout);
+
+/**
+ * Trigger the one-time Automation permission with a near-zero-work probe and a
+ * generous window for the user to find the dialog. Heavy fetches run after.
+ */
+async function armAutomation(appName) {
+  if (!ALLOWED_APPS.has(appName)) throw new Error(`Unsupported app: ${appName}`);
+  await runJxa(`Application(${JSON.stringify(appName)}).name()`, 180_000);
+}
 
 export async function isAppRunning(name) {
   if (!ALLOWED_APPS.has(name)) return false;
@@ -48,11 +66,13 @@ export async function openApp(name) {
 }
 
 export async function listCalendars() {
+  await armAutomation("Calendar");
   const out = await runJxa(`JSON.stringify(Application("Calendar").calendars.name())`);
   return JSON.parse(out || "[]");
 }
 
 export async function fetchCalendarEvents(startMs, endMs, names) {
+  await armAutomation("Calendar");
   const script = `
 (() => {
   const Calendar = Application("Calendar");
@@ -99,28 +119,40 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
 }
 
 export async function fetchInbox(limit = 12) {
+  await armAutomation("Mail");
+  const n = Math.max(1, Math.min(Number(limit) || 12, 25));
+  // WHY bulk arrays: one Apple event per property instead of ~5 per message —
+  // far fewer round trips, and we get every date so we can sort newest-first
+  // ourselves (Mail's `messages` order is oldest-first on many setups).
   const script = `
 (() => {
   const Mail = Application("Mail");
+  let msgs;
+  try {
+    msgs = Mail.inbox.messages;
+    if (msgs.length === 0) return "[]";
+  } catch (e) { return "[]"; }
+  const subjects = msgs.subject();
+  const senders = msgs.sender();
+  const dates = msgs.dateReceived();
+  const ids = msgs.messageId();
+  const reads = msgs.readStatus();
+  const idx = dates.map((d, i) => i);
+  idx.sort((a, b) => dates[b] - dates[a]);
   const out = [];
-  let count = 0;
-  try { count = Mail.inbox.messages.length; } catch (e) { return "[]"; }
-  const n = Math.min(count, ${Math.max(1, Math.min(Number(limit) || 12, 25))});
-  for (let i = 0; i < n; i++) {
-    try {
-      const m = Mail.inbox.messages[i];
-      out.push({
-        id: String(m.messageId() || ""),
-        subject: String(m.subject() || "(no subject)"),
-        sender: String(m.sender() || ""),
-        date: m.dateReceived().getTime(),
-        read: Boolean(m.readStatus()),
-      });
-    } catch (e) {}
+  for (let k = 0; k < Math.min(idx.length, ${n}); k++) {
+    const i = idx[k];
+    out.push({
+      id: String(ids[i] || ""),
+      subject: String(subjects[i] || "(no subject)"),
+      sender: String(senders[i] || ""),
+      date: dates[i].getTime(),
+      read: Boolean(reads[i]),
+    });
   }
   return JSON.stringify(out);
 })()`;
-  const out = await runJxa(script);
+  const out = await runJxa(script, 120_000);
   return JSON.parse(out || "[]");
 }
 
