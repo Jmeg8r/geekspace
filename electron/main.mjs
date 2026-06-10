@@ -165,9 +165,14 @@ const CLAUDECLAW_URL = process.env.CLAUDECLAW_URL ?? "http://127.0.0.1:3141";
 handle("gs:agent:status", async () => {
   if (!process.env.CLAUDECLAW_TOKEN) return { state: "no-token" };
   try {
+    // WHY auth header: this deployment requires a bearer token on every route
+    // (LAN-bound dashboards auth /api/health too). A bare probe would 401 and
+    // report "offline" even when the daemon is perfectly healthy.
     const res = await fetch(`${CLAUDECLAW_URL}/api/health`, {
+      headers: { Authorization: `Bearer ${process.env.CLAUDECLAW_TOKEN}` },
       signal: AbortSignal.timeout(2500),
     });
+    if (res.status === 401) return { state: "no-token" };
     return { state: res.ok ? "online" : "error" };
   } catch {
     return { state: "offline" };
