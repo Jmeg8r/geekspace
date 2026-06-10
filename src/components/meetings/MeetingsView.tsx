@@ -16,7 +16,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
-import { cn, debounce, tzOffsetMin } from "../../lib/utils";
+import { cn, debounce, isElectron, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
 import { recorder } from "../../lib/recorder";
 import {
@@ -80,7 +80,11 @@ export function MeetingsView() {
         </p>
 
         {!meetingsAvailable() && (
-          <Banner>Meeting notes run in the desktop app — start it with <code>npm run dev</code>.</Banner>
+          <Banner>
+            {isElectron()
+              ? "The app needs a restart to load Meeting Notes — quit and run npm run dev again."
+              : "You're in a browser tab — recording needs the Geekspace desktop window (npm run dev opens it alongside this)."}
+          </Banner>
         )}
         {toolsError && <Banner>{toolsError}</Banner>}
         {missing.length > 0 && (

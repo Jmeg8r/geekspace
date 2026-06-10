@@ -8,6 +8,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: "./",
   server: {
+    // WHY host pin: on this Node, "localhost" binds IPv6-only ([::1]), but the
+    // dev script's wait-on polls 127.0.0.1 — without this the Electron window
+    // never launches.
+    host: "127.0.0.1",
     port: 5173,
     strictPort: true,
   },
