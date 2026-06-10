@@ -7,9 +7,12 @@ import { ThemeProvider } from "./state/theme";
 import { tzOffsetMin } from "./lib/utils";
 import { integrationsAvailable } from "./lib/integrations";
 import { syncMacCalendar } from "./lib/macSync";
+import { onMeetingProgress } from "./lib/meetingsBridge";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { HomeView } from "./components/home/HomeView";
 import { CalendarView } from "./components/calendar/CalendarView";
+import { MeetingsView } from "./components/meetings/MeetingsView";
+import { RecorderWidget } from "./components/meetings/RecorderWidget";
 import { PageView } from "./components/page/PageView";
 import { RowPeek } from "./components/database/RowPeek";
 import { CommandPalette } from "./components/search/CommandPalette";
@@ -24,6 +27,25 @@ export default function App() {
   const settingsOpen = useUI((s) => s.settingsOpen);
   const createPage = useMutation(api.pages.create);
   const reflow = useMutation(api.scheduling.reflowNow);
+  const setMeetingStatus = useMutation(api.meetings.setStatus);
+
+  // Pipe meeting-pipeline progress (whisper/model/LLM) into Convex so every
+  // surface shows live status. Deduped — model downloads fire rapidly.
+  const lastProgress = useRef<string>("");
+  useEffect(() => {
+    return onMeetingProgress((p) => {
+      if (!p.meetingId) return;
+      const pct = p.phase === "summarizing" ? undefined : p.pct;
+      const key = `${p.meetingId}:${p.phase}:${pct !== undefined ? Math.floor(pct / 4) : "-"}`;
+      if (key === lastProgress.current) return;
+      lastProgress.current = key;
+      void setMeetingStatus({
+        meetingId: p.meetingId as Id<"meetings">,
+        status: p.phase === "summarizing" ? "summarizing" : "transcribing",
+        progress: pct,
+      }).catch(() => {});
+    });
+  }, [setMeetingStatus]);
 
   // WHY: reflow on launch — the schedule depends on "now", so a fresh open
   // re-plans around whatever happened since the last session.
@@ -77,6 +99,9 @@ export default function App() {
       } else if (e.key === "2") {
         e.preventDefault();
         navigate({ kind: "calendar" });
+      } else if (e.key === "3") {
+        e.preventDefault();
+        navigate({ kind: "meetings" });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -90,11 +115,13 @@ export default function App() {
         <main className="min-w-0 flex-1">
           {nav.kind === "home" && <HomeView />}
           {nav.kind === "calendar" && <CalendarView />}
+          {nav.kind === "meetings" && <MeetingsView />}
           {nav.kind === "page" && (
             <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
           )}
         </main>
         <RowPeek />
+        <RecorderWidget />
         {commandOpen && <CommandPalette />}
         {settingsOpen && <SettingsModal />}
       </div>

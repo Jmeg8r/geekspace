@@ -39,6 +39,13 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - Week grid: drag to create events, drag to move, resize from the bottom edge, 15-min snapping, now-line; month overview with ⚡ block counts
 - Keyboard: `T` today · `J`/`K` next/prev · `W`/`M` views
 
+### 🎙️ AI Meeting Notes — 100% local
+- One-click meeting recording with a floating recorder (pause/resume, live level meter)
+- **whisper.cpp** transcription + **local Ollama** summarization — audio never leaves the Mac
+- Summaries tailored by meeting type (standup / 1:1 / client / interview / brainstorm): narrative summary, key points, decisions, and action items
+- Auto-generated, searchable notes page per meeting; action items become tasks in one click; audio replay + full transcript kept; failed AI runs are re-runnable (audio is saved first)
+- Link recordings to calendar events; tool status + model selection in Settings
+
 ### 🍎 macOS integrations (desktop app)
 - **Calendar sync**: pick your Calendar.app calendars and they mirror into Geekspace (read-only, dotted edge) — and become fixed busy time the auto-scheduler plans around. Syncs at launch, on focus, and every 5 minutes
 - **Mail inbox on Home**: recent Mail.app messages with unread dots, open-in-Mail deep links, and one-click **email → task** (the task links back to the message)

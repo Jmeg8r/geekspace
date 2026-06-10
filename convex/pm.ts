@@ -31,6 +31,11 @@ const USER_GUIDE_BLOCKS = [
   { type: "bulletListItem", content: "Drag a block to pin it; right-click to lock/unlock, mark done, or open the task." },
   { type: "bulletListItem", content: "Everything reflows automatically when events, tasks, or settings change. Red stripes = past due; check the needs-attention badge." },
   { type: "bulletListItem", content: "Keys: T today · J/K next/prev · W/M week/month view." },
+  { type: "heading", props: { level: 2 }, content: "AI meeting notes" },
+  { type: "bulletListItem", content: "Meetings (sidebar, ⌘3) → Record. Pick a meeting type — the summary is tailored to it (standup, 1:1, client, interview, brainstorm)." },
+  { type: "bulletListItem", content: "Stop → whisper.cpp transcribes and your local Ollama writes the summary, key points, decisions, and action items. Nothing leaves this Mac." },
+  { type: "bulletListItem", content: "A notes page lands under 🎙️ Meeting Notes; action items become tasks with one click. Audio replay + full transcript live on the meeting." },
+  { type: "bulletListItem", content: "First recording asks for Microphone permission. Tools status lives in Settings → AI meeting notes." },
   { type: "heading", props: { level: 2 }, content: "macOS Calendar & Mail" },
   { type: "bulletListItem", content: "Settings → macOS integrations. First sync asks for Automation permission — click OK." },
   { type: "bulletListItem", content: "Synced events are read-only (dotted edge) and the scheduler plans around them. Edit them in Calendar." },
@@ -325,6 +330,21 @@ export const applyPmUpgrade = mutation({
     }
     await runReflow(ctx, args.tzOffsetMin);
     return did.length > 0 ? `upgraded: ${did.join(", ")}` : "already-up-to-date";
+  },
+});
+
+/** Force-refresh the in-app User Guide page from the bundled content. */
+export const updateUserGuide = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const pages = await ctx.db.query("pages").collect();
+    const guide = pages.find((p) => p.title === "User Guide" && !p.trashed);
+    if (!guide) return "no-guide-page";
+    await ctx.db.patch(guide._id, {
+      content: JSON.stringify(USER_GUIDE_BLOCKS),
+      updatedAt: Date.now(),
+    });
+    return "guide-updated";
   },
 });
 

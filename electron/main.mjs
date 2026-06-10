@@ -1,7 +1,7 @@
 // WHAT: Electron main process — creates the Geekspace window and exposes the
 // macOS Calendar/Mail integration over IPC.
 // WHY: kept dependency-free plain ESM so there is no build step for the main process.
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -12,6 +12,12 @@ import {
   messageUrl,
   openApp,
 } from "./integrations.mjs";
+import {
+  checkOllama,
+  ensureModel,
+  processMeeting,
+  toolStatus,
+} from "./meetingProcessor.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -78,6 +84,43 @@ handle("gs:fetchCalendarEvents", ({ start, end, names }) =>
 handle("gs:fetchInbox", ({ limit }) => fetchInbox(limit));
 handle("gs:openMessage", ({ messageId }) => {
   shell.openExternal(messageUrl(messageId));
+});
+
+// ----- AI Meeting Notes -----
+handle("gs:meeting:tools", () => toolStatus());
+handle("gs:meeting:ollama", ({ url }) => checkOllama(url));
+handle("gs:meeting:askMic", async () => {
+  if (process.platform !== "darwin") return true;
+  const status = systemPreferences.getMediaAccessStatus("microphone");
+  if (status === "granted") return true;
+  return systemPreferences.askForMediaAccess("microphone");
+});
+ipcMain.handle("gs:meeting:ensureModel", async (event) => {
+  try {
+    await ensureModel((pct) =>
+      event.sender.send("gs:meeting:progress", { phase: "model", pct })
+    );
+    return { ok: true, data: true };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
+ipcMain.handle("gs:meeting:process", async (event, args) => {
+  try {
+    const result = await processMeeting(
+      {
+        audio: args.audio,
+        meetingType: args.meetingType,
+        ollamaUrl: args.ollamaUrl,
+        ollamaModel: args.ollamaModel,
+      },
+      (p) =>
+        event.sender.send("gs:meeting:progress", { meetingId: args.meetingId, ...p })
+    );
+    return { ok: true, data: result };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
 });
 
 app.whenReady().then(() => {

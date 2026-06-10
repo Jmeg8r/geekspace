@@ -78,7 +78,25 @@ The core idea, borrowed from Motion/Reclaim: **appointments are fixed, tasks are
 
 **When work doesn't fit**, nothing silently disappears: the red **needs attention** badge lists tasks that can't fit before the horizon, tasks scheduled past their due date, and tasks missing an estimate.
 
-## 6. macOS Calendar & Mail
+## 6. AI meeting notes
+
+**Meetings** in the sidebar (`⌘3`) is a fully local recreation of Notion's AI Meeting Notes: record → transcribe → summarize, with nothing leaving your Mac.
+
+**Recording a meeting:**
+1. Hit **Record**. Name the meeting, pick a **meeting type** — the summary is tailored to it (General, Standup, 1:1, Client call, Interview, Brainstorm) — and optionally link a calendar event (one happening *right now* is pre-selected).
+2. The first time, macOS asks for **Microphone** permission — click OK.
+3. A floating recorder appears bottom-right with a live level meter. It follows you anywhere in the app; pause/resume as needed.
+4. **Stop** kicks off the pipeline: audio is saved, **whisper.cpp** transcribes it (progress shown live), then your **local Ollama model** writes a summary with key points, decisions, and action items.
+
+**What you get:** a meeting record (audio playback, full transcript, structured summary) *and* an auto-created notes page under **🎙️ Meeting Notes** — searchable like any page, with action items as checkboxes. Hover an action item on the meeting → **+ task** sends it to your Tasks database.
+
+**Good to know:**
+- It records your **microphone**. For the far side of video calls, use speakers instead of headphones, or route system audio with a loopback device (BlackHole) set as input.
+- Summarizer model and Ollama URL live in **Settings → AI meeting notes**, along with tool status (ffmpeg, whisper.cpp, speech model — with a one-click model download). Default model: your first `gemma*`, currently `gemma4:31b-mlx`.
+- If the AI leg fails (Ollama not running, say), the recording and transcript are safe — hit **Re-run AI** on the meeting.
+- Deleting a meeting removes its audio but keeps the notes page.
+
+## 7. macOS Calendar & Mail
 
 Open **Settings → macOS integrations** (visible only in the desktop app):
 
@@ -88,24 +106,24 @@ Open **Settings → macOS integrations** (visible only in the desktop app):
 
 If you denied a prompt and the integration errors out: System Settings → Privacy & Security → **Automation** → enable Calendar/Mail under Geekspace (or Electron during `npm run dev`).
 
-## 7. Settings
+## 8. Settings
 
 - **Appearance:** Light / Dark / System (ASTGL light = warm gray + burnt orange; dark = deep navy + vivid orange).
 - **Working hours:** which days and what window the scheduler may use.
 - **Auto-scheduling:** smallest/largest block size, buffer between items, planning horizon.
 
-## 8. Keyboard shortcuts
+## 9. Keyboard shortcuts
 
 | Key | Action |
 |---|---|
 | `⌘K` | Search everything / command palette |
 | `⌘N` | New page |
-| `⌘1` / `⌘2` | Home / Calendar |
+| `⌘1` / `⌘2` / `⌘3` | Home / Calendar / Meetings |
 | `T`, `J`, `K`, `W`, `M` | Calendar: today, next, previous, week, month |
 | `/` | Block menu in any page |
 | `Esc` | Close any modal |
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
@@ -115,6 +133,9 @@ If you denied a prompt and the integration errors out: System Settings → Priva
 | "Calendar.app isn't running" | Open Calendar (sync needs it alive), or hit Sync now after opening it |
 | A task never gets scheduled | It needs both an **estimate** and ideally a due date; check the needs-attention badge |
 | Blocks an hour off after a DST switch | Any reflow self-corrects (open the app / hit Reflow) |
+| Meeting stuck in "Transcribing" after a crash | Open the meeting → **Re-run AI** (audio is always saved first) |
+| Summary fails with an Ollama error | Make sure `ollama serve` is running; check Settings → AI meeting notes |
+| Recording has no speech detected | Check the input device in System Settings → Sound; the level meter should move while you talk |
 
 ---
 

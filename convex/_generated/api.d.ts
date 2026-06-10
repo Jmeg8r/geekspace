@@ -15,6 +15,7 @@ import type * as files from "../files.js";
 import type * as lib_defaults from "../lib/defaults.js";
 import type * as lib_scheduler from "../lib/scheduler.js";
 import type * as lib_types from "../lib/types.js";
+import type * as meetings from "../meetings.js";
 import type * as pages from "../pages.js";
 import type * as pm from "../pm.js";
 import type * as rows from "../rows.js";
@@ -39,6 +40,7 @@ declare const fullApi: ApiFromModules<{
   "lib/defaults": typeof lib_defaults;
   "lib/scheduler": typeof lib_scheduler;
   "lib/types": typeof lib_types;
+  meetings: typeof meetings;
   pages: typeof pages;
   pm: typeof pm;
   rows: typeof rows;

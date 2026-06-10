@@ -26,6 +26,8 @@ export const update = mutation({
     macCalendarSync: v.optional(v.boolean()),
     macCalendarNames: v.optional(v.array(v.string())),
     mailWidget: v.optional(v.boolean()),
+    ollamaUrl: v.optional(v.string()),
+    ollamaModel: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const patch = Object.fromEntries(

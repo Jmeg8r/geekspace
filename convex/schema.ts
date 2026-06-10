@@ -114,6 +114,8 @@ export default defineSchema({
     macCalendarSync: v.optional(v.boolean()),
     macCalendarNames: v.optional(v.array(v.string())),
     mailWidget: v.optional(v.boolean()),
+    ollamaUrl: v.optional(v.string()),
+    ollamaModel: v.optional(v.string()),
   }).index("by_key", ["key"]),
 
   schedulerState: defineTable({
@@ -121,4 +123,25 @@ export default defineSchema({
     warnings: v.any(), // SchedulerWarning[]
     lastRun: v.number(),
   }).index("by_key", ["key"]),
+
+  // AI Meeting Notes: recording → whisper transcription → local-LLM summary.
+  meetings: defineTable({
+    title: v.string(),
+    meetingType: v.optional(v.string()), // general | standup | one_on_one | client | interview | brainstorm
+    status: v.string(), // recording | uploading | transcribing | summarizing | done | error
+    startedAt: v.number(),
+    endedAt: v.optional(v.number()),
+    durationSec: v.optional(v.number()),
+    audioStorageId: v.optional(v.id("_storage")),
+    transcript: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    keyPoints: v.optional(v.array(v.string())),
+    decisions: v.optional(v.array(v.string())),
+    actionItems: v.optional(v.array(v.string())),
+    modelUsed: v.optional(v.string()),
+    error: v.optional(v.string()),
+    progress: v.optional(v.number()), // 0-100 while transcribing
+    pageId: v.optional(v.id("pages")), // generated notes page
+    eventId: v.optional(v.id("events")), // linked calendar event
+  }).index("by_startedAt", ["startedAt"]),
 });

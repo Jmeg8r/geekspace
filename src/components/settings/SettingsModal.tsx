@@ -7,6 +7,13 @@ import { cn, tzOffsetMin } from "../../lib/utils";
 import { minOfDayLabel } from "../../lib/dates";
 import { integrationsAvailable, macListCalendars } from "../../lib/integrations";
 import { syncMacCalendar } from "../../lib/macSync";
+import {
+  meetingEnsureModel,
+  meetingOllama,
+  meetingsAvailable,
+  meetingTools,
+  type MeetingToolStatus,
+} from "../../lib/meetingsBridge";
 import { useUI } from "../../state/ui";
 import { Modal } from "../common/Modal";
 
@@ -132,6 +139,14 @@ export function SettingsModal() {
           />
         )}
 
+        {meetingsAvailable() && (
+          <MeetingAiSection
+            ollamaUrl={settings.ollamaUrl ?? ""}
+            ollamaModel={settings.ollamaModel ?? ""}
+            patch={patch}
+          />
+        )}
+
         <p className="pt-2 text-[11.5px] leading-relaxed text-ink-3">
           Geekspace · an As The Geek Learns build · data lives in your local Convex deployment.
         </p>
@@ -250,6 +265,104 @@ function IntegrationsSection({
           checked={mailWidget}
           onChange={(e) => patch({ mailWidget: e.target.checked })}
           className="accent-[var(--accent)]"
+        />
+      </label>
+    </Section>
+  );
+}
+
+function MeetingAiSection({
+  ollamaUrl,
+  ollamaModel,
+  patch,
+}: {
+  ollamaUrl: string;
+  ollamaModel: string;
+  patch: (p: Record<string, string>) => void;
+}) {
+  const [tools, setTools] = useState<MeetingToolStatus | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [ollamaError, setOllamaError] = useState<string | null>(null);
+  const [urlDraft, setUrlDraft] = useState(ollamaUrl);
+  const [downloading, setDownloading] = useState(false);
+
+  useEffect(() => {
+    void meetingTools().then((r) => r.ok && setTools(r.data));
+    void meetingOllama(ollamaUrl || undefined).then((r) => {
+      if (r.ok && r.data.ok) {
+        setModels(r.data.models);
+        setOllamaError(null);
+      } else {
+        setOllamaError(r.ok ? (r.data.error ?? "Ollama not reachable") : r.error);
+      }
+    });
+  }, [ollamaUrl]);
+
+  const Status = ({ ok, label }: { ok: boolean; label: string }) => (
+    <span className="flex items-center gap-1.5 text-[12.5px]">
+      <span className={cn("font-bold", ok ? "text-[var(--pal-green)]" : "text-[var(--pal-red)]")}>
+        {ok ? "✓" : "✕"}
+      </span>
+      {label}
+    </span>
+  );
+
+  return (
+    <Section
+      title="AI meeting notes"
+      hint="Recording is transcribed by whisper.cpp and summarized by your local Ollama — fully offline."
+    >
+      <div className="flex flex-wrap gap-x-4 gap-y-1 pb-2">
+        <Status ok={tools?.ffmpeg ?? false} label="ffmpeg" />
+        <Status ok={tools?.whisper ?? false} label="whisper.cpp" />
+        <span className="flex items-center gap-1.5">
+          <Status ok={tools?.model ?? false} label="speech model" />
+          {tools && !tools.model && (
+            <button
+              disabled={downloading}
+              onClick={async () => {
+                setDownloading(true);
+                try {
+                  await meetingEnsureModel();
+                  const r = await meetingTools();
+                  if (r.ok) setTools(r.data);
+                } finally {
+                  setDownloading(false);
+                }
+              }}
+              className="rounded-md border border-border px-1.5 py-0.5 text-[11px] text-ink-2 hover:bg-hov disabled:opacity-50"
+            >
+              {downloading ? "Downloading…" : "Download (142 MB)"}
+            </button>
+          )}
+        </span>
+        <Status ok={!ollamaError} label="Ollama" />
+      </div>
+      {ollamaError && <p className="pb-2 text-[12px] text-[var(--pal-red)]">{ollamaError}</p>}
+
+      <label className="flex items-center justify-between py-1 text-[13px]">
+        <span className="text-ink-2">Summarizer model</span>
+        <select
+          value={ollamaModel}
+          onChange={(e) => patch({ ollamaModel: e.target.value })}
+          className="max-w-56 rounded-md border border-border bg-surface px-1.5 py-1 text-[12.5px] outline-none"
+        >
+          <option value="">Auto (prefer gemma)</option>
+          {models.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
+        </select>
+      </label>
+      <label className="flex items-center justify-between py-1 text-[13px]">
+        <span className="text-ink-2">Ollama URL</span>
+        <input
+          value={urlDraft}
+          placeholder="http://127.0.0.1:11434"
+          onChange={(e) => setUrlDraft(e.target.value)}
+          onBlur={() => {
+            if (urlDraft !== ollamaUrl) patch({ ollamaUrl: urlDraft.trim() });
+          }}
+          className="w-56 rounded-md border border-border bg-surface px-2 py-1 text-[12.5px] outline-none focus:border-accent"
         />
       </label>
     </Section>

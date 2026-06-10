@@ -71,7 +71,8 @@
       ],
       "icon": "build/icon.icns",
       "extendInfo": {
-        "NSAppleEventsUsageDescription": "Geekspace reads your macOS Calendar and Mail to show events and messages, and to auto-schedule work around your appointments."
+        "NSAppleEventsUsageDescription": "Geekspace reads your macOS Calendar and Mail to show events and messages, and to auto-schedule work around your appointments.",
+        "NSMicrophoneUsageDescription": "Geekspace records meeting audio so it can transcribe and summarize your meetings — entirely on this Mac."
       }
     }
   }

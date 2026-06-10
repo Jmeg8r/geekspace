@@ -7,6 +7,7 @@ import { persist } from "zustand/middleware";
 export type Nav =
   | { kind: "home" }
   | { kind: "calendar" }
+  | { kind: "meetings" }
   | { kind: "page"; pageId: string };
 
 interface UIState {

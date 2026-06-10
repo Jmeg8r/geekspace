@@ -7,6 +7,7 @@ import {
   Database,
   FileText,
   Home,
+  Mic,
   MoreHorizontal,
   Plus,
   Search,
@@ -16,6 +17,7 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
+import { SidebarRecordingDot } from "../meetings/RecorderWidget";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
@@ -94,6 +96,13 @@ export function Sidebar() {
           label="Calendar"
           active={nav.kind === "calendar"}
           onClick={() => navigate({ kind: "calendar" })}
+        />
+        <NavButton
+          icon={Mic}
+          label="Meetings"
+          right={<SidebarRecordingDot />}
+          active={nav.kind === "meetings"}
+          onClick={() => navigate({ kind: "meetings" })}
         />
       </div>
 
