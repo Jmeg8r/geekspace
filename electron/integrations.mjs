@@ -18,7 +18,7 @@ function run(cmd, args, timeout = 90_000) {
         if (err.killed || err.signal) {
           reject(
             new Error(
-              "Timed out — if a macOS permission dialog is open (it may be behind a window), approve it and hit Refresh. Otherwise check System Settings → Privacy & Security → Automation."
+              "Timed out — three usual suspects: a macOS permission dialog is open (check behind windows), the app is unresponsive (quit and reopen Calendar/Mail), or it's just huge. Then hit Refresh."
             )
           );
         } else if (msg.includes("-1743") || /not authori[sz]ed/i.test(msg)) {
