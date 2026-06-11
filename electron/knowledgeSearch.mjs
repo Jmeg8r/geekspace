@@ -5,8 +5,39 @@
 // standalone with plain `node`.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 const ASTGL_SERVER = "/path/to/mcp-astgl-knowledge/dist/index.js";
+
+// WHY a real node binary (NOT Electron-as-node): mcp-astgl-knowledge depends
+// on better-sqlite3, a native module compiled against the system node ABI.
+// Electron bundles a different Node ABI, so spawning it via
+// process.execPath + ELECTRON_RUN_AS_NODE crashes the server on import
+// ("NODE_MODULE_VERSION" mismatch → MCP error -32000: Connection closed).
+// Rebuilding the module for Electron would break the standalone server's
+// LaunchAgents, so we find a system node instead.
+function resolveNodeBinary() {
+  const candidates = [
+    process.env.GEEKSPACE_NODE, // explicit override, e.g. for the packaged app
+    ...(process.env.PATH ?? "")
+      .split(":")
+      .filter(Boolean)
+      .map((dir) => path.join(dir, "node")),
+    "/opt/homebrew/bin/node",
+    "/usr/local/bin/node",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) return candidate;
+    } catch {
+      /* keep looking */
+    }
+  }
+  // Last resort: under plain node (tests) execPath IS node and this is fine;
+  // under Electron the ABI mismatch will surface in the connector's error.
+  return process.execPath;
+}
 
 let client = null;
 let connecting = null;
@@ -17,13 +48,9 @@ async function connect() {
   connecting = (async () => {
     try {
       const transport = new StdioClientTransport({
-        // WHY execPath + ELECTRON_RUN_AS_NODE: inside a packaged app there is
-        // no guarantee `node` is on PATH; Electron's own binary doubles as
-        // node. Under plain node (tests), execPath IS node and the env var is
-        // harmless.
-        command: process.execPath,
+        command: resolveNodeBinary(),
         args: [ASTGL_SERVER],
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+        env: { ...process.env },
         stderr: "ignore",
       });
       const c = new Client({ name: "geekspace", version: "1.0.0" });
