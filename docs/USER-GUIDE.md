@@ -117,14 +117,11 @@ Quota: 50 queries/day anonymous; set `ASTGL_API_KEY=<key>` in `.env.local` for 5
 
 ## 9. The ARCHITECT agent
 
-**Agent** in the sidebar opens a chat with ARCHITECT — a ClaudeClaw agent that is the resident Geekspace expert. It designs, creates, and configures your workspace on request ("set up a database for tracking podcast guests", "create a project for next week's article with a dependency chain") through the `geekspace-mcp` server. Its changes appear live, it can read your schedule and warnings, and it **cannot delete anything** by design.
+**Agent** in the sidebar opens a chat with ARCHITECT — Geekspace's embedded workspace expert. It designs, creates, and configures your workspace on request ("set up a database for tracking podcast guests", "create a project for next week's article with a dependency chain") through the `geekspace-mcp` server. Its changes appear live, it can read your schedule and warnings, and it **cannot delete anything** by design.
 
-One-time setup:
-1. Review + merge the `feat/architect-geekspace-agent` branch in `~/Projects/claudeclaw`
-2. Rebuild the ClaudeClaw dashboard and restart the daemon
-3. Put `CLAUDECLAW_TOKEN=<your dashboard token>` in `geekspace/.env.local`, restart Geekspace
+It runs **entirely on this Mac** — the Claude Agent SDK in Geekspace's main process, authenticated by your existing Claude Code sign-in (no API key, no external service). The only setup is being signed in to Claude Code on this machine (run `claude` once in a terminal if the panel says "Claude sign-in needed"). The agent needs the local Convex backend running, which `npm run dev` already starts.
 
-The same agent is also available in ClaudeClaw's own dashboard under the new **Geekspace** domain. And because the workspace is exposed as a standard MCP server (`node mcp/index.mjs`), Claude Code or Claude Desktop can use the identical tools.
+Because the workspace is exposed as a standard MCP server, you can also point Claude Code or Claude Desktop at it for the identical tools: `claude mcp add geekspace --env CONVEX_URL=http://127.0.0.1:3210 -- node ~/Projects/geekspace/mcp/index.mjs`.
 
 ## 10. Docs library
 

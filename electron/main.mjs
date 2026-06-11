@@ -24,6 +24,7 @@ import {
   prewarmKnowledge,
   searchKnowledge,
 } from "./knowledgeSearch.mjs";
+import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -159,82 +160,26 @@ handle("gs:docs:quickLook", async ({ url, name }) => {
   setTimeout(() => fs.promises.unlink(tmpFile).catch(() => {}), 10 * 60 * 1000);
 });
 
-// ----- ARCHITECT agent (ClaudeClaw) -----
-const CLAUDECLAW_URL = process.env.CLAUDECLAW_URL ?? "http://127.0.0.1:3141";
-
+// ----- ARCHITECT agent (embedded — Claude Agent SDK + geekspace-mcp) -----
 handle("gs:agent:status", async () => {
-  if (!process.env.CLAUDECLAW_TOKEN) return { state: "no-token" };
-  try {
-    // WHY auth header: this deployment requires a bearer token on every route
-    // (LAN-bound dashboards auth /api/health too). A bare probe would 401 and
-    // report "offline" even when the daemon is perfectly healthy.
-    const res = await fetch(`${CLAUDECLAW_URL}/api/health`, {
-      headers: { Authorization: `Bearer ${process.env.CLAUDECLAW_TOKEN}` },
-      signal: AbortSignal.timeout(2500),
-    });
-    if (res.status === 401) return { state: "no-token" };
-    return { state: res.ok ? "online" : "error" };
-  } catch {
-    return { state: "offline" };
-  }
+  // Auth is the machine's Claude Code credentials; the workspace tools need
+  // the local Convex backend. Both present → online.
+  if (!architectAuthOk()) return { state: "no-auth" };
+  return { state: "online" };
 });
 
 handle("gs:agent:reset", async () => {
-  const res = await fetch(`${CLAUDECLAW_URL}/api/chat/geekspace/reset`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.CLAUDECLAW_TOKEN}` },
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!res.ok) throw new Error(`Reset failed (${res.status})`);
+  resetArchitect();
   return true;
 });
 
-// Streams SSE frames from ClaudeClaw's chat endpoint to the renderer as
-// push events (same pattern as meeting progress). Resolves when the stream ends.
+// Runs one ARCHITECT turn locally; streams token/tool/error frames to the
+// renderer (same push pattern as meeting progress). Resolves when done.
 ipcMain.handle("gs:agent:chat", async (event, { message }) => {
-  const token = process.env.CLAUDECLAW_TOKEN;
-  if (!token) {
-    return { ok: false, error: "CLAUDECLAW_TOKEN is not set in .env.local" };
-  }
   try {
-    const res = await fetch(`${CLAUDECLAW_URL}/api/chat/geekspace`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ message }),
+    await runArchitect(message, (frame) => {
+      event.sender.send("gs:agent:event", frame);
     });
-    if (!res.ok || !res.body) {
-      const body = await res.text().catch(() => "");
-      return { ok: false, error: `ClaudeClaw responded ${res.status}: ${body.slice(0, 200)}` };
-    }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let sawError = null;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      // SSE frames are separated by a blank line.
-      let sep;
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
-        const eventType = frame.match(/^event:\s*(\S+)/m)?.[1] ?? "message";
-        const dataRaw = frame.match(/^data:\s*(.*)$/m)?.[1];
-        let data = {};
-        try {
-          data = dataRaw ? JSON.parse(dataRaw) : {};
-        } catch {
-          data = { text: dataRaw };
-        }
-        if (eventType === "error") sawError = data.message ?? "agent error";
-        event.sender.send("gs:agent:event", { type: eventType, ...data });
-      }
-    }
-    if (sawError) return { ok: false, error: sawError };
     return { ok: true, data: true };
   } catch (err) {
     return { ok: false, error: String(err?.message ?? err) };

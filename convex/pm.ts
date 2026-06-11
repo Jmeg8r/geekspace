@@ -33,7 +33,7 @@ const USER_GUIDE_BLOCKS = [
   { type: "bulletListItem", content: "Everything reflows automatically when events, tasks, or settings change. Red stripes = past due; check the needs-attention badge." },
   { type: "bulletListItem", content: "Keys: T today · J/K next/prev · W/M week/month view." },
   { type: "heading", props: { level: 2 }, content: "Agent, Knowledge, Docs & Templates" },
-  { type: "bulletListItem", content: "Agent (sidebar): chat with ARCHITECT — it builds databases, projects, and pages for you via MCP. Needs ClaudeClaw running + CLAUDECLAW_TOKEN in .env.local." },
+  { type: "bulletListItem", content: "Agent (sidebar): chat with ARCHITECT — it builds databases, projects, and pages for you. Runs locally via your Claude Code sign-in (no API key). If it says 'Claude sign-in needed', run `claude` once in a terminal." },
   { type: "bulletListItem", content: "Knowledge (sidebar): semantic search over your ASTGL knowledge base; Answer button for a single sourced answer. Also inline in ⌘K." },
   { type: "bulletListItem", content: "Docs (sidebar): drag files in — PDF/images/AV/markdown/code preview in-app; link files to projects; ⌘K finds them." },
   { type: "bulletListItem", content: "Templates: Projects page → From template (or ⌘K). Tasks land with offset dues + dependency chains and auto-schedule instantly. Save your own from a project's peek." },

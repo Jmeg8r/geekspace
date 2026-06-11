@@ -36,13 +36,19 @@ export function AgentPanel() {
   useEffect(() => {
     if (!open) return;
     return onAgentEvent((e) => {
-      if (e.type === "token" && e.text) {
+      const chunk =
+        e.type === "token"
+          ? e.text
+          : e.type === "tool"
+            ? `\n⚙ ${e.text}…\n`
+            : undefined;
+      if (chunk) {
         setMessages((m) => {
           const last = m[m.length - 1];
           if (last?.role === "assistant") {
-            return [...m.slice(0, -1), { ...last, text: last.text + e.text }];
+            return [...m.slice(0, -1), { ...last, text: last.text + chunk }];
           }
-          return [...m, { role: "assistant", text: e.text ?? "" }];
+          return [...m, { role: "assistant", text: chunk }];
         });
       }
     });
@@ -99,12 +105,12 @@ export function AgentPanel() {
               )}
             />
             {state === "online"
-              ? "ClaudeClaw connected"
+              ? "Local agent ready"
               : state === "checking"
                 ? "Checking…"
-                : state === "no-token"
-                  ? "Token missing"
-                  : "ClaudeClaw offline"}
+                : state === "no-auth"
+                  ? "Claude sign-in needed"
+                  : "Agent unavailable"}
           </div>
         </div>
         <button
@@ -174,9 +180,9 @@ export function AgentPanel() {
       <footer className="border-t border-border p-3">
         {offline ? (
           <p className="px-1 text-[12px] leading-relaxed text-ink-3">
-            {state === "no-token"
-              ? "Add CLAUDECLAW_TOKEN to .env.local and restart the app."
-              : "Start the ClaudeClaw daemon, then reopen this panel."}
+            {state === "no-auth"
+              ? "Sign in to Claude Code on this Mac (run `claude` once), then reopen this panel."
+              : "The agent is unavailable — make sure the app launched via npm run dev."}
           </p>
         ) : (
           <div className="flex items-end gap-2">

@@ -39,10 +39,11 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - Week grid: drag to create events, drag to move, resize from the bottom edge, 15-min snapping, now-line; month overview with ⚡ block counts
 - Keyboard: `T` today · `J`/`K` next/prev · `W`/`M` views
 
-### 🤖 ARCHITECT — your workspace agent
-- A ClaudeClaw agent that's the resident Geekspace expert: chat with it in-app (Agent in the sidebar) and it designs, creates, and configures pages/databases/projects/tasks for you — changes appear live
-- Powered by **`geekspace-mcp`** (`mcp/index.mjs`): a standard MCP server exposing the workspace (name-keyed properties, option validation, schedule awareness, template instantiation) to *any* agent — ClaudeClaw, Claude Code, Claude Desktop
-- Create/edit only — no delete tools by design; Phase B (source-code powers) is a ClaudeClaw config change away
+### 🤖 ARCHITECT — your workspace agent (embedded, local)
+- Chat with ARCHITECT in-app (Agent in the sidebar): it designs, creates, and configures pages/databases/projects/tasks for you, and changes appear live
+- Runs **entirely on this Mac** via the Claude Agent SDK in the Electron main process, using your Claude Code sign-in (`~/.claude/.credentials.json`) — **no API key, no external service**
+- Powered by **`geekspace-mcp`** (`mcp/index.mjs`): a standard MCP server exposing the workspace (name-keyed properties, option validation, schedule awareness, template instantiation). Because it's a standard server, **any** MCP client can drive your workspace too — `claude mcp add geekspace --env CONVEX_URL=http://127.0.0.1:3210 -- node mcp/index.mjs`
+- Create/edit only — no delete tools by design
 
 ### 🔎 Enterprise Search (ASTGL)
 - Knowledge page + ⌘K section searching your local `mcp-astgl-knowledge` server — semantic results with scores + an explicit sourced-Answer mode; pluggable connector design for future sources

@@ -1,12 +1,11 @@
 // WHAT: Typed renderer wrapper for the ARCHITECT agent IPC bridge (ClaudeClaw).
 
-export type AgentState = "online" | "offline" | "no-token" | "error";
+export type AgentState = "online" | "offline" | "no-auth" | "error";
 
 export interface AgentEvent {
-  type: "token" | "done" | "error" | string;
+  type: "token" | "tool" | "done" | "error" | string;
   text?: string;
   message?: string;
-  chatId?: string;
 }
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
