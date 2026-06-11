@@ -25,6 +25,7 @@ import {
   searchKnowledge,
 } from "./knowledgeSearch.mjs";
 import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
+import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -160,24 +161,30 @@ handle("gs:docs:quickLook", async ({ url, name }) => {
   setTimeout(() => fs.promises.unlink(tmpFile).catch(() => {}), 10 * 60 * 1000);
 });
 
-// ----- ARCHITECT agent (embedded — Claude Agent SDK + geekspace-mcp) -----
+// ----- ARCHITECT agent (two lanes: local Ollama default, Claude SDK escalation) -----
 handle("gs:agent:status", async () => {
-  // Auth is the machine's Claude Code credentials; the workspace tools need
-  // the local Convex backend. Both present → online.
-  if (!architectAuthOk()) return { state: "no-auth" };
-  return { state: "online" };
+  // Claude lane needs the machine's Claude Code credentials (and from
+  // 2026-06-15 bills the Agent SDK credit pool). Local lane needs Ollama.
+  const local = await localArchitectStatus();
+  return {
+    state: architectAuthOk() ? "online" : "no-auth",
+    local,
+  };
 });
 
 handle("gs:agent:reset", async () => {
   resetArchitect();
+  resetLocalArchitect();
   return true;
 });
 
-// Runs one ARCHITECT turn locally; streams token/tool/error frames to the
-// renderer (same push pattern as meeting progress). Resolves when done.
-ipcMain.handle("gs:agent:chat", async (event, { message }) => {
+// Runs one ARCHITECT turn; streams token/tool/error frames to the renderer
+// (same push pattern as meeting progress). mode "local" (default) drives the
+// Ollama lane; "claude" escalates to the Agent SDK lane.
+ipcMain.handle("gs:agent:chat", async (event, { message, mode }) => {
   try {
-    await runArchitect(message, (frame) => {
+    const run = mode === "claude" ? runArchitect : runArchitectLocal;
+    await run(message, (frame) => {
       event.sender.send("gs:agent:event", frame);
     });
     return { ok: true, data: true };

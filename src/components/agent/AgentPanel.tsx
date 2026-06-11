@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Loader2, RotateCcw, Send, X } from "lucide-react";
+import { Bot, Cpu, Loader2, RotateCcw, Send, Sparkles, X } from "lucide-react";
 import { useUI } from "../../state/ui";
 import { cn } from "../../lib/utils";
 import {
@@ -7,7 +7,9 @@ import {
   agentReset,
   agentStatus,
   onAgentEvent,
+  type AgentMode,
   type AgentState,
+  type LocalLaneStatus,
 } from "../../lib/agentBridge";
 
 interface Msg {
@@ -15,13 +17,16 @@ interface Msg {
   text: string;
 }
 
-// WHAT: Chat panel for ARCHITECT — the ClaudeClaw agent that designs, creates,
-// and configures this workspace via the geekspace MCP server. Tokens stream
-// over SSE → IPC; workspace changes it makes appear reactively everywhere.
+// WHAT: Chat panel for ARCHITECT — the embedded agent that designs, creates,
+// and configures this workspace via the geekspace MCP server. Two lanes share
+// the same tools: Local (Ollama, free, default) and Claude (Agent SDK — bills
+// the post-2026-06-15 credit pool, reserve it for complex design work).
 export function AgentPanel() {
   const open = useUI((s) => s.agentPanelOpen);
   const setOpen = useUI((s) => s.setAgentPanelOpen);
   const [state, setState] = useState<AgentState | "checking">("checking");
+  const [local, setLocal] = useState<LocalLaneStatus | undefined>(undefined);
+  const [mode, setMode] = useState<AgentMode>("local");
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -30,7 +35,17 @@ export function AgentPanel() {
   useEffect(() => {
     if (!open) return;
     setState("checking");
-    void agentStatus().then((r) => setState(r.ok ? r.data.state : "offline"));
+    void agentStatus().then((r) => {
+      if (!r.ok) {
+        setState("offline");
+        setLocal(undefined);
+        return;
+      }
+      setState(r.data.state);
+      setLocal(r.data.local);
+      // Default to the free lane when it's up; fall back to Claude when not.
+      if (r.data.local?.available === false && r.data.state === "online") setMode("claude");
+    });
   }, [open]);
 
   useEffect(() => {
@@ -66,7 +81,7 @@ export function AgentPanel() {
     setInput("");
     setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: "" }]);
     setStreaming(true);
-    const result = await agentChat(text);
+    const result = await agentChat(text, mode);
     setStreaming(false);
     if (!result.ok) {
       setMessages((m) => {
@@ -80,7 +95,20 @@ export function AgentPanel() {
     }
   }
 
-  const offline = state !== "online" && state !== "checking";
+  // Per-lane availability: the toggle picks the brain, the tools are shared.
+  const checking = state === "checking";
+  const laneReady = mode === "local" ? local?.available === true : state === "online";
+  const offline = !checking && !laneReady;
+  const laneLabel =
+    mode === "local"
+      ? local?.available
+        ? `Local · ${local.model ?? "Ollama"}`
+        : "Ollama unavailable"
+      : state === "online"
+        ? "Claude · Agent SDK (credit pool)"
+        : state === "no-auth"
+          ? "Claude sign-in needed"
+          : "Agent unavailable";
 
   return (
     <aside
@@ -97,21 +125,39 @@ export function AgentPanel() {
             <span
               className={cn(
                 "h-1.5 w-1.5 rounded-full",
-                state === "online"
-                  ? "bg-[var(--pal-green)]"
-                  : state === "checking"
-                    ? "bg-[var(--pal-yellow)]"
+                checking
+                  ? "bg-[var(--pal-yellow)]"
+                  : laneReady
+                    ? "bg-[var(--pal-green)]"
                     : "bg-[var(--pal-red)]"
               )}
             />
-            {state === "online"
-              ? "Local agent ready"
-              : state === "checking"
-                ? "Checking…"
-                : state === "no-auth"
-                  ? "Claude sign-in needed"
-                  : "Agent unavailable"}
+            {checking ? "Checking…" : laneLabel}
           </div>
+        </div>
+        <div
+          className="flex items-center rounded-lg border border-border p-0.5"
+          title="Local runs free on Ollama. Claude bills the Agent SDK credit pool — use it for complex design work."
+        >
+          {(
+            [
+              { value: "local" as const, icon: Cpu, label: "Local" },
+              { value: "claude" as const, icon: Sparkles, label: "Claude" },
+            ]
+          ).map(({ value, icon: Icon, label }) => (
+            <button
+              key={value}
+              onClick={() => setMode(value)}
+              disabled={streaming}
+              className={cn(
+                "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold",
+                mode === value ? "bg-accent text-white" : "text-ink-3 hover:text-ink"
+              )}
+            >
+              <Icon size={11} />
+              {label}
+            </button>
+          ))}
         </div>
         <button
           title="Reset conversation"
@@ -180,9 +226,13 @@ export function AgentPanel() {
       <footer className="border-t border-border p-3">
         {offline ? (
           <p className="px-1 text-[12px] leading-relaxed text-ink-3">
-            {state === "no-auth"
-              ? "Sign in to Claude Code on this Mac (run `claude` once), then reopen this panel."
-              : "The agent is unavailable — make sure the app launched via npm run dev."}
+            {mode === "local"
+              ? local?.error?.includes("models")
+                ? "Ollama is running but has no usable models — pull one (e.g. ollama pull qwen3-coder:30b)."
+                : "Ollama isn't reachable — start it, or switch to the Claude lane."
+              : state === "no-auth"
+                ? "Sign in to Claude Code on this Mac (run `claude` once), then reopen this panel."
+                : "The agent is unavailable — make sure the app launched via npm run dev."}
           </p>
         ) : (
           <div className="flex items-end gap-2">
@@ -209,7 +259,9 @@ export function AgentPanel() {
           </div>
         )}
         <p className="px-1 pt-1.5 text-[10.5px] text-ink-3">
-          Powered by ClaudeClaw · workspace tools only, no deletes
+          {mode === "local"
+            ? "Runs free on local Ollama · workspace tools only, no deletes"
+            : "Claude Agent SDK — bills the credit pool · workspace tools only, no deletes"}
         </p>
       </footer>
     </aside>

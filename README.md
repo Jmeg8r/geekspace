@@ -41,7 +41,10 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 
 ### 🤖 ARCHITECT — your workspace agent (embedded, local)
 - Chat with ARCHITECT in-app (Agent in the sidebar): it designs, creates, and configures pages/databases/projects/tasks for you, and changes appear live
-- Runs **entirely on this Mac** via the Claude Agent SDK in the Electron main process, using your Claude Code sign-in (`~/.claude/.credentials.json`) — **no API key, no external service**
+- **Two lanes, one toolset** (toggle in the panel header):
+  - **Local (default)** — a local Ollama model (prefers `qwen3-coder`; override with `GEEKSPACE_LOCAL_MODEL` in `.env.local`) drives the same workspace tools for free. Right for routine asks: what's overdue, add a task, create a page.
+  - **Claude** — the Claude Agent SDK lane for complex design work (multi-database structures, reorganizations). From 2026-06-15, SDK calls bill a separate per-user credit pool at API rates, so spend it where frontier judgment matters.
+- The Claude lane runs **entirely on this Mac** via the Agent SDK in the Electron main process, using your Claude Code sign-in (`~/.claude/.credentials.json`) — **no API key, no external service**
 - Powered by **`geekspace-mcp`** (`mcp/index.mjs`): a standard MCP server exposing the workspace (name-keyed properties, option validation, schedule awareness, template instantiation). Because it's a standard server, **any** MCP client can drive your workspace too — `claude mcp add geekspace --env CONVEX_URL=http://127.0.0.1:3210 -- node mcp/index.mjs`
 - Create/edit only — no delete tools by design
 

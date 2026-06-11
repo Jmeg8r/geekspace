@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld("geekspace", {
   },
   agent: {
     status: () => invoke("gs:agent:status"),
-    chat: (message) => invoke("gs:agent:chat", { message }),
+    chat: (message, mode) => invoke("gs:agent:chat", { message, mode }),
     reset: () => invoke("gs:agent:reset"),
     onEvent: (cb) => {
       const listener = (_event, data) => cb(data);
