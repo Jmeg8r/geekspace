@@ -310,6 +310,42 @@ const STARTERS: Array<{
     },
   },
   {
+    // Designed by ARCHITECT in-app (2026-06-10) as "IT Upgrade Project
+    // [REFERENCE TEMPLATE]"; promoted to a seeded starter here. The task
+    // chain, priorities, estimates, and dependency graph mirror that design.
+    name: "IT Upgrade Project",
+    description:
+      "ITIL-style change: scope → CAB approval → parallel prep (backup, staging, vendor) → maintenance-window execution → validation → docs.",
+    icon: "🛠️",
+    category: "it",
+    payload: {
+      targetOffsetDays: 21,
+      projectContent: JSON.stringify([
+        { type: "heading", props: { level: 2 }, content: "Change brief" },
+        { type: "bulletListItem", content: "System / version (from → to):" },
+        { type: "bulletListItem", content: "Maintenance window:" },
+        { type: "bulletListItem", content: "Change ticket / CAB reference:" },
+        { type: "bulletListItem", content: "Rollback decision point:" },
+      ]),
+      tasks: [
+        { title: "Scope & requirements doc", priorityName: "High", estimateMin: 120, dueOffsetDays: 3 },
+        { title: "Stakeholder identification & notification", priorityName: "Medium", estimateMin: 60, dueOffsetDays: 3 },
+        { title: "Risk assessment", priorityName: "High", estimateMin: 90, dueOffsetDays: 3 },
+        { title: "Change request / CAB submission", priorityName: "Urgent", estimateMin: 60, dueOffsetDays: 5, blockedByTitles: ["Scope & requirements doc", "Stakeholder identification & notification", "Risk assessment"] },
+        { title: "Rollback plan / runbook", priorityName: "High", estimateMin: 120, dueOffsetDays: 10, blockedByTitles: ["Change request / CAB submission"] },
+        { title: "Resource & schedule planning", priorityName: "Medium", estimateMin: 60, dueOffsetDays: 10, blockedByTitles: ["Change request / CAB submission"] },
+        { title: "Vendor coordination (licensing / delivery)", priorityName: "Medium", estimateMin: 45, dueOffsetDays: 10, blockedByTitles: ["Change request / CAB submission"] },
+        { title: "Backup verification", priorityName: "Urgent", estimateMin: 60, dueOffsetDays: 11, blockedByTitles: ["Change request / CAB submission"] },
+        { title: "Staging / test environment validation", priorityName: "High", estimateMin: 180, dueOffsetDays: 11, blockedByTitles: ["Change request / CAB submission"] },
+        { title: "Execute upgrade (maintenance window)", priorityName: "Urgent", estimateMin: 240, dueOffsetDays: 14, blockedByTitles: ["Backup verification", "Staging / test environment validation", "Vendor coordination (licensing / delivery)"] },
+        { title: "Smoke testing / validation", priorityName: "Urgent", estimateMin: 90, dueOffsetDays: 15, blockedByTitles: ["Execute upgrade (maintenance window)"] },
+        { title: "24–48hr post-upgrade monitoring", priorityName: "High", estimateMin: 60, dueOffsetDays: 17, blockedByTitles: ["Execute upgrade (maintenance window)", "Smoke testing / validation"] },
+        { title: "Documentation update", priorityName: "Medium", estimateMin: 90, dueOffsetDays: 19, blockedByTitles: ["24–48hr post-upgrade monitoring"] },
+        { title: "Lessons learned / ticket closure", priorityName: "Low", estimateMin: 45, dueOffsetDays: 21, blockedByTitles: ["24–48hr post-upgrade monitoring"] },
+      ],
+    },
+  },
+  {
     name: "Home-Lab Project",
     description: "Design, provision, configure, document — the responsible-sysadmin loop.",
     icon: "🖥️",
