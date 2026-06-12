@@ -1,21 +1,17 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
   BookOpen,
   Bot,
   CalendarDays,
-  ChevronDown,
-  ChevronRight,
   Database,
   FileText,
   Folder,
   Home,
   Mic,
-  MoreHorizontal,
   Plus,
   Search,
   Settings,
-  Star,
   Trash2,
   RotateCcw,
   X,
@@ -26,8 +22,10 @@ import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
 import { cn, isElectron } from "../../lib/utils";
 import { Popover } from "../common/Popover";
-import { MenuItem, MenuList, MenuSeparator } from "../common/Menu";
+import { MenuItem, MenuList } from "../common/Menu";
 import { Kbd } from "../common/bits";
+import { PageRow } from "./PageRow";
+import { PageTree } from "./PageTree";
 
 type Page = Doc<"pages">;
 
@@ -127,7 +125,7 @@ export function Sidebar() {
           <>
             <SectionLabel>Favorites</SectionLabel>
             {favorites.map((p) => (
-              <PageItem key={`fav-${p._id}`} page={p} childrenOf={childrenOf} depth={0} flat />
+              <PageRow key={`fav-${p._id}`} page={p} depth={0} flat />
             ))}
             <div className="h-3" />
           </>
@@ -158,9 +156,7 @@ export function Sidebar() {
             )}
           </Popover>
         </div>
-        {roots.map((p) => (
-          <PageItem key={p._id} page={p} childrenOf={childrenOf} depth={0} />
-        ))}
+        <PageTree roots={roots} childrenOf={childrenOf} />
         <button
           onClick={() => void newPage("doc")}
           className="mt-0.5 flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[13px] text-ink-3 hover:bg-hov hover:text-ink-2"
@@ -224,142 +220,6 @@ function NavButton({
       <span className="flex-1 text-left">{label}</span>
       {right}
     </button>
-  );
-}
-
-function PageItem({
-  page,
-  childrenOf,
-  depth,
-  flat,
-}: {
-  page: Page;
-  childrenOf: Map<string, Page[]>;
-  depth: number;
-  flat?: boolean;
-}) {
-  const nav = useUI((s) => s.nav);
-  const navigate = useUI((s) => s.navigate);
-  const expanded = useUI((s) => s.expanded[page._id] ?? false);
-  const toggleExpanded = useUI((s) => s.toggleExpanded);
-  const setExpanded = useUI((s) => s.setExpanded);
-  const createPage = useMutation(api.pages.create);
-  const toggleFavorite = useMutation(api.pages.toggleFavorite);
-  const trash = useMutation(api.pages.trash);
-
-  // WHY: while a row's action menu is open, keep the actions laid out (not
-  // display:none on un-hover). Otherwise the trigger collapses to a zero-size
-  // box and floating-ui re-pins the open menu to the viewport corner.
-  const [optionsOpen, setOptionsOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
-  const actionsOpen = optionsOpen || addOpen;
-
-  const children = flat ? [] : (childrenOf.get(page._id) ?? []);
-  const active = nav.kind === "page" && nav.pageId === page._id;
-
-  async function addChild(kind: "doc" | "database") {
-    const pageId = await createPage({ kind, parentId: page._id });
-    setExpanded(page._id, true);
-    if (pageId) navigate({ kind: "page", pageId });
-  }
-
-  return (
-    <>
-      <div
-        className={cn(
-          "group flex w-full cursor-pointer items-center rounded-md py-1 pr-1 text-[13px]",
-          active ? "bg-act font-medium text-ink" : "text-ink-2 hover:bg-hov hover:text-ink",
-          actionsOpen && !active && "bg-hov text-ink"
-        )}
-        style={{ paddingLeft: 4 + depth * 14 }}
-        onClick={() => navigate({ kind: "page", pageId: page._id })}
-      >
-        {!flat ? (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleExpanded(page._id);
-            }}
-            className="mr-0.5 rounded p-0.5 text-ink-3 hover:bg-act"
-          >
-            {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          </button>
-        ) : (
-          <span className="w-1.5" />
-        )}
-        <span className="mr-1.5 w-4 text-center text-[14px] leading-none">
-          {page.icon ?? (page.kind === "database" ? <Database size={14} className="inline text-ink-3" /> : <FileText size={14} className="inline text-ink-3" />)}
-        </span>
-        <span className="flex-1 truncate">{page.title || "Untitled"}</span>
-
-        {!flat && (
-          <span
-            className={cn("items-center gap-0.5", actionsOpen ? "flex" : "hidden group-hover:flex")}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Popover
-              onOpenChange={setOptionsOpen}
-              trigger={(props) => (
-                <button {...props} className="rounded p-0.5 text-ink-3 hover:bg-act hover:text-ink" title="Options">
-                  <MoreHorizontal size={14} />
-                </button>
-              )}
-            >
-              {(close) => (
-                <MenuList>
-                  <MenuItem
-                    icon={Star}
-                    label={page.favorite ? "Remove from favorites" : "Add to favorites"}
-                    onClick={() => {
-                      close();
-                      void toggleFavorite({ pageId: page._id });
-                    }}
-                  />
-                  <MenuSeparator />
-                  <MenuItem
-                    icon={Trash2}
-                    label="Move to trash"
-                    danger
-                    onClick={() => {
-                      close();
-                      void trash({ pageId: page._id });
-                      if (active) navigate({ kind: "home" });
-                    }}
-                  />
-                </MenuList>
-              )}
-            </Popover>
-            <Popover
-              onOpenChange={setAddOpen}
-              trigger={(props) => (
-                <button {...props} className="rounded p-0.5 text-ink-3 hover:bg-act hover:text-ink" title="Add page inside">
-                  <Plus size={14} />
-                </button>
-              )}
-            >
-              {(close) => (
-                <MenuList>
-                  <MenuItem icon={FileText} label="New page" onClick={() => { close(); void addChild("doc"); }} />
-                  <MenuItem icon={Database} label="New database" onClick={() => { close(); void addChild("database"); }} />
-                </MenuList>
-              )}
-            </Popover>
-          </span>
-        )}
-      </div>
-      {expanded && !flat && (
-        <>
-          {children.map((c) => (
-            <PageItem key={c._id} page={c} childrenOf={childrenOf} depth={depth + 1} />
-          ))}
-          {children.length === 0 && (
-            <div className="py-0.5 text-[12px] text-ink-3" style={{ paddingLeft: 26 + depth * 14 }}>
-              No pages inside
-            </div>
-          )}
-        </>
-      )}
-    </>
   );
 }
 

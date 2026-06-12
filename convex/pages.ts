@@ -1,6 +1,6 @@
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
 
 // WHAT: Page tree CRUD. Pages are docs or database containers; trash works on
@@ -141,6 +141,54 @@ export const restore = mutation({
       if (!parent || parent.trashed) parentId = undefined;
     }
     await ctx.db.patch(args.pageId, { trashed: false, parentId });
+  },
+});
+
+// WHAT: Move a page in the tree — reparent and/or reorder. The destination
+// level is reindexed to clean sequential `order` values (sibling counts are
+// small, so this is simpler and drift-free vs. fractional ordering).
+export const move = mutation({
+  args: {
+    pageId: v.id("pages"),
+    // undefined newParentId means "move to the top level" (a root page).
+    newParentId: v.optional(v.id("pages")),
+    index: v.number(), // target position among the destination's children
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.get(args.pageId);
+    if (!page) return;
+    const newParentId = args.newParentId;
+
+    // Guard: a page can't be moved into itself or any of its descendants —
+    // that would orphan a subtree into an unreachable cycle.
+    if (newParentId) {
+      let cursor: Id<"pages"> | undefined = newParentId;
+      while (cursor) {
+        if (cursor === args.pageId) return "cycle";
+        const node: Doc<"pages"> | null = await ctx.db.get(cursor);
+        cursor = node?.parentId;
+      }
+    }
+
+    // Destination siblings: same parent, non-trashed, excluding the moved page.
+    const all = await ctx.db.query("pages").collect();
+    const siblings = all
+      .filter((p) => !p.trashed && p._id !== args.pageId && p.parentId === newParentId)
+      .sort((a, b) => a.order - b.order);
+
+    const idx = Math.max(0, Math.min(args.index, siblings.length));
+    siblings.splice(idx, 0, page);
+
+    const now = Date.now();
+    await Promise.all(
+      siblings.map((p, i) => {
+        if (p._id === args.pageId) {
+          return ctx.db.patch(p._id, { parentId: newParentId, order: i, updatedAt: now });
+        }
+        // Skip no-op writes to keep the mutation cheap.
+        return p.order === i ? Promise.resolve() : ctx.db.patch(p._id, { order: i });
+      })
+    );
   },
 });
 
