@@ -17,6 +17,9 @@ export default defineSchema({
     trashed: v.boolean(),
     order: v.number(),
     updatedAt: v.number(),
+    // Project tags: links this page to one or more rows in the Projects
+    // database (the same database Tasks relate to). Shown as colored chips.
+    projectRowIds: v.optional(v.array(v.id("rows"))),
   })
     .index("by_parent", ["parentId"])
     .searchIndex("search_title", { searchField: "title" }),

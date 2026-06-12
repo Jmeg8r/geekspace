@@ -19,6 +19,7 @@ import type * as lib_types from "../lib/types.js";
 import type * as meetings from "../meetings.js";
 import type * as pages from "../pages.js";
 import type * as pm from "../pm.js";
+import type * as projects from "../projects.js";
 import type * as rows from "../rows.js";
 import type * as scheduling from "../scheduling.js";
 import type * as search from "../search.js";
@@ -46,6 +47,7 @@ declare const fullApi: ApiFromModules<{
   meetings: typeof meetings;
   pages: typeof pages;
   pm: typeof pm;
+  projects: typeof projects;
   rows: typeof rows;
   scheduling: typeof scheduling;
   search: typeof search;

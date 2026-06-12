@@ -112,6 +112,20 @@ export const setContent = mutation({
   },
 });
 
+// Set the project tags on a page (links to rows in the Projects database).
+export const setProjects = mutation({
+  args: { pageId: v.id("pages"), projectRowIds: v.array(v.id("rows")) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.get(args.pageId);
+    if (!page) return;
+    await ctx.db.patch(args.pageId, {
+      // Store undefined rather than an empty array when nothing is tagged.
+      projectRowIds: args.projectRowIds.length > 0 ? args.projectRowIds : undefined,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 export const toggleFavorite = mutation({
   args: { pageId: v.id("pages") },
   handler: async (ctx, args) => {

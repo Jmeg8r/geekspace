@@ -9,6 +9,15 @@ export const swatchClass = (c?: string | null) => `swatch-${valid(c)}`;
 /** Color variable class for calendar cards — pair with `evt` or `task-block`. */
 export const colorVarClass = (c?: string | null) => `evt-${valid(c)}`;
 
+/** Stable, non-gray palette color derived from a key (e.g. a project id), so
+ *  the same project always reads as the same color without storing one. */
+export function hashColor(key: string): OptionColorId {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  const colors = OPTION_COLOR_IDS.filter((c) => c !== "gray");
+  return colors[Math.abs(h) % colors.length];
+}
+
 /** Pick the least-used palette color for a new select option. */
 export function nextOptionColor(used: string[]): OptionColorId {
   const counts = new Map<string, number>(OPTION_COLOR_IDS.map((c) => [c, 0]));
