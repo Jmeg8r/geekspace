@@ -6,6 +6,13 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "frontend"],
       "port": 5173
+    },
+    {
+      "name": "geekspace-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--port", "5180", "--strictPort", "--host", "127.0.0.1"],
+      "port": 5180,
+      "autoPort": false
     }
   ]
 }
