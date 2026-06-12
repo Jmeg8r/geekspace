@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
   BookOpen,
@@ -137,10 +137,13 @@ export function Sidebar() {
           <SectionLabel>Pages</SectionLabel>
           <Popover
             placement="bottom-start"
-            trigger={(props) => (
+            trigger={(props, open) => (
               <button
                 {...props}
-                className="rounded p-0.5 text-ink-3 opacity-0 transition-opacity hover:bg-hov hover:text-ink group-hover/section:opacity-100"
+                className={cn(
+                  "rounded p-0.5 text-ink-3 transition-opacity hover:bg-hov hover:text-ink",
+                  open ? "opacity-100" : "opacity-0 group-hover/section:opacity-100"
+                )}
                 title="New page"
               >
                 <Plus size={14} />
@@ -244,6 +247,13 @@ function PageItem({
   const toggleFavorite = useMutation(api.pages.toggleFavorite);
   const trash = useMutation(api.pages.trash);
 
+  // WHY: while a row's action menu is open, keep the actions laid out (not
+  // display:none on un-hover). Otherwise the trigger collapses to a zero-size
+  // box and floating-ui re-pins the open menu to the viewport corner.
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const actionsOpen = optionsOpen || addOpen;
+
   const children = flat ? [] : (childrenOf.get(page._id) ?? []);
   const active = nav.kind === "page" && nav.pageId === page._id;
 
@@ -258,7 +268,8 @@ function PageItem({
       <div
         className={cn(
           "group flex w-full cursor-pointer items-center rounded-md py-1 pr-1 text-[13px]",
-          active ? "bg-act font-medium text-ink" : "text-ink-2 hover:bg-hov hover:text-ink"
+          active ? "bg-act font-medium text-ink" : "text-ink-2 hover:bg-hov hover:text-ink",
+          actionsOpen && !active && "bg-hov text-ink"
         )}
         style={{ paddingLeft: 4 + depth * 14 }}
         onClick={() => navigate({ kind: "page", pageId: page._id })}
@@ -282,8 +293,12 @@ function PageItem({
         <span className="flex-1 truncate">{page.title || "Untitled"}</span>
 
         {!flat && (
-          <span className="hidden items-center gap-0.5 group-hover:flex" onClick={(e) => e.stopPropagation()}>
+          <span
+            className={cn("items-center gap-0.5", actionsOpen ? "flex" : "hidden group-hover:flex")}
+            onClick={(e) => e.stopPropagation()}
+          >
             <Popover
+              onOpenChange={setOptionsOpen}
               trigger={(props) => (
                 <button {...props} className="rounded p-0.5 text-ink-3 hover:bg-act hover:text-ink" title="Options">
                   <MoreHorizontal size={14} />
@@ -315,6 +330,7 @@ function PageItem({
               )}
             </Popover>
             <Popover
+              onOpenChange={setAddOpen}
               trigger={(props) => (
                 <button {...props} className="rounded p-0.5 text-ink-3 hover:bg-act hover:text-ink" title="Add page inside">
                   <Plus size={14} />
