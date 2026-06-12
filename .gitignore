@@ -28,3 +28,7 @@ coverage/
 .idea/
 *.swp
 tsconfig.tsbuildinfo
+
+# Article assets — version the lightweight screenshots, keep heavy media local
+docs/article-assets/*.mp4
+docs/article-assets/_replaced-web-captures/
