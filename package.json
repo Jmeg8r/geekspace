@@ -17,7 +17,10 @@
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package": "npm run build && electron-builder --mac",
+    "package": "npm run build && npm run prebake && electron-builder --mac",
+    "prebake": "node scripts/prebake-seed.mjs",
+    "migrate:local-data": "node scripts/migrate-local-data.mjs",
+    "deploy:local": "node scripts/deploy-local.mjs",
     "verify": "tsc -b --noEmit && vitest run"
   },
   "dependencies": {
@@ -66,6 +69,12 @@
       "electron/**",
       "package.json"
     ],
+    "extraResources": [
+      { "from": "build/convex-local-backend", "to": "convex-local-backend" },
+      { "from": "build/convex-seed", "to": "convex-seed" },
+      { "from": "build/geekspace-mcp.mjs", "to": "geekspace-mcp.mjs" }
+    ],
+    "afterPack": "scripts/afterPack.cjs",
     "mac": {
       "category": "public.app-category.productivity",
       "target": [

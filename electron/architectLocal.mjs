@@ -7,11 +7,19 @@
 // The MCP server is the contract — both lanes drive the identical 14 tools.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const MCP_SERVER = path.join(__dirname, "..", "mcp", "index.mjs");
+// Packaged: bundled MCP server in Resources; dev: the source in the repo.
+const BUNDLED_MCP = process.resourcesPath
+  ? path.join(process.resourcesPath, "geekspace-mcp.mjs")
+  : null;
+const MCP_SERVER =
+  BUNDLED_MCP && fs.existsSync(BUNDLED_MCP)
+    ? BUNDLED_MCP
+    : path.join(__dirname, "..", "mcp", "index.mjs");
 
 const OLLAMA_URL = (process.env.OLLAMA_URL ?? "http://127.0.0.1:11434").replace(/\/$/, "");
 

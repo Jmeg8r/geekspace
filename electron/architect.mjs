@@ -10,7 +10,16 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GEEKSPACE_ROOT = path.join(__dirname, "..");
-const MCP_SERVER = path.join(GEEKSPACE_ROOT, "mcp", "index.mjs");
+// Packaged: the MCP server is bundled to a single self-contained file in
+// Resources. Dev: run the source directly (its node_modules + convex/_generated
+// live in the repo).
+const BUNDLED_MCP = process.resourcesPath
+  ? path.join(process.resourcesPath, "geekspace-mcp.mjs")
+  : null;
+const MCP_SERVER =
+  BUNDLED_MCP && fs.existsSync(BUNDLED_MCP)
+    ? BUNDLED_MCP
+    : path.join(GEEKSPACE_ROOT, "mcp", "index.mjs");
 
 const ALLOWED_TOOLS = [
   "query_schema",

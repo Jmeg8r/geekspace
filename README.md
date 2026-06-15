@@ -98,7 +98,8 @@ flowchart TD
 
 | Decision | Why |
 |---|---|
-| Convex **anonymous local** deployment | No account, no auth, data stays on this Mac (`~/.convex`), still fully reactive |
+| Convex **anonymous local** deployment | No account, no auth, data stays on this Mac, still fully reactive (dev: repo `.convex/`; packaged: `~/Library/Application Support/Geekspace/`) |
+| Electron owns the backend lifecycle (packaged) | The app spawns the bundled `convex-local-backend` on launch and stops it on quit — self-contained, no terminal |
 | Pure scheduler module shared by server + tests | Deterministic, 16 unit tests, no UI coupling |
 | Reflow inside every relevant mutation | The cascade can never be forgotten; UI updates reactively for free |
 | Drag = lock | Matches Motion/Reclaim mental model: a manual placement is a promise the engine must respect |
@@ -106,6 +107,8 @@ flowchart TD
 | Fixed tz-offset scheduling with constant reflow | Near-term blocks always correct; DST drift self-heals on every reflow |
 
 ## Running it
+
+### Develop
 
 ```bash
 npm install
@@ -118,6 +121,22 @@ First run only:
 npm run seed       # Projects/Tasks template + sample week (idempotent)
 ```
 
+### Build the standalone app
+
+```bash
+npm run package             # → self-contained Geekspace.app + .dmg in release/
+npm run migrate:local-data  # one-time: copy your dev workspace into the app
+```
+
+`npm run package` bundles the Convex backend binary **and** a pre-baked seed
+(functions already deployed + starter template) into the app. The built
+**`Geekspace.app` starts its own backend on launch — no terminal, no repo, no
+`npx convex dev`.** Data lives in `~/Library/Application Support/Geekspace/`.
+
+First open of the unsigned build: right-click → Open. After you change backend
+functions and repackage, run `npm run deploy:local` (with the app open) to push
+them onto your existing data — an app update never overwrites your workspace.
+
 Other scripts:
 
 | Script | What |
@@ -125,9 +144,13 @@ Other scripts:
 | `npm run dev:web` | backend + browser dev (no Electron) |
 | `npm run test` | scheduler engine test suite (vitest) |
 | `npm run verify` | typecheck + tests |
-| `npm run package` | build `Geekspace.app` + `.dmg` into `release/` |
+| `npm run package` | build self-contained `Geekspace.app` + `.dmg` into `release/` |
+| `npm run migrate:local-data` | copy your dev `.convex` workspace into the packaged app |
+| `npm run deploy:local` | push function changes onto the running standalone app |
 
-> **The local Convex backend must be running** for the app to have data — `npm run dev` handles it. The packaged `.app` expects `npx convex dev` (or the dev script) running in the repo. Data persists in `~/.convex` across restarts.
+> In **dev**, `npm run dev` runs the backend (data in the repo's `.convex/`). The
+> packaged app is self-contained: Electron starts the bundled backend itself and
+> keeps data in `~/Library/Application Support/Geekspace/`.
 
 ## Project layout
 
@@ -140,14 +163,15 @@ src/
   components/       # sidebar, page editor, database views, calendar, home
   lib/              # view filter/sort logic, dates, theme palette
   state/            # zustand UI state, theme provider
-electron/           # main.mjs + preload.cjs (no build step)
+electron/           # main.mjs, preload.cjs, convexBackend.mjs (backend lifecycle) — no build step
+scripts/            # prebake-seed, migrate-local-data, deploy-local, afterPack
 tests/              # scheduler test suite
 ```
 
 ## Known limits (v1.1)
 
 - Single user, no auth, no cloud sync — by design
-- Packaged app is unsigned (personal use; right-click → Open the first time)
+- Packaged app is signed with a Developer ID but not notarized (personal use; right-click → Open the first time)
 - macOS Calendar sync is one-way (Calendar → Geekspace) and needs Calendar.app running; Mail widget needs Mail.app running
 - Far-future blocks across a DST switch can sit an hour off until any reflow corrects them
 - Deleting a row leaves dangling relation ids on the other side; cells skip them gracefully

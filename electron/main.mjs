@@ -1,7 +1,7 @@
 // WHAT: Electron main process — creates the Geekspace window and exposes the
 // macOS Calendar/Mail integration over IPC.
 // WHY: kept dependency-free plain ESM so there is no build step for the main process.
-import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, systemPreferences } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,13 @@ import {
 } from "./knowledgeSearch.mjs";
 import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
+import {
+  getUrl as convexUrl,
+  isManaged as convexManaged,
+  killBackendSync,
+  startOrAttach as startConvex,
+  stopBackend as stopConvex,
+} from "./convexBackend.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -200,7 +207,31 @@ handle("gs:openExternal", ({ url }) => {
   if (typeof url === "string" && /^https?:\/\//.test(url)) shell.openExternal(url);
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Bring up (or attach to) the local Convex backend BEFORE the window loads —
+  // the renderer hard-requires it on :3210. In dev this attaches to the
+  // `convex dev` backend; packaged, it spawns the bundled binary.
+  try {
+    await startConvex();
+  } catch (err) {
+    const logDir = path.join(app.getPath("appData"), "Geekspace", "logs");
+    const choice = await dialog.showMessageBox({
+      type: "error",
+      title: "Geekspace couldn't start",
+      message: "Geekspace couldn't start its local database.",
+      detail: `${err?.message ?? err}\n\nThe backend log has more detail.`,
+      buttons: ["Open Log Folder", "Quit"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (choice.response === 0) await shell.openPath(logDir);
+    app.quit();
+    return;
+  }
+  // Authoritative CONVEX_URL for the ARCHITECT MCP subprocesses (the renderer
+  // uses the build-time VITE_CONVEX_URL, which already points here).
+  process.env.CONVEX_URL = convexUrl();
+
   createWindow();
   // Warm the knowledge connector (connect + tools/list only — no quota used).
   prewarmKnowledge().catch(() => {});
@@ -212,3 +243,17 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+// Graceful backend shutdown — only when WE own the process (never kill a
+// `convex dev` we merely attached to). before-quit can fire before async work
+// settles, so defer the real quit until SIGTERM completes.
+let shuttingDown = false;
+app.on("before-quit", (event) => {
+  if (shuttingDown || !convexManaged()) return;
+  event.preventDefault();
+  shuttingDown = true;
+  stopConvex().finally(() => app.quit());
+});
+
+// Last resort: never leak the backend if the parent dies unexpectedly.
+process.on("exit", killBackendSync);

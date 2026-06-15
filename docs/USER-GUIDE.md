@@ -6,6 +6,18 @@ Everything you can do in Geekspace, and how. A condensed version of this guide l
 
 ## 1. Starting and stopping
 
+**Normal use — the standalone app:** double-click **Geekspace.app**. It starts its own
+local backend automatically and opens the window — no terminal, nothing else to run. Quit
+with ⌘Q and it shuts the backend down cleanly. Your data lives in
+`~/Library/Application Support/Geekspace/` and survives quits, restarts, and crashes.
+Nothing touches the cloud.
+
+**Building the app:** from the repo, `npm run package` produces `Geekspace.app` + a `.dmg`
+in `release/`. One time, to carry your existing workspace over, run
+`npm run migrate:local-data`. The first open of the unsigned build: right-click → Open.
+
+**Developing from source:**
+
 ```bash
 cd ~/Projects/geekspace
 npm run dev          # backend + UI + app window, all together
@@ -13,7 +25,7 @@ npm run dev          # backend + UI + app window, all together
 
 - **Stop it with one Ctrl-C** in that terminal — this shuts down all three processes cleanly.
 - If you ever see *"A local backend is still running on port 3210"*, something exited uncleanly. Fix: `lsof -ti:3210 | xargs kill`, then `npm run dev` again.
-- Your data lives in a local SQLite file under `.convex/` (managed by Convex) — it survives restarts, quits, and crashes. Nothing touches the cloud.
+- In dev, data lives under the repo's `.convex/`; the packaged app uses `~/Library/Application Support/Geekspace/`. Both are local SQLite — nothing touches the cloud.
 - First-time setup on a new machine: `npm install`, then `npm run dev`, then `npm run seed` once.
 
 ---
@@ -119,7 +131,7 @@ Quota: 50 queries/day anonymous; set `ASTGL_API_KEY=<key>` in `.env.local` for 5
 
 **Agent** in the sidebar opens a chat with ARCHITECT — Geekspace's embedded workspace expert. It designs, creates, and configures your workspace on request ("set up a database for tracking podcast guests", "create a project for next week's article with a dependency chain") through the `geekspace-mcp` server. Its changes appear live, it can read your schedule and warnings, and it **cannot delete anything** by design.
 
-It runs **entirely on this Mac** — the Claude Agent SDK in Geekspace's main process, authenticated by your existing Claude Code sign-in (no API key, no external service). The only setup is being signed in to Claude Code on this machine (run `claude` once in a terminal if the panel says "Claude sign-in needed"). The agent needs the local Convex backend running, which `npm run dev` already starts.
+It runs **entirely on this Mac** — the Claude Agent SDK in Geekspace's main process, authenticated by your existing Claude Code sign-in (no API key, no external service). The only setup is being signed in to Claude Code on this machine (run `claude` once in a terminal if the panel says "Claude sign-in needed"). The agent needs the local Convex backend, which the app starts automatically (or `npm run dev` when developing from source).
 
 Because the workspace is exposed as a standard MCP server, you can also point Claude Code or Claude Desktop at it for the identical tools: `claude mcp add geekspace --env CONVEX_URL=http://127.0.0.1:3210 -- node ~/Projects/geekspace/mcp/index.mjs`.
 
@@ -149,7 +161,7 @@ Because the workspace is exposed as a standard MCP server, you can also point Cl
 | Symptom | Fix |
 |---|---|
 | "Port 3210 still running" on `npm run dev` | `lsof -ti:3210 \| xargs kill`, retry |
-| App opens but no data | The Convex backend isn't running — use `npm run dev`, not `electron .` alone |
+| App opens but no data (dev only) | In dev use `npm run dev`, not `electron .` alone. The packaged app starts its own backend automatically. |
 | Calendar/Mail sync error mentioning permissions | System Settings → Privacy & Security → Automation |
 | Mail/Calendar "timed out" | Three causes, same symptom: ① the macOS permission dialog is blocking — it can hide **behind windows**; find it, approve once. ② The app is **unresponsive** — quit and reopen Mail/Calendar. ③ A very large mailbox/calendar — just Refresh and wait. |
 | "Calendar.app isn't running" | Open Calendar (sync needs it alive), or hit Sync now after opening it |
