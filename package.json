@@ -82,6 +82,9 @@
         "zip"
       ],
       "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSAppleEventsUsageDescription": "Geekspace reads your macOS Calendar and Mail to show events and messages, and to auto-schedule work around your appointments.",
         "NSMicrophoneUsageDescription": "Geekspace records meeting audio so it can transcribe and summarize your meetings — entirely on this Mac."

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Electron defaults required under Hardened Runtime (V8 JIT). -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+
+  <!-- WHAT: lets the app open the microphone for meeting recording.
+       WHY: under Hardened Runtime, NSMicrophoneUsageDescription only sets the
+       prompt text — without this entitlement the OS blocks the mic before TCC
+       can prompt, so the app never appears in System Settings → Microphone. -->
+  <key>com.apple.security.device.audio-input</key>
+  <true/>
+
+  <!-- WHAT: lets the app drive Calendar/Mail via AppleScript (osascript).
+       WHY: same as above — NSAppleEventsUsageDescription is the prompt text;
+       this entitlement is what actually permits Apple Events under Hardened Runtime. -->
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
+</dict>
+</plist>
