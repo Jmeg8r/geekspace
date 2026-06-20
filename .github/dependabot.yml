@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Keep the SHA-pinned GitHub Actions current (and refresh the # vX.Y.Z comments).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
