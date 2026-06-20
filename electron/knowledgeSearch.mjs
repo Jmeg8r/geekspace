@@ -8,7 +8,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-const ASTGL_SERVER = "/path/to/mcp-astgl-knowledge/dist/index.js";
+// WHAT: filesystem path to the optional ASTGL knowledge MCP server entry point.
+// WHY env, not hardcoded: the knowledge server is a separate, optional project.
+// Set GEEKSPACE_KNOWLEDGE_SERVER in .env.local to its built dist/index.js; leave
+// it unset and knowledge search just stays offline instead of crashing.
+function resolveKnowledgeServer() {
+  const p = process.env.GEEKSPACE_KNOWLEDGE_SERVER?.trim();
+  return p && existsSync(p) ? p : null;
+}
 
 // WHY a real node binary (NOT Electron-as-node): mcp-astgl-knowledge depends
 // on better-sqlite3, a native module compiled against the system node ABI.
@@ -47,9 +54,15 @@ async function connect() {
   if (connecting) return connecting;
   connecting = (async () => {
     try {
+      const server = resolveKnowledgeServer();
+      if (!server) {
+        throw new Error(
+          "Knowledge server not configured — set GEEKSPACE_KNOWLEDGE_SERVER in .env.local to the built mcp-astgl-knowledge dist/index.js",
+        );
+      }
       const transport = new StdioClientTransport({
         command: resolveNodeBinary(),
-        args: [ASTGL_SERVER],
+        args: [server],
         env: { ...process.env },
         stderr: "ignore",
       });
