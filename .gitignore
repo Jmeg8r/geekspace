@@ -33,6 +33,11 @@ coverage/
 *.swp
 tsconfig.tsbuildinfo
 
-# Article assets — version the lightweight screenshots, keep heavy media local
+# Local Claude Code settings (personal, machine-specific)
+.claude/settings.local.json
+
+# Article assets — heavy media stays local. Screenshots are regenerated from the
+# demo workspace before publishing; do not commit captures of a live workspace.
 docs/article-assets/*.mp4
+docs/article-assets/*.png
 docs/article-assets/_replaced-web-captures/

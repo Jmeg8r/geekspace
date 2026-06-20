@@ -176,6 +176,10 @@ tests/              # scheduler test suite
 - Far-future blocks across a DST switch can sit an hour off until any reflow corrects them
 - Deleting a row leaves dangling relation ids on the other side; cells skip them gracefully
 
+## License
+
+MIT — see [LICENSE](LICENSE). A personal learning project, shared as-is; no support or warranty implied.
+
 ---
 
 *An As The Geek Learns build — 2026.*
