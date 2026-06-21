@@ -33,9 +33,10 @@ _end=$(grep -n '<!-- LEARNINGS:END -->' "$CLAUDE_FILE" | head -1 | cut -d: -f1 |
 [ "$_start" -lt "$_end" ] || { echo "LEARNINGS markers out of order in $CLAUDE_FILE." >&2; exit 1; }
 
 SLUG_BIN="$(resolve_slug_bin)" || { echo "gstack-slug not found." >&2; exit 1; }
-SLUG=""
-eval "$("$SLUG_BIN" 2>/dev/null)" || true
-[ -n "${SLUG:-}" ] || { echo "Could not resolve slug." >&2; exit 1; }
+# WHAT: parse SLUG as data (gstack-slug prints `SLUG=<value>`) rather than eval'ing its
+#       output — avoids executing shell if the resolver is ever tampered with.
+SLUG="$("$SLUG_BIN" 2>/dev/null | sed -n 's/^SLUG=//p' | head -1)"
+[ -n "$SLUG" ] || { echo "Could not resolve slug." >&2; exit 1; }
 
 LEARNINGS_FILE="${GSTACK_HOME:-$HOME/.gstack}/projects/${SLUG}/learnings.jsonl"
 

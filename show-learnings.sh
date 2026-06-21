@@ -28,9 +28,10 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 SLUG_BIN="$(resolve_slug_bin)" || { echo "gstack-slug not found — is gstack installed?" >&2; exit 1; }
-SLUG=""
-eval "$("$SLUG_BIN" 2>/dev/null)" || true   # sets SLUG (and BRANCH)
-if [ -z "${SLUG:-}" ]; then echo "Could not resolve project slug (no git remote?)." >&2; exit 1; fi
+# WHAT: parse SLUG as data (gstack-slug prints `SLUG=<value>`) instead of eval'ing its
+#       output — avoids executing shell if the resolver is ever tampered with.
+SLUG="$("$SLUG_BIN" 2>/dev/null | sed -n 's/^SLUG=//p' | head -1)"
+if [ -z "$SLUG" ]; then echo "Could not resolve project slug (no git remote?)." >&2; exit 1; fi
 
 LEARNINGS_FILE="${GSTACK_HOME:-$HOME/.gstack}/projects/${SLUG}/learnings.jsonl"
 if [ ! -s "$LEARNINGS_FILE" ]; then
@@ -41,10 +42,6 @@ if [ ! -s "$LEARNINGS_FILE" ]; then
 fi
 
 FILTER="${1:-}"
-if   [ "$FILTER" = "high" ]; then SEL='select((.confidence // 0) >= 8)'
-elif [ -n "$FILTER" ];        then SEL="select(.type == \"$FILTER\")"
-else                               SEL='.'
-fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -52,19 +49,22 @@ echo "  Compound Engineering Learnings — ${SLUG}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # WHAT: dedupe by key+type keeping the newest ts (gstack is append-only, latest wins),
-#       then apply the filter and print.
-jq -rs '
+#       then apply the filter and print. The filter is passed via --arg (data, not code)
+#       so quotes/special characters in it can't break or inject into the jq program.
+JQ_KEEP='def keep: if $f == "" then true elif $f == "high" then (.confidence // 0) >= 8 else .type == $f end;'
+jq -rs --arg f "$FILTER" "$JQ_KEEP"'
   group_by(.key + "|" + .type)
   | map(max_by(.ts // ""))
   | sort_by(-(.confidence // 0))
   | .[]
-  | '"$SEL"'
+  | select(keep)
   | "\n[\(.type | ascii_upcase)] \(.key)  (confidence: \(.confidence))\n  \(.insight)"
 ' "$LEARNINGS_FILE"
 
 echo ""
 # WHAT: count the SAME deduped+filtered set that was printed, so the total can't
 #       contradict the rows shown when a filter is active.
-TOTAL=$(jq -rs '[ group_by(.key + "|" + .type) | map(max_by(.ts // ""))[] | '"$SEL"' ] | length' "$LEARNINGS_FILE")
+TOTAL=$(jq -rs --arg f "$FILTER" "$JQ_KEEP"'
+  [ group_by(.key + "|" + .type) | map(max_by(.ts // ""))[] | select(keep) ] | length' "$LEARNINGS_FILE")
 echo "Total: ${TOTAL} learning(s)${FILTER:+ (filter: $FILTER)}"
 echo ""
