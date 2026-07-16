@@ -116,6 +116,25 @@ export const recentItems = ({ limit, since, category } = {}) =>
 export const searchItems = (query, limit) => callTool("search_items", { query, limit });
 export const markProcessed = (itemIds, consumer) =>
   callTool("mark_processed", { item_ids: itemIds, consumer });
-export const addFeed = (url, category) => callTool("add_feed", { url, category });
-export const removeFeed = (url) => callTool("remove_feed", { url });
+// Feed mutations rewrite the canonical feeds.yaml, which aib-reader resolves
+// RELATIVE to CWD — and Electron's CWD is not the aib-reader dir. Without an
+// explicit AIB_READER_FEEDS_CONFIG, add/remove would touch (or create) the wrong
+// file. Refuse rather than corrupt the config.
+function requireFeedsConfig() {
+  const config = process.env.AIB_READER_FEEDS_CONFIG;
+  if (!config || !existsSync(config)) {
+    throw new Error(
+      "Set AIB_READER_FEEDS_CONFIG to the canonical aib-reader feeds.yaml before adding or removing feeds.",
+    );
+  }
+}
+
+export const addFeed = (url, category) => {
+  requireFeedsConfig();
+  return callTool("add_feed", { url, category });
+};
+export const removeFeed = (url) => {
+  requireFeedsConfig();
+  return callTool("remove_feed", { url });
+};
 export const pollFeeds = (categories) => callTool("poll_feeds", { categories });

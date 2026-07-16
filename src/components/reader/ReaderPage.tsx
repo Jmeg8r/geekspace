@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowUpRight,
   Loader2,
@@ -86,6 +86,10 @@ export function ReaderPage() {
   const [sourceFilter, setSourceFilter] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [read, setRead] = useState<Set<string>>(() => new Set());
+  // Guards against stale loadItems responses: each load bumps this, and only the
+  // latest may apply results — so an older in-flight load can't overwrite a newer
+  // view when the user changes filters/search quickly.
+  const reqSeq = useRef(0);
 
   const categories = useMemo(() => {
     const s = new Set<string>();
@@ -104,12 +108,15 @@ export function ReaderPage() {
     );
   }, [feeds, sourceFilter]);
 
-  // A feed selection filters the loaded (all-feeds) set client-side, since the
-  // contract has no per-feed query — recent_items filters by category, not feed.
-  const displayed = useMemo(
-    () => (filter.kind === "feed" ? items.filter((i) => i.feed_id === filter.id) : items),
-    [items, filter]
-  );
+  // Narrow the loaded set to the active filter client-side. recent_items already
+  // filters by category server-side, but search returns global matches and the
+  // contract has no per-feed query — so re-apply the filter here to keep feed and
+  // category selections consistent across BOTH recent and search results.
+  const displayed = useMemo(() => {
+    if (filter.kind === "feed") return items.filter((i) => i.feed_id === filter.id);
+    if (filter.kind === "category") return items.filter((i) => i.categories.includes(filter.name));
+    return items;
+  }, [items, filter]);
 
   async function loadFeeds() {
     const r = await readerListFeeds();
@@ -118,6 +125,7 @@ export function ReaderPage() {
   }
 
   async function loadItems(f: Filter, q: string) {
+    const seq = ++reqSeq.current;
     setBusy("items");
     setError(null);
     const r = q.trim()
@@ -125,6 +133,7 @@ export function ReaderPage() {
       : f.kind === "category"
         ? await readerRecentItems(200, "30d", f.name)
         : await readerRecentItems(200, "30d");
+    if (seq !== reqSeq.current) return; // superseded by a newer load — drop this response
     setBusy(null);
     if (!r.ok) {
       setError(r.error);
@@ -169,8 +178,14 @@ export function ReaderPage() {
     await loadItems(filter, submittedQuery);
   }
 
-  function openItem(item: Item) {
-    if (item.url) void readerOpenExternal(item.url);
+  async function openItem(item: Item) {
+    const url = item.url ?? item.canonical_url;
+    if (!url) return; // nothing to open — don't mark an unreachable item read
+    const opened = await readerOpenExternal(url);
+    if (!opened.ok) {
+      setError(opened.error);
+      return;
+    }
     setRead((prev) => new Set(prev).add(item.id));
     void readerMarkProcessed([item.id]);
   }
@@ -527,8 +542,11 @@ function AddFeedModal({
           Paste a feed URL. It's written to your canonical feeds.yaml and picked up on the next
           Refresh.
         </p>
-        <label className="block pb-1 text-[12px] font-semibold text-ink-2">Feed URL</label>
+        <label htmlFor="reader-add-url" className="block pb-1 text-[12px] font-semibold text-ink-2">
+          Feed URL
+        </label>
         <input
+          id="reader-add-url"
           autoFocus
           value={url}
           onChange={(e) => setUrl(e.target.value)}
@@ -536,10 +554,11 @@ function AddFeedModal({
           placeholder="https://example.com/feed.xml"
           className="mb-3 w-full rounded-md border border-border bg-surface px-3 py-2 text-[13.5px] outline-none focus:border-accent"
         />
-        <label className="block pb-1 text-[12px] font-semibold text-ink-2">
+        <label htmlFor="reader-add-category" className="block pb-1 text-[12px] font-semibold text-ink-2">
           Category <span className="font-normal text-ink-3">(optional)</span>
         </label>
         <input
+          id="reader-add-category"
           value={category}
           onChange={(e) => setCategory(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && void submit()}
