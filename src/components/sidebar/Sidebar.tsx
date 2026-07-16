@@ -10,6 +10,7 @@ import {
   Home,
   Mic,
   Plus,
+  Rss,
   Search,
   Settings,
   Trash2,
@@ -116,6 +117,12 @@ export function Sidebar() {
           label="Knowledge"
           active={nav.kind === "knowledge"}
           onClick={() => navigate({ kind: "knowledge" })}
+        />
+        <NavButton
+          icon={Rss}
+          label="Reader"
+          active={nav.kind === "reader"}
+          onClick={() => navigate({ kind: "reader" })}
         />
         <AgentNavButton />
       </div>

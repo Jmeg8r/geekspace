@@ -14,6 +14,7 @@ import { CalendarView } from "./components/calendar/CalendarView";
 import { MeetingsView } from "./components/meetings/MeetingsView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
 import { KnowledgePage } from "./components/search/KnowledgePage";
+import { ReaderPage } from "./components/reader/ReaderPage";
 import { AgentPanel } from "./components/agent/AgentPanel";
 import { TemplatesModal } from "./components/templates/TemplatesModal";
 import { DocsPage } from "./components/docs/DocsPage";
@@ -123,6 +124,7 @@ export default function App() {
           {nav.kind === "calendar" && <CalendarView />}
           {nav.kind === "meetings" && <MeetingsView />}
           {nav.kind === "knowledge" && <KnowledgePage />}
+          {nav.kind === "reader" && <ReaderPage />}
           {nav.kind === "docs" && <DocsPage />}
           {nav.kind === "page" && (
             <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />

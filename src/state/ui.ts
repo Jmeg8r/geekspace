@@ -10,6 +10,7 @@ export type Nav =
   | { kind: "meetings" }
   | { kind: "knowledge"; initialQuery?: string }
   | { kind: "docs" }
+  | { kind: "reader" }
   | { kind: "page"; pageId: string };
 
 interface UIState {

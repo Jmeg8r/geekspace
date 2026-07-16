@@ -24,6 +24,16 @@ import {
   prewarmKnowledge,
   searchKnowledge,
 } from "./knowledgeSearch.mjs";
+import {
+  addFeed,
+  listFeeds,
+  markProcessed,
+  pollFeeds,
+  prewarmReader,
+  recentItems,
+  removeFeed,
+  searchItems,
+} from "./readerMcp.mjs";
 import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import {
@@ -207,6 +217,17 @@ handle("gs:openExternal", ({ url }) => {
   if (typeof url === "string" && /^https?:\/\//.test(url)) shell.openExternal(url);
 });
 
+// ----- Reader (aib-reader RSS) -----
+handle("gs:reader:listFeeds", () => listFeeds());
+handle("gs:reader:recentItems", ({ limit, since, category }) =>
+  recentItems({ limit, since, category })
+);
+handle("gs:reader:searchItems", ({ query, limit }) => searchItems(query, limit));
+handle("gs:reader:markProcessed", ({ itemIds, consumer }) => markProcessed(itemIds, consumer));
+handle("gs:reader:addFeed", ({ url, category }) => addFeed(url, category));
+handle("gs:reader:removeFeed", ({ url }) => removeFeed(url));
+handle("gs:reader:pollFeeds", ({ categories }) => pollFeeds(categories));
+
 app.whenReady().then(async () => {
   // Bring up (or attach to) the local Convex backend BEFORE the window loads —
   // the renderer hard-requires it on :3210. In dev this attaches to the
@@ -235,6 +256,8 @@ app.whenReady().then(async () => {
   createWindow();
   // Warm the knowledge connector (connect + tools/list only — no quota used).
   prewarmKnowledge().catch(() => {});
+  // Warm the reader connector (spawns aib-reader-mcp + tools/list).
+  prewarmReader().catch(() => {});
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
