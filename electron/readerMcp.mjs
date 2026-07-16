@@ -6,7 +6,7 @@
 // Deliberately electron-import-free so it can be exercised with plain `node`.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -122,7 +122,10 @@ export const markProcessed = (itemIds, consumer) =>
 // file. Refuse rather than corrupt the config.
 function requireFeedsConfig() {
   const config = process.env.AIB_READER_FEEDS_CONFIG;
-  if (!config || !existsSync(config)) {
+  // Require a regular FILE: existsSync also passes for directories, which would
+  // let the guard through with an unusable config. (existsSync guards statSync
+  // from throwing on a missing path via short-circuit.)
+  if (!config || !existsSync(config) || !statSync(config).isFile()) {
     throw new Error(
       "Set AIB_READER_FEEDS_CONFIG to the canonical aib-reader feeds.yaml before adding or removing feeds.",
     );
