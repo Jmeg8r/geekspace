@@ -34,6 +34,18 @@ contextBridge.exposeInMainWorld("geekspace", {
     answer: (question) => invoke("gs:knowledge:answer", { question }),
     openExternal: (url) => invoke("gs:openExternal", { url }),
   },
+  reader: {
+    listFeeds: () => invoke("gs:reader:listFeeds"),
+    recentItems: (limit, since, category) =>
+      invoke("gs:reader:recentItems", { limit, since, category }),
+    searchItems: (query, limit) => invoke("gs:reader:searchItems", { query, limit }),
+    markProcessed: (itemIds, consumer) =>
+      invoke("gs:reader:markProcessed", { itemIds, consumer }),
+    addFeed: (url, category) => invoke("gs:reader:addFeed", { url, category }),
+    removeFeed: (url) => invoke("gs:reader:removeFeed", { url }),
+    pollFeeds: (categories) => invoke("gs:reader:pollFeeds", { categories }),
+    openExternal: (url) => invoke("gs:openExternal", { url }),
+  },
   meetings: {
     tools: () => invoke("gs:meeting:tools"),
     ollama: (url) => invoke("gs:meeting:ollama", { url }),
