@@ -6,9 +6,32 @@
 // Deliberately electron-import-free so it can be exercised with plain `node`.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// WHAT: optional packaged-app config. A double-clicked .app can't read the dev
+// `.env.local` (it lives outside the bundle), so it reads reader setup from a JSON
+// file in Geekspace's app-support dir instead. Both keys optional; env vars win.
+//   { "readerBin": "/abs/aib-reader-mcp", "feedsConfig": "/abs/config/feeds.yaml" }
+function readerConfig() {
+  try {
+    const p = path.join(os.homedir(), "Library", "Application Support", "Geekspace", "reader.json");
+    return JSON.parse(readFileSync(p, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+// The canonical aib-reader feeds.yaml path. Dev: AIB_READER_FEEDS_CONFIG (from
+// .env.local). Packaged: `feedsConfig` from reader.json — so add/remove/poll write the
+// SAME file the aib-pipeline cron uses, not a CWD-relative path the .app can't control.
+function resolveFeedsConfig() {
+  const fromEnv = process.env.AIB_READER_FEEDS_CONFIG?.trim();
+  if (fromEnv) return fromEnv;
+  const fromFile = readerConfig().feedsConfig;
+  return typeof fromFile === "string" && fromFile.trim() ? fromFile.trim() : undefined;
+}
 
 // WHAT: resolve the `aib-reader-mcp` console script.
 // WHY env-first, not hardcoded: it's a Python venv entry point, not on PATH by
@@ -20,6 +43,7 @@ import path from "node:path";
 function resolveReaderBin() {
   const candidates = [
     process.env.GEEKSPACE_READER_BIN,
+    readerConfig().readerBin,
     ...(process.env.PATH ?? "")
       .split(":")
       .filter(Boolean)
@@ -52,15 +76,16 @@ async function connect() {
           "aib-reader not found — set GEEKSPACE_READER_BIN in .env.local to the aib-reader-mcp console script (e.g. <aib-reader>/.venv/bin/aib-reader-mcp)",
         );
       }
-      // WHY the env matters: aib-reader resolves config/feeds.yaml RELATIVE to the
-      // process CWD, and Electron's main-process CWD is not the aib-reader dir. So
-      // AIB_READER_FEEDS_CONFIG must be set (via .env.local, loaded into
-      // process.env by main.mjs) for add/remove to write the canonical file. The
-      // DB default (~/.aib-reader/store.db) is home-absolute and needs no override.
+      // Give the child the canonical feeds.yaml path so add/remove/poll write the
+      // right file: aib-reader resolves config/feeds.yaml RELATIVE to CWD, which the
+      // Electron process doesn't control. Dev gets it from .env.local (already in
+      // process.env); the packaged .app gets it from reader.json (resolveFeedsConfig).
+      // The DB default (~/.aib-reader/store.db) is home-absolute and needs no override.
+      const feedsConfig = resolveFeedsConfig();
       const transport = new StdioClientTransport({
         command: bin,
         args: [],
-        env: { ...process.env },
+        env: { ...process.env, ...(feedsConfig ? { AIB_READER_FEEDS_CONFIG: feedsConfig } : {}) },
         stderr: "ignore",
       });
       const c = new Client({ name: "geekspace-reader", version: "1.0.0" });
@@ -116,18 +141,15 @@ export const recentItems = ({ limit, since, category } = {}) =>
 export const searchItems = (query, limit) => callTool("search_items", { query, limit });
 export const markProcessed = (itemIds, consumer) =>
   callTool("mark_processed", { item_ids: itemIds, consumer });
-// Feed mutations rewrite the canonical feeds.yaml, which aib-reader resolves
-// RELATIVE to CWD — and Electron's CWD is not the aib-reader dir. Without an
-// explicit AIB_READER_FEEDS_CONFIG, add/remove would touch (or create) the wrong
-// file. Refuse rather than corrupt the config.
+// Feed mutations (add/remove) rewrite the canonical feeds.yaml. Refuse unless we can
+// resolve a real feeds.yaml FILE — otherwise aib-reader falls back to a CWD-relative
+// path the app can't control. (existsSync also passes for directories, and guards
+// statSync from throwing on a missing path via short-circuit.)
 function requireFeedsConfig() {
-  const config = process.env.AIB_READER_FEEDS_CONFIG;
-  // Require a regular FILE: existsSync also passes for directories, which would
-  // let the guard through with an unusable config. (existsSync guards statSync
-  // from throwing on a missing path via short-circuit.)
+  const config = resolveFeedsConfig();
   if (!config || !existsSync(config) || !statSync(config).isFile()) {
     throw new Error(
-      "Set AIB_READER_FEEDS_CONFIG to the canonical aib-reader feeds.yaml before adding or removing feeds.",
+      "No aib-reader feeds.yaml configured — set AIB_READER_FEEDS_CONFIG (dev) or `feedsConfig` in ~/Library/Application Support/Geekspace/reader.json (packaged) to the canonical feeds.yaml before adding or removing feeds.",
     );
   }
 }
