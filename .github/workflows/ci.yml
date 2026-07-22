@@ -21,6 +21,9 @@ jobs:
   verify:
     name: Typecheck & tests (${{ matrix.os }})
     strategy:
+      # Both OSes are required status checks with independently meaningful
+      # results, so a failure on one shouldn't cancel the other's run.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}

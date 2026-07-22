@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { packagedConvexDir } from "./lib/paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -21,13 +22,7 @@ const CONVEX_CLI = path.join(ROOT, "node_modules", "convex", "bin", "main.js");
 // Prefer the running app's data dir; fall back to the repo's dev config. All
 // share the same instance identity, so the admin key is valid either way.
 const CANDIDATES = [
-  path.join(os.homedir(), "Library", "Application Support", "Geekspace", "convex", "config.json"),
-  path.join(
-    process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"),
-    "Geekspace",
-    "convex",
-    "config.json"
-  ),
+  path.join(packagedConvexDir(), "config.json"),
   path.join(ROOT, ".convex", "local", "default", "config.json"),
 ];
 const cfgPath = CANDIDATES.find((p) => fs.existsSync(p));
