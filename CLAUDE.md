@@ -2,7 +2,7 @@
 
 ## Project Purpose
 
-A Notion-style macOS desktop app (Electron + React + Convex) with a block editor,
+A Notion-style desktop app (macOS + Windows; Electron + React + Convex) with a block editor,
 Notion-Projects-style databases (table/board/list/calendar/timeline views), and a
 calendar that auto-schedules itself around task dependencies. Built on the ASTGL brand.
 
@@ -14,6 +14,7 @@ npm run dev:web    # Convex + Vite (no Electron)
 npm test           # vitest run
 npm run build      # tsc -b && vite build
 npm run package    # build + electron-builder --mac
+npm run package:win  # build + electron-builder --win (NSIS installer)
 ```
 
 <!-- COMPOUND:START -->

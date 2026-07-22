@@ -1,7 +1,9 @@
 name: CI
 
 # Runs the verify suite (typecheck + scheduler tests) on every PR and on main.
-# Use the "Typecheck & tests" check as a required status check in main's ruleset.
+# Matrixed across ubuntu-latest and windows-latest; the job name is suffixed per-OS,
+# so use "Typecheck & tests (ubuntu-latest)" and "Typecheck & tests (windows-latest)"
+# as the required status checks in main's ruleset.
 on:
   pull_request:
   push:
@@ -17,8 +19,11 @@ concurrency:
 
 jobs:
   verify:
-    name: Typecheck & tests
-    runs-on: ubuntu-latest
+    name: Typecheck & tests (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     env:
       # verify only runs tsc + vitest — no need to download the Electron binary.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"

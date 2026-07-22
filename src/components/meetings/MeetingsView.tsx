@@ -16,7 +16,7 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
-import { cn, debounce, isElectron, tzOffsetMin } from "../../lib/utils";
+import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
 import { recorder } from "../../lib/recorder";
 import {
@@ -58,8 +58,19 @@ export function MeetingsView() {
 
   const missing: string[] = [];
   if (tools) {
-    if (!tools.ffmpeg) missing.push("ffmpeg (`brew install ffmpeg`)");
-    if (!tools.whisper) missing.push("whisper.cpp (`brew install whisper-cpp`)");
+    // WHY: mirrors the Phase 2 main-process error strings (electron/meetingProcessor.mjs).
+    if (!tools.ffmpeg) {
+      missing.push(
+        isMacLike() ? "ffmpeg (`brew install ffmpeg`)" : "ffmpeg (`winget install Gyan.FFmpeg`)"
+      );
+    }
+    if (!tools.whisper) {
+      missing.push(
+        isMacLike()
+          ? "whisper.cpp (`brew install whisper-cpp`)"
+          : "whisper.cpp (drop whisper-cli.exe into %USERPROFILE%\\.geekspace\\tools)"
+      );
+    }
   }
 
   return (
@@ -76,7 +87,7 @@ export function MeetingsView() {
           </button>
         </div>
         <p className="pb-6 text-[13px] text-ink-2">
-          Record → transcribe (whisper.cpp) → summarize (your local Ollama). Nothing leaves this Mac.
+          Record → transcribe (whisper.cpp) → summarize (your local Ollama). Nothing leaves this machine.
         </p>
 
         {!meetingsAvailable() && (

@@ -6,15 +6,21 @@ Everything you can do in Geekspace, and how. A condensed version of this guide l
 
 ## 1. Starting and stopping
 
-**Normal use — the standalone app:** double-click **Geekspace.app**. It starts its own
-local backend automatically and opens the window — no terminal, nothing else to run. Quit
-with ⌘Q and it shuts the backend down cleanly. Your data lives in
-`~/Library/Application Support/Geekspace/` and survives quits, restarts, and crashes.
-Nothing touches the cloud.
+**Normal use — the standalone app:** double-click **Geekspace.app** (macOS), or launch
+**Geekspace** from the Start menu (Windows — installed under
+`%LOCALAPPDATA%\Programs\Geekspace`). It starts its own local backend automatically and
+opens the window — no terminal, nothing else to run. Quit with ⌘Q on macOS (clean
+shutdown) or close the window on Windows (the backend is stopped forcefully but safely —
+WAL-mode SQLite recovers on next start; see Known limits in the README). Your data lives in
+`~/Library/Application Support/Geekspace/` on macOS or `%APPDATA%\Geekspace\` on Windows,
+and survives quits, restarts, and crashes. Nothing touches the cloud.
 
 **Building the app:** from the repo, `npm run package` produces `Geekspace.app` + a `.dmg`
-in `release/`. One time, to carry your existing workspace over, run
-`npm run migrate:local-data`. The first open of the unsigned build: right-click → Open.
+in `release/` (macOS), or `npm run package:win` produces
+`release\Geekspace Setup 0.1.0.exe` (Windows, NSIS installer). One time, to carry your
+existing workspace over, run `npm run migrate:local-data`. First open of the unsigned
+build: on macOS, right-click → Open; on Windows, SmartScreen shows "Windows protected your
+PC" — click **More info** → **Run anyway**.
 
 **Developing from source:**
 
@@ -98,7 +104,9 @@ The core idea, borrowed from Motion/Reclaim: **appointments are fixed, tasks are
 
 **Recording a meeting:**
 1. Hit **Record**. Name the meeting, pick a **meeting type** — the summary is tailored to it (General, Standup, 1:1, Client call, Interview, Brainstorm) — and optionally link a calendar event (one happening *right now* is pre-selected).
-2. The first time, macOS asks for **Microphone** permission — click OK.
+2. The first time, macOS asks for **Microphone** permission — click OK. (This prompt is
+   macOS-only; on Windows the app uses standard microphone permissions and requests access
+   automatically the first time you record.)
 3. A floating recorder appears bottom-right with a live level meter. It follows you anywhere in the app; pause/resume as needed.
 4. **Stop** kicks off the pipeline: audio is saved, **whisper.cpp** transcribes it (progress shown live), then your **local Ollama model** writes a summary with key points, decisions, and action items.
 
@@ -107,10 +115,15 @@ The core idea, borrowed from Motion/Reclaim: **appointments are fixed, tasks are
 **Good to know:**
 - It records your **microphone**. For the far side of video calls, use speakers instead of headphones, or route system audio with a loopback device (BlackHole) set as input.
 - Summarizer model and Ollama URL live in **Settings → AI meeting notes**, along with tool status (ffmpeg, whisper.cpp, speech model — with a one-click model download). Default model: your first `gemma*`, currently `gemma4:31b-mlx`.
+- **Windows tool setup:** ffmpeg via `winget install Gyan.FFmpeg` (the app finds it on PATH); whisper.cpp has no winget package — download a whisper.cpp Windows release zip and drop `whisper-cli.exe` into `%USERPROFILE%\.geekspace\tools`; Ollama has a native Windows installer at ollama.com.
 - If the AI leg fails (Ollama not running, say), the recording and transcript are safe — hit **Re-run AI** on the meeting.
 - Deleting a meeting removes its audio but keeps the notes page.
 
 ## 7. macOS Calendar & Mail
+
+macOS-only: Calendar sync and the Mail inbox use macOS Automation and aren't available on
+Windows — the Windows build hides both surfaces (the Settings section and the Mail widget)
+entirely.
 
 Open **Settings → macOS integrations** (visible only in the desktop app):
 
@@ -147,6 +160,9 @@ Because the workspace is exposed as a standard MCP server, you can also point Cl
 
 ## 12. Keyboard shortcuts
 
+On Windows, `Ctrl` takes the place of `⌘` for every shortcut below — the app shows the
+right glyph for your platform.
+
 | Key | Action |
 |---|---|
 | `⌘K` | Search everything / command palette |
@@ -160,7 +176,7 @@ Because the workspace is exposed as a standard MCP server, you can also point Cl
 
 | Symptom | Fix |
 |---|---|
-| "Port 3210 still running" on `npm run dev` | `lsof -ti:3210 \| xargs kill`, retry |
+| "Port 3210 still running" on `npm run dev` | macOS/Linux: `lsof -ti:3210 \| xargs kill`, retry. Windows: `netstat -ano \| findstr :3210` to find the PID, then `taskkill /PID <pid> /F`, retry. Backend logs on Windows live at `%APPDATA%\Geekspace\logs\convex.log`. |
 | App opens but no data (dev only) | In dev use `npm run dev`, not `electron .` alone. The packaged app starts its own backend automatically. |
 | Calendar/Mail sync error mentioning permissions | System Settings → Privacy & Security → Automation |
 | Mail/Calendar "timed out" | Three causes, same symptom: ① the macOS permission dialog is blocking — it can hide **behind windows**; find it, approve once. ② The app is **unresponsive** — quit and reopen Mail/Calendar. ③ A very large mailbox/calendar — just Refresh and wait. |

@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import { useUI } from "../../state/ui";
-import { cn } from "../../lib/utils";
+import { cn, MOD_LABEL } from "../../lib/utils";
 import {
   knowledgeAvailable,
   knowledgeSearch,
@@ -153,7 +153,7 @@ export function CommandPalette() {
         key: "a-new",
         icon: <Plus size={15} className="text-ink-2" />,
         label: "New page",
-        hint: "⌘N",
+        hint: `${MOD_LABEL}N`,
         run: async () => {
           close();
           const pageId = await createPage({ kind: "doc" });

@@ -12,13 +12,14 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 const SRC = path.join(ROOT, ".convex", "local", "default");
-const DEST = path.join(
-  os.homedir(),
-  "Library",
-  "Application Support",
-  "Geekspace",
-  "convex"
-);
+const DEST =
+  process.platform === "win32"
+    ? path.join(
+        process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"),
+        "Geekspace",
+        "convex"
+      )
+    : path.join(os.homedir(), "Library", "Application Support", "Geekspace", "convex");
 const force = process.argv.includes("--force");
 
 function die(msg) {

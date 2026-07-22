@@ -10,7 +10,7 @@
   "scripts": {
     "backend": "convex dev",
     "frontend": "vite",
-    "electron": "wait-on tcp:127.0.0.1:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "electron": "wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "dev": "concurrently -k -n convex,vite,app -c blue,magenta,yellow \"npm:backend\" \"npm:frontend\" \"npm:electron\"",
     "dev:web": "concurrently -k -n convex,vite -c blue,magenta \"npm:backend\" \"npm:frontend\"",
     "seed": "convex run seed:seedWorkspace",
@@ -18,6 +18,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "package": "npm run build && npm run prebake && electron-builder --mac",
+    "package:win": "npm run build && npm run prebake && electron-builder --win",
     "prebake": "node scripts/prebake-seed.mjs",
     "migrate:local-data": "node scripts/migrate-local-data.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
@@ -49,6 +50,7 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
     "concurrently": "^9.0.0",
+    "cross-env": "^10.1.0",
     "electron": "^42.0.0",
     "electron-builder": "^26.0.0",
     "tailwindcss": "^4.3.0",
@@ -70,7 +72,6 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "build/convex-local-backend", "to": "convex-local-backend" },
       { "from": "build/convex-seed", "to": "convex-seed" },
       { "from": "build/geekspace-mcp.mjs", "to": "geekspace-mcp.mjs" }
     ],
@@ -88,7 +89,17 @@
       "extendInfo": {
         "NSAppleEventsUsageDescription": "Geekspace reads your macOS Calendar and Mail to show events and messages, and to auto-schedule work around your appointments.",
         "NSMicrophoneUsageDescription": "Geekspace records meeting audio so it can transcribe and summarize your meetings — entirely on this Mac."
-      }
+      },
+      "extraResources": [
+        { "from": "build/convex-local-backend", "to": "convex-local-backend" }
+      ]
+    },
+    "win": {
+      "target": ["nsis"],
+      "icon": "build/icon-1024.png",
+      "extraResources": [
+        { "from": "build/convex-local-backend.exe", "to": "convex-local-backend.exe" }
+      ]
     }
   }
 }
