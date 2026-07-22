@@ -69,7 +69,7 @@ export function DocViewer({
           </select>
           {quickLookBridge() && doc.url && (
             <button
-              title="Open with the default macOS app"
+              title="Open with the default app"
               onClick={() => void quickLookBridge()!.quickLook(doc.url!, doc.name)}
               className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-ink-2 hover:bg-hov hover:text-ink"
             >

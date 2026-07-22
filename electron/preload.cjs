@@ -4,18 +4,9 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 const invoke = (channel, args) => ipcRenderer.invoke(channel, args);
 
-contextBridge.exposeInMainWorld("geekspace", {
+const api = {
   isElectron: true,
   platform: process.platform,
-  integrations: {
-    isRunning: (name) => invoke("gs:isRunning", { name }),
-    openApp: (name) => invoke("gs:openApp", { name }),
-    listCalendars: () => invoke("gs:listCalendars"),
-    fetchCalendarEvents: (start, end, names) =>
-      invoke("gs:fetchCalendarEvents", { start, end, names }),
-    fetchInbox: (limit) => invoke("gs:fetchInbox", { limit }),
-    openMessage: (messageId) => invoke("gs:openMessage", { messageId }),
-  },
   docs: {
     quickLook: (url, name) => invoke("gs:docs:quickLook", { url, name }),
   },
@@ -58,4 +49,27 @@ contextBridge.exposeInMainWorld("geekspace", {
       return () => ipcRenderer.removeListener("gs:meeting:progress", listener);
     },
   },
-});
+  chrome: {
+    setOverlay: (color, symbolColor) => invoke("gs:chrome:setOverlay", { color, symbolColor }),
+  },
+};
+
+// WHY: the renderer's integrationsAvailable() (src/lib/integrations.ts) keys
+// off this property's mere presence, so omitting it on non-mac hides every
+// Calendar/Mail surface (Settings "macOS integrations" section, the Home Mail
+// widget, the calendar sync loop, "Open in Calendar" buttons) with zero
+// renderer changes. A future Windows Calendar/Mail provider ships by exposing
+// this same six-method shape here.
+if (process.platform === "darwin") {
+  api.integrations = {
+    isRunning: (name) => invoke("gs:isRunning", { name }),
+    openApp: (name) => invoke("gs:openApp", { name }),
+    listCalendars: () => invoke("gs:listCalendars"),
+    fetchCalendarEvents: (start, end, names) =>
+      invoke("gs:fetchCalendarEvents", { start, end, names }),
+    fetchInbox: (limit) => invoke("gs:fetchInbox", { limit }),
+    openMessage: (messageId) => invoke("gs:openMessage", { messageId }),
+  };
+}
+
+contextBridge.exposeInMainWorld("geekspace", api);

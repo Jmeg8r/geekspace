@@ -9,21 +9,42 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 
+// WHY: Windows executables carry the .exe suffix; used when probing for
+// ffmpeg/whisper-cli so we look for the name Windows actually resolves.
+const EXE = process.platform === "win32" ? ".exe" : "";
+
 const MODEL_DIR = path.join(os.homedir(), ".geekspace", "whisper-models");
 const MODEL_NAME = "ggml-base.en.bin";
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}`;
-const TOOL_PATHS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
+// WHY win32 gets a 4th dir: whisper.cpp ships no winget package, so
+// ~/.geekspace/tools is the documented drop-dir for whisper-cli.exe. The three
+// mac dirs stay exactly as-is and in order on every platform.
+const TOOL_PATHS =
+  process.platform === "win32"
+    ? ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", path.join(os.homedir(), ".geekspace", "tools")]
+    : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 const MAX_TRANSCRIPT_CHARS_FOR_LLM = 24_000;
 
 async function findTool(names) {
-  for (const dir of TOOL_PATHS) {
+  // WHY also scan PATH: winget/choco installs land on PATH, and a packaged
+  // Windows app inherits the registry PATH — unlike a mac app launched from
+  // Finder with a stripped-down PATH, which is why TOOL_PATHS above has to be
+  // hardcoded in the first place.
+  const pathDirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const dirs = [...TOOL_PATHS, ...pathDirs];
+  for (const dir of dirs) {
     for (const name of names) {
-      const p = path.join(dir, name);
-      try {
-        await fs.access(p);
-        return p;
-      } catch {
-        /* keep looking */
+      // Try the platform-appropriate suffix first. EXE is "" on mac, so
+      // `candidates` collapses to [name] there and behavior is unchanged.
+      const candidates = EXE ? [name + EXE, name] : [name];
+      for (const candidate of candidates) {
+        const p = path.join(dir, candidate);
+        try {
+          await fs.access(p);
+          return p;
+        } catch {
+          /* keep looking */
+        }
       }
     }
   }
@@ -232,8 +253,20 @@ async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
  */
 export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaModel }, onProgress) {
   const status = await toolStatus();
-  if (!status.ffmpeg) throw new Error("ffmpeg not found — `brew install ffmpeg`");
-  if (!status.whisper) throw new Error("whisper.cpp not found — `brew install whisper-cpp`");
+  if (!status.ffmpeg) {
+    throw new Error(
+      process.platform === "win32"
+        ? "ffmpeg not found — `winget install Gyan.FFmpeg`"
+        : "ffmpeg not found — `brew install ffmpeg`"
+    );
+  }
+  if (!status.whisper) {
+    throw new Error(
+      process.platform === "win32"
+        ? "whisper.cpp not found — download the whisper.cpp Windows release zip and drop whisper-cli.exe into %USERPROFILE%\\.geekspace\\tools"
+        : "whisper.cpp not found — `brew install whisper-cpp`"
+    );
+  }
   if (!status.model) {
     onProgress?.({ phase: "model", pct: 0 });
     await ensureModel((pct) => onProgress?.({ phase: "model", pct }));

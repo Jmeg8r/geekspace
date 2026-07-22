@@ -5,20 +5,14 @@
 // them once. Safe by default: it refuses to overwrite existing app data unless
 // you pass --force.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { packagedConvexDir } from "./lib/paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 const SRC = path.join(ROOT, ".convex", "local", "default");
-const DEST = path.join(
-  os.homedir(),
-  "Library",
-  "Application Support",
-  "Geekspace",
-  "convex"
-);
+const DEST = packagedConvexDir();
 const force = process.argv.includes("--force");
 
 function die(msg) {

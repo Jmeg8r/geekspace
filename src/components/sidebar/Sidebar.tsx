@@ -21,7 +21,7 @@ import { SidebarRecordingDot } from "../meetings/RecorderWidget";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
-import { cn, isElectron } from "../../lib/utils";
+import { cn, isElectron, isMacLike, MOD_LABEL } from "../../lib/utils";
 import { Popover } from "../common/Popover";
 import { MenuItem, MenuList } from "../common/Menu";
 import { Kbd } from "../common/bits";
@@ -71,7 +71,12 @@ export function Sidebar() {
     <aside className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-sidebar">
       {/* App header — drag region for the Electron window */}
       <div
-        className={cn("app-drag flex items-center gap-2 px-3 pb-2", isElectron() ? "pt-11" : "pt-3")}
+        className={cn(
+          "app-drag flex items-center gap-2 px-3 pb-2",
+          // WHY: traffic-light reservation is mac-only; Windows gets its own
+          // drag strip above the whole shell (see App.tsx) instead.
+          isElectron() && isMacLike() ? "pt-11" : "pt-3"
+        )}
       >
         <div className="flex h-6 w-6 items-center justify-center rounded-md bg-accent text-[13px] font-extrabold text-white">
           G
@@ -84,7 +89,7 @@ export function Sidebar() {
         <NavButton
           icon={Search}
           label="Search"
-          right={<Kbd>⌘K</Kbd>}
+          right={<Kbd>{`${MOD_LABEL}K`}</Kbd>}
           onClick={() => setCommandOpen(true)}
         />
         <NavButton

@@ -5,6 +5,21 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 
 const ThemeContext = createContext(false);
 
+interface ChromeBridge {
+  setOverlay(color: string, symbolColor: string): void;
+}
+const chromeBridge = () =>
+  (window as { geekspace?: { chrome?: ChromeBridge } }).geekspace?.chrome;
+
+// WHY: mirrors src/styles/index.css so the Windows title-bar overlay's native
+// caption buttons read as part of the app chrome instead of a stock white bar.
+// dark mirrors .dark's --bg/--ink (also the BrowserWindow ctor defaults in
+// electron/main.mjs); light mirrors :root's --sidebar/--ink.
+const OVERLAY_COLORS: Record<"dark" | "light", { color: string; symbolColor: string }> = {
+  dark: { color: "#1A1A2E", symbolColor: "#E8E8F0" },
+  light: { color: "#F2F3F5", symbolColor: "#363737" },
+};
+
 export function ThemeProvider({ theme, children }: { theme: string; children: ReactNode }) {
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -21,6 +36,11 @@ export function ThemeProvider({ theme, children }: { theme: string; children: Re
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
+    // WHY: also fires on initial mount (the window starts with the
+    // BrowserWindow constructor's dark defaults, which need re-theming the
+    // instant the resolved theme turns out to be light).
+    const { color, symbolColor } = OVERLAY_COLORS[isDark ? "dark" : "light"];
+    chromeBridge()?.setOverlay(color, symbolColor);
   }, [isDark]);
 
   return <ThemeContext.Provider value={isDark}>{children}</ThemeContext.Provider>;

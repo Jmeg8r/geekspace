@@ -9,15 +9,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { packagedConvexDir } from "./lib/paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 const URL = "http://127.0.0.1:3210";
+// WHY: `.bin/convex` is a shim (a bash script on POSIX; a `.cmd`/`.ps1` pair on
+// Windows) — unlaunchable directly and unsafe to invoke via a shell (see the
+// spawnSync call below). The package's real JS entry works on both platforms.
+const CONVEX_CLI = path.join(ROOT, "node_modules", "convex", "bin", "main.js");
 
-// Prefer the running app's data dir; fall back to the repo's dev config. Both
+// Prefer the running app's data dir; fall back to the repo's dev config. All
 // share the same instance identity, so the admin key is valid either way.
 const CANDIDATES = [
-  path.join(os.homedir(), "Library", "Application Support", "Geekspace", "convex", "config.json"),
+  path.join(packagedConvexDir(), "config.json"),
   path.join(ROOT, ".convex", "local", "default", "config.json"),
 ];
 const cfgPath = CANDIDATES.find((p) => fs.existsSync(p));
@@ -35,11 +40,26 @@ fs.writeFileSync(
 
 try {
   console.log(`• deploying convex/ functions to ${URL} (open Geekspace must be running)…`);
+  // WHY process.execPath + CONVEX_CLI, not the `.bin/convex` shim: see the
+  // CONVEX_CLI comment above. process.execPath is node here (this script
+  // itself runs under node), so running the real entry point works
+  // identically on both platforms.
   const res = spawnSync(
-    path.join(ROOT, "node_modules/.bin/convex"),
-    ["deploy", "--env-file", envFile, "--typecheck", "disable"],
+    process.execPath,
+    [CONVEX_CLI, "deploy", "--env-file", envFile, "--typecheck", "disable"],
     { cwd: ROOT, stdio: ["ignore", "inherit", "inherit"], timeout: 180000, killSignal: "SIGKILL" }
   );
+  if (res.status !== 0) {
+    // F6: on Windows, the convex CLI can finish `deploy`'s actual work
+    // successfully and THEN crash during process teardown, exiting nonzero
+    // regardless — a false-negative exit code. Unlike prebake, this is an
+    // interactive helper with no seed/probe to verify against, so we still
+    // exit nonzero — but check the running app before assuming it failed.
+    console.warn(
+      `⚠ deploy:local: convex deploy exited with status ${res.status}. On Windows this can happen ` +
+        "AFTER a successful deploy (a libuv-teardown crash) — check the running Geekspace app to confirm before retrying."
+    );
+  }
   process.exitCode = res.status ?? 1;
 } finally {
   fs.rmSync(envFile, { force: true });

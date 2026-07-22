@@ -10,13 +10,27 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+// WHY: Windows executables carry the .exe suffix; used when probing PATH
+// entries for the aib-reader-mcp console script.
+const EXE = process.platform === "win32" ? ".exe" : "";
+
+// WHAT: cross-platform "app support" root — mirrors Electron's
+// app.getPath("appData") without importing electron (see the file WHY above).
+// Callers append "Geekspace" themselves, same as convexBackend.mjs's DATA_DIR.
+function appSupportDir() {
+  if (process.platform === "win32") {
+    return process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming");
+  }
+  return path.join(os.homedir(), "Library", "Application Support");
+}
+
 // WHAT: optional packaged-app config. A double-clicked .app can't read the dev
 // `.env.local` (it lives outside the bundle), so it reads reader setup from a JSON
 // file in Geekspace's app-support dir instead. Both keys optional; env vars win.
 //   { "readerBin": "/abs/aib-reader-mcp", "feedsConfig": "/abs/config/feeds.yaml" }
 function readerConfig() {
   try {
-    const p = path.join(os.homedir(), "Library", "Application Support", "Geekspace", "reader.json");
+    const p = path.join(appSupportDir(), "Geekspace", "reader.json");
     return JSON.parse(readFileSync(p, "utf8"));
   } catch {
     return {};
@@ -41,13 +55,20 @@ function resolveFeedsConfig() {
 // Null → reader stays offline instead of crashing (same graceful-degradation
 // contract as the knowledge connector).
 function resolveReaderBin() {
+  // Try the platform-appropriate suffix first per PATH dir. EXE is "" on mac,
+  // so this collapses to the single original candidate there.
+  const pathCandidates = (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean)
+    .flatMap((dir) =>
+      EXE
+        ? [path.join(dir, "aib-reader-mcp" + EXE), path.join(dir, "aib-reader-mcp")]
+        : [path.join(dir, "aib-reader-mcp")]
+    );
   const candidates = [
     process.env.GEEKSPACE_READER_BIN,
     readerConfig().readerBin,
-    ...(process.env.PATH ?? "")
-      .split(":")
-      .filter(Boolean)
-      .map((dir) => path.join(dir, "aib-reader-mcp")),
+    ...pathCandidates,
     path.join(os.homedir(), ".local", "bin", "aib-reader-mcp"),
     "/opt/homebrew/bin/aib-reader-mcp",
     "/usr/local/bin/aib-reader-mcp",
@@ -149,7 +170,7 @@ function requireFeedsConfig() {
   const config = resolveFeedsConfig();
   if (!config || !existsSync(config) || !statSync(config).isFile()) {
     throw new Error(
-      "No aib-reader feeds.yaml configured — set AIB_READER_FEEDS_CONFIG (dev) or `feedsConfig` in ~/Library/Application Support/Geekspace/reader.json (packaged) to the canonical feeds.yaml before adding or removing feeds.",
+      "No aib-reader feeds.yaml configured — set AIB_READER_FEEDS_CONFIG (dev) or `feedsConfig` in ~/Library/Application Support/Geekspace/reader.json on mac (packaged) or %APPDATA%\\Geekspace\\reader.json on Windows to the canonical feeds.yaml before adding or removing feeds.",
     );
   }
 }

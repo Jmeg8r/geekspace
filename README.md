@@ -1,6 +1,6 @@
 # Geekspace
 
-**Your workspace, As The Geek Learns it** — a Notion-style macOS desktop app with pages, databases, and a calendar that schedules itself.
+**Your workspace, As The Geek Learns it** — a Notion-style desktop app (macOS + Windows) with pages, databases, and a calendar that schedules itself.
 
 Built with the ASTGL brand: Inter, burnt orange (`#E9724C`) on warm gray in light mode, vivid orange (`#FF6B35`) on deep navy (`#1A1A2E` / `#16213E`) in dark mode.
 
@@ -69,6 +69,7 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - **Calendar sync**: pick your Calendar.app calendars and they mirror into Geekspace (read-only, dotted edge) — and become fixed busy time the auto-scheduler plans around. Syncs at launch, on focus, and every 5 minutes
 - **Mail inbox on Home**: recent Mail.app messages with unread dots, open-in-Mail deep links, and one-click **email → task** (the task links back to the message)
 - One-time macOS Automation permission per app on first use
+- macOS-only: the Windows build hides both surfaces (Settings section, Mail widget) entirely; a Windows calendar/mail provider isn't built yet
 
 ### 🏠 Home + ⌘K
 - Home: today's agenda, My Tasks (Overdue / Today / Upcoming) with one-click done + ⛓ blocked chips, Mail inbox, schedule warnings, recent pages
@@ -82,7 +83,7 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 
 ```mermaid
 flowchart TD
-    subgraph mac [macOS app]
+    subgraph mac [desktop app]
         E[Electron shell<br/>hiddenInset titlebar] --> R[React 19 + Vite renderer]
         R --> BN[BlockNote editor]
         R --> Views[Table / Board / List / Calendar / Timeline]
@@ -98,7 +99,7 @@ flowchart TD
 
 | Decision | Why |
 |---|---|
-| Convex **anonymous local** deployment | No account, no auth, data stays on this Mac, still fully reactive (dev: repo `.convex/`; packaged: `~/Library/Application Support/Geekspace/`) |
+| Convex **anonymous local** deployment | No account, no auth, data stays on this machine, still fully reactive (dev: repo `.convex/`; packaged: `~/Library/Application Support/Geekspace/` on macOS, `%APPDATA%\Geekspace\` on Windows) |
 | Electron owns the backend lifecycle (packaged) | The app spawns the bundled `convex-local-backend` on launch and stops it on quit — self-contained, no terminal |
 | Pure scheduler module shared by server + tests | Deterministic, 16 unit tests, no UI coupling |
 | Reflow inside every relevant mutation | The cascade can never be forgotten; UI updates reactively for free |
@@ -131,11 +132,26 @@ npm run migrate:local-data  # one-time: copy your dev workspace into the app
 `npm run package` bundles the Convex backend binary **and** a pre-baked seed
 (functions already deployed + starter template) into the app. The built
 **`Geekspace.app` starts its own backend on launch — no terminal, no repo, no
-`npx convex dev`.** Data lives in `~/Library/Application Support/Geekspace/`.
+`npx convex dev`.** Data lives in `~/Library/Application Support/Geekspace/`
+(Windows: `%APPDATA%\Geekspace\` — see below).
 
 First open of the unsigned build: right-click → Open. After you change backend
 functions and repackage, run `npm run deploy:local` (with the app open) to push
 them onto your existing data — an app update never overwrites your workspace.
+
+#### Windows
+
+```bash
+npm run package:win          # → release\Geekspace Setup 0.1.0.exe (NSIS installer)
+```
+
+The installer is per-user (no admin required) and installs to
+`%LOCALAPPDATA%\Programs\Geekspace`. Data lives in `%APPDATA%\Geekspace\`.
+
+First run of the unsigned build: SmartScreen shows "Windows protected your PC" —
+click **More info** → **Run anyway**. `npm run deploy:local` and
+`npm run migrate:local-data` work the same way on Windows (data dir
+`%APPDATA%\Geekspace\convex`).
 
 Other scripts:
 
@@ -145,12 +161,14 @@ Other scripts:
 | `npm run test` | scheduler engine test suite (vitest) |
 | `npm run verify` | typecheck + tests |
 | `npm run package` | build self-contained `Geekspace.app` + `.dmg` into `release/` |
+| `npm run package:win` | build self-contained `Geekspace Setup 0.1.0.exe` (NSIS) into `release/` |
 | `npm run migrate:local-data` | copy your dev `.convex` workspace into the packaged app |
 | `npm run deploy:local` | push function changes onto the running standalone app |
 
 > In **dev**, `npm run dev` runs the backend (data in the repo's `.convex/`). The
 > packaged app is self-contained: Electron starts the bundled backend itself and
-> keeps data in `~/Library/Application Support/Geekspace/`.
+> keeps data in `~/Library/Application Support/Geekspace/` on macOS or
+> `%APPDATA%\Geekspace\` on Windows.
 
 ## Project layout
 
@@ -171,8 +189,10 @@ tests/              # scheduler test suite
 ## Known limits (v1.1)
 
 - Single user, no auth, no cloud sync — by design
-- Packaged app is signed with a Developer ID but not notarized (personal use; right-click → Open the first time)
+- Packaged app is signed with a Developer ID but not notarized (personal use; right-click → Open the first time); the Windows build is unsigned too — SmartScreen shows "Windows protected your PC" the first run (click **More info** → **Run anyway**)
 - macOS Calendar sync is one-way (Calendar → Geekspace) and needs Calendar.app running; Mail widget needs Mail.app running
+- macOS Calendar/Mail integrations are mac-only — the Windows build hides both surfaces entirely (a Windows provider isn't built yet)
+- On Windows the app stops its backend with `TerminateProcess` (ungraceful but safe — WAL-mode SQLite recovers on next start); quit the app before copying the data directory
 - Far-future blocks across a DST switch can sit an hour off until any reflow corrects them
 - Deleting a row leaves dangling relation ids on the other side; cells skip them gracefully
 

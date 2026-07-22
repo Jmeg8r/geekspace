@@ -8,6 +8,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+// WHY: Windows executables carry the .exe suffix; used when probing PATH
+// entries for a system node binary.
+const EXE = process.platform === "win32" ? ".exe" : "";
+
 // WHAT: filesystem path to the optional ASTGL knowledge MCP server entry point.
 // WHY env, not hardcoded: the knowledge server is a separate, optional project.
 // Set GEEKSPACE_KNOWLEDGE_SERVER in .env.local to its built dist/index.js; leave
@@ -28,9 +32,9 @@ function resolveNodeBinary() {
   const candidates = [
     process.env.GEEKSPACE_NODE, // explicit override, e.g. for the packaged app
     ...(process.env.PATH ?? "")
-      .split(":")
+      .split(path.delimiter)
       .filter(Boolean)
-      .map((dir) => path.join(dir, "node")),
+      .map((dir) => path.join(dir, "node" + EXE)),
     "/opt/homebrew/bin/node",
     "/usr/local/bin/node",
   ].filter(Boolean);
@@ -41,9 +45,16 @@ function resolveNodeBinary() {
       /* keep looking */
     }
   }
-  // Last resort: under plain node (tests) execPath IS node and this is fine;
-  // under Electron the ABI mismatch will surface in the connector's error.
-  return process.execPath;
+  // WHY the plain-node/Electron split: under plain node (tests) execPath IS
+  // node, so returning it is fine — this is the old "last resort" behavior.
+  // Under Electron, execPath is the Geekspace app binary itself; returning it
+  // here (without ELECTRON_RUN_AS_NODE) would launch a second GUI instance
+  // instead of running as a node script. The old mac fallback chain
+  // (Homebrew paths) never actually left this case for connect() to hit;
+  // Windows, with no Homebrew and no guarantee of a PATH node, does — so the
+  // two cases now have to be told apart instead of collapsed into one return.
+  if (!process.versions.electron) return process.execPath;
+  return null;
 }
 
 let client = null;
@@ -60,8 +71,14 @@ async function connect() {
           "Knowledge server not configured — set GEEKSPACE_KNOWLEDGE_SERVER in .env.local to the built mcp-astgl-knowledge dist/index.js",
         );
       }
+      const nodeBin = resolveNodeBinary();
+      if (!nodeBin) {
+        throw new Error(
+          "No system Node.js found for the knowledge server — install Node or set GEEKSPACE_NODE in .env.local",
+        );
+      }
       const transport = new StdioClientTransport({
-        command: resolveNodeBinary(),
+        command: nodeBin,
         args: [server],
         env: { ...process.env },
         stderr: "ignore",
