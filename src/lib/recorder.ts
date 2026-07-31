@@ -88,8 +88,11 @@ export async function listMicrophones(): Promise<MicDevice[]> {
  * Open the mic, preferring a saved device. That device can vanish between
  * meetings (unplugged, Bluetooth dropped), so fall back to the system default
  * rather than failing the recording outright.
+ *
+ * Exported because this is the device-resolution policy, not a helper: the
+ * fallback must not swallow a permission denial, which is worth a test.
  */
-async function openStream(deviceId?: string): Promise<MediaStream> {
+export async function openStream(deviceId?: string): Promise<MediaStream> {
   if (deviceId) {
     try {
       return await navigator.mediaDevices.getUserMedia({

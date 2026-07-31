@@ -37,7 +37,13 @@ export function RecorderWidget() {
       style={{ boxShadow: "var(--shadow-lg)" }}
     >
       {silent && (
-        <div className="flex max-w-[22rem] items-start gap-2 border-b border-border px-3.5 py-2 text-[12px] leading-snug text-[var(--pal-red)]">
+        // WHY role="alert": this banner is the only in-flight signal that a
+        // meeting is recording nothing, so it has to interrupt rather than wait
+        // to be discovered — the whole point is catching it before the meeting ends.
+        <div
+          role="alert"
+          className="flex max-w-[22rem] items-start gap-2 border-b border-border px-3.5 py-2 text-[12px] leading-snug text-[var(--pal-red)]"
+        >
           <AlertTriangle size={14} className="mt-px shrink-0" />
           <span>
             <strong className="font-semibold">No audio detected</strong> from{" "}
