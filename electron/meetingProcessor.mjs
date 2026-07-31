@@ -341,9 +341,15 @@ export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaMode
     // and catches every silent-input cause rather than one hallucination shape.
     const level = await measureVolume(ffmpeg, wav);
     if (isSilentAudio(level)) {
+      // WHY the platform split: mirrors the renderer's copy (isMacLike in
+      // src/lib/utils.ts) so the sound settings path names what the user sees.
+      const soundSettings =
+        process.platform === "darwin"
+          ? "System Settings → Sound → Input"
+          : "Settings → System → Sound → Input";
       throw new Error(
         `No audio captured — the recording is silent (peak ${fmtDb(level.peakDb)}, ` +
-          `average ${fmtDb(level.meanDb)}). Check System Settings → Sound → Input ` +
+          `average ${fmtDb(level.meanDb)}). Check ${soundSettings} ` +
           `and select your microphone, then record again.`
       );
     }

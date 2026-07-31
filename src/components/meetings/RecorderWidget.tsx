@@ -1,6 +1,6 @@
 import { useState, useSyncExternalStore } from "react";
 import { AlertTriangle, Mic, Pause, Play, Square, X } from "lucide-react";
-import { cn } from "../../lib/utils";
+import { cn, isMacLike } from "../../lib/utils";
 import { recorder, SILENCE_WARN_SEC } from "../../lib/recorder";
 import { cancelRecording, finishRecording } from "../../lib/meetingPipeline";
 import { useUI } from "../../state/ui";
@@ -41,8 +41,9 @@ export function RecorderWidget() {
           <AlertTriangle size={14} className="mt-px shrink-0" />
           <span>
             <strong className="font-semibold">No audio detected</strong> from{" "}
-            {state.deviceLabel || "the selected input"} for {state.silentSec}s. Check
-            System Settings → Sound → Input — this recording will be silent.
+            {state.deviceLabel || "the selected input"} for {state.silentSec}s. Check{" "}
+            {isMacLike() ? "System Settings → Sound → Input" : "Settings → System → Sound → Input"}{" "}
+            — this recording will be silent.
           </span>
         </div>
       )}
