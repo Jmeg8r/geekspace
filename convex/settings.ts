@@ -11,6 +11,26 @@ export const get = query({
   },
 });
 
+// WHY its own mutation: picking a microphone has nothing to do with the
+// schedule, and `update` unconditionally reflows every task on the calendar.
+export const setMicDevice = mutation({
+  args: {
+    micDeviceId: v.string(),
+    micDeviceLabel: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", "global"))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, args);
+    } else {
+      await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, ...args });
+    }
+  },
+});
+
 export const update = mutation({
   args: {
     theme: v.optional(v.string()),
