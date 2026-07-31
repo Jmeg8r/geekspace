@@ -85,6 +85,22 @@ export async function listMicrophones(): Promise<MicDevice[]> {
 }
 
 /**
+ * Resolve a picker selection into the device to record with and persist.
+ *
+ * Empty strings are the canonical "use the system default" value: they are what
+ * gets saved when the user explicitly picks System default, so the next meeting
+ * reads "nothing saved" instead of silently restoring a previous device the user
+ * deselected. Callers pass `deviceId || undefined` to openStream.
+ */
+export function resolveMicChoice(
+  micId: string,
+  mics: MicDevice[]
+): { deviceId: string; label: string } {
+  const chosen = mics.find((m) => m.deviceId === micId);
+  return { deviceId: chosen?.deviceId ?? "", label: chosen?.label ?? "" };
+}
+
+/**
  * Open the mic, preferring a saved device. That device can vanish between
  * meetings (unplugged, Bluetooth dropped), so fall back to the system default
  * rather than failing the recording outright.

@@ -18,7 +18,7 @@ import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
 import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
-import { listMicrophones, recorder, type MicDevice } from "../../lib/recorder";
+import { listMicrophones, recorder, resolveMicChoice, type MicDevice } from "../../lib/recorder";
 import {
   meetingAskMic,
   meetingsAvailable,
@@ -263,10 +263,11 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
         setErr("Microphone access denied — System Settings → Privacy & Security → Microphone.");
         return;
       }
-      const chosen = mics.find((m) => m.deviceId === micId);
-      if (chosen) {
-        await setMicDevice({ micDeviceId: chosen.deviceId, micDeviceLabel: chosen.label });
-      }
+      // WHY persist unconditionally: picking "System default" must overwrite a
+      // previously saved device, or the next meeting's preselection restores it
+      // and records from an input the user deliberately deselected.
+      const chosen = resolveMicChoice(micId, mics);
+      await setMicDevice({ micDeviceId: chosen.deviceId, micDeviceLabel: chosen.label });
       const meetingId = await start({
         title,
         meetingType,
@@ -276,7 +277,7 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
         meetingId,
         title,
         meetingType,
-        deviceId: chosen?.deviceId,
+        deviceId: chosen.deviceId || undefined,
       });
       onClose();
     } catch (e) {

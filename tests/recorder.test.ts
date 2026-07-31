@@ -3,7 +3,7 @@
 // for — a silent substitution to the wrong input is exactly how a meeting gets
 // recorded as 43 minutes of nothing.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listMicrophones, openStream } from "../src/lib/recorder";
+import { listMicrophones, openStream, resolveMicChoice } from "../src/lib/recorder";
 
 type Track = { kind: string; label: string; stop: () => void };
 
@@ -24,6 +24,36 @@ function namedError(name: string) {
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("resolveMicChoice", () => {
+  const MICS = [
+    { deviceId: "yeti", label: "Yeti Stereo Microphone" },
+    { deviceId: "pebble", label: "Creative Pebble X" },
+  ];
+
+  it("resolves a picked device", () => {
+    expect(resolveMicChoice("yeti", MICS)).toEqual({
+      deviceId: "yeti",
+      label: "Yeti Stereo Microphone",
+    });
+  });
+
+  it("returns empty strings for System default so the choice is persistable", () => {
+    // WHY this matters: returning undefined here made the caller skip the save,
+    // leaving a previously-saved device in settings. The next meeting's
+    // preselection then restored it and recorded from the input the user had
+    // just deselected -- the same silent substitution this feature prevents.
+    expect(resolveMicChoice("", MICS)).toEqual({ deviceId: "", label: "" });
+  });
+
+  it("falls back to System default when the saved id is no longer present", () => {
+    expect(resolveMicChoice("unplugged-device", MICS)).toEqual({ deviceId: "", label: "" });
+  });
+
+  it("returns System default when no devices are enumerated", () => {
+    expect(resolveMicChoice("yeti", [])).toEqual({ deviceId: "", label: "" });
+  });
+});
 
 describe("openStream", () => {
   it("requests the saved device exactly", async () => {
