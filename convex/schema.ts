@@ -119,6 +119,8 @@ export default defineSchema({
     mailWidget: v.optional(v.boolean()),
     ollamaUrl: v.optional(v.string()),
     ollamaModel: v.optional(v.string()),
+    micDeviceId: v.optional(v.string()),
+    micDeviceLabel: v.optional(v.string()),
   }).index("by_key", ["key"]),
 
   schedulerState: defineTable({

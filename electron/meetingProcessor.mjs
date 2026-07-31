@@ -25,6 +25,16 @@ const TOOL_PATHS =
     : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 const MAX_TRANSCRIPT_CHARS_FOR_LLM = 24_000;
 
+// WHAT: dB floors separating a usable recording from a dead input device.
+// WHY: calibrated against real recordings from this app. A healthy 73-min
+// meeting measured mean -24.0 dB / peak 0.0 dB. Two silent-input sessions
+// measured mean -91.0 dB / peak -58.5 dB (stone-dead device) and mean
+// -76.5 dB / peak -13.0 dB (brief bursts, nothing else). Both floors are
+// needed: the peak floor catches a fully dead device, the mean floor catches
+// one that only blips — a peak-only check would have passed the second case.
+const SILENT_PEAK_DB = -45;
+const SILENT_MEAN_DB = -70;
+
 async function findTool(names) {
   // WHY also scan PATH: winget/choco installs land on PATH, and a packaged
   // Windows app inherits the registry PATH — unlike a mac app launched from
@@ -122,6 +132,45 @@ function run(cmd, args, timeout) {
       if (err) reject(new Error(String(stderr || err.message).slice(0, 400)));
       else resolve(String(stdout));
     });
+  });
+}
+
+/**
+ * Parse ffmpeg's `volumedetect` stderr into dB stats.
+ * Returns NaN for a field ffmpeg didn't report; -Infinity for its "-inf".
+ */
+export function parseVolumeStats(stderr) {
+  const read = (label) => {
+    const m = String(stderr).match(new RegExp(`${label}:\\s*(-?[\\d.]+|-inf)\\s*dB`, "i"));
+    if (!m) return NaN;
+    return m[1] === "-inf" ? -Infinity : Number(m[1]);
+  };
+  return { meanDb: read("mean_volume"), peakDb: read("max_volume") };
+}
+
+/** True when the audio carries no usable speech signal. */
+export function isSilentAudio({ meanDb, peakDb }) {
+  // WHY fail open: if ffmpeg didn't report levels we can't judge the audio,
+  // so let whisper try rather than discarding a possibly-good recording.
+  if (Number.isNaN(meanDb) || Number.isNaN(peakDb)) return false;
+  return peakDb < SILENT_PEAK_DB || meanDb < SILENT_MEAN_DB;
+}
+
+function fmtDb(db) {
+  return Number.isFinite(db) ? `${db.toFixed(1)} dB` : "silence";
+}
+
+/** Measure a wav's levels with ffmpeg volumedetect (fast — it decodes only). */
+function measureVolume(ffmpegBin, wavPath) {
+  return new Promise((resolve) => {
+    execFile(
+      ffmpegBin,
+      ["-hide_banner", "-i", wavPath, "-af", "volumedetect", "-f", "null", "-"],
+      { timeout: 5 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 },
+      // WHY ignore the error: this is a guard, not a pipeline stage. A failed
+      // measurement yields NaNs, which isSilentAudio() treats as "can't tell".
+      (_err, _stdout, stderr) => resolve(parseVolumeStats(stderr)),
+    );
   });
 }
 
@@ -283,6 +332,28 @@ export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaMode
 
     onProgress?.({ phase: "transcribing", pct: 0 });
     await run(ffmpeg, ["-y", "-i", webm, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], 10 * 60 * 1000);
+
+    // WHY here, before whisper: a dead input device (e.g. Bluetooth speakers
+    // selected as the system input) yields a perfectly valid but silent stream.
+    // whisper turns that into hallucinated filler ("you you you…") after a full
+    // transcription run, which then summarizes into plausible-looking nonsense.
+    // Checking the signal itself fails in seconds with an actionable message,
+    // and catches every silent-input cause rather than one hallucination shape.
+    const level = await measureVolume(ffmpeg, wav);
+    if (isSilentAudio(level)) {
+      // WHY the platform split: mirrors the renderer's copy (isMacLike in
+      // src/lib/utils.ts) so the sound settings path names what the user sees.
+      const soundSettings =
+        process.platform === "darwin"
+          ? "System Settings → Sound → Input"
+          : "Settings → System → Sound → Input";
+      throw new Error(
+        `No audio captured — the recording is silent (peak ${fmtDb(level.peakDb)}, ` +
+          `average ${fmtDb(level.meanDb)}). Check ${soundSettings} ` +
+          `and select your microphone, then record again.`
+      );
+    }
+
     const transcript = await runWhisper(whisper, modelPath, wav, (pct) =>
       onProgress?.({ phase: "transcribing", pct })
     );
