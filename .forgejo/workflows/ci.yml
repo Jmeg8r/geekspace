@@ -1,0 +1,41 @@
+name: CI
+
+# Forgejo Actions equivalent of .github/workflows/ci.yml — ubuntu leg only. The self-hosted
+# runner fleet (arm64/ubuntu-latest/docker labels, docker-in-docker isolated) has no Windows
+# runner yet, so the windows-latest leg is retired from this gate for now rather than split
+# silently across both workflow directories (Forgejo runs .forgejo/workflows/ exclusively
+# once it exists — .github/workflows/ never fires on the forge, even side by side).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck & tests
+    runs-on: ubuntu-latest
+    env:
+      # verify only runs tsc + vitest — no need to download the Electron binary.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify (lint + typecheck + tests)
+        run: npm run verify

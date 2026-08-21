@@ -80,7 +80,7 @@ function getProjection(
   overId: string,
   dragOffset: number,
   indent: number
-): { depth: number; parentId: string | undefined } {
+) {
   const overIndex = items.findIndex((n) => n.page._id === overId);
   const activeIndex = items.findIndex((n) => n.page._id === activeId);
   if (overIndex < 0 || activeIndex < 0) return { depth: 0, parentId: undefined };
@@ -227,7 +227,7 @@ function SortableRow({ node, depth }: { node: FlatNode; depth: number }) {
       drag={{
         setNodeRef,
         style,
-        attributes: attributes as unknown as Record<string, unknown>,
+        attributes,
         listeners,
         isDragging,
       }}

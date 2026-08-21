@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowUpDown,
@@ -24,6 +24,7 @@ import type {
   ViewType,
 } from "../../../convex/lib/types";
 import { OPTION_COLOR_IDS } from "../../../convex/lib/types";
+import { isNumber, isString } from "../../../convex/lib/predicates";
 import { applyView, opsForType, type RowDoc } from "../../lib/viewLogic";
 import { cn, tzOffsetMin } from "../../lib/utils";
 import { swatchClass } from "../../lib/optionColors";
@@ -106,7 +107,7 @@ export function DatabaseContainer({ databaseId }: { databaseId: Id<"databases"> 
                     onClick={() => setViewForDb(databaseId, v._id)}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      (props2 as { onClick?: (e: unknown) => void }).onClick?.(e);
+                      (props2 as { onClick?: (e: MouseEvent) => void }).onClick?.(e);
                     }}
                     className={cn(
                       "flex shrink-0 items-center gap-1.5 border-b-2 px-2 py-2 text-[13px] font-medium",
@@ -239,7 +240,7 @@ function CompleteSprintButton({ databaseId }: { databaseId: Id<"databases"> }) {
         setBusy(true);
         try {
           const res = await completeSprint({ sprintsDbId: databaseId });
-          if (typeof res === "string" && !res.startsWith("completed")) alert(res);
+          if (isString(res) && !res.startsWith("completed")) alert(res);
         } finally {
           setBusy(false);
         }
@@ -421,7 +422,7 @@ function FilterValueInput({
   }
   if (def.type === "date") {
     const iso =
-      typeof value === "number" ? new Date(value).toISOString().slice(0, 10) : "";
+      isNumber(value) ? new Date(value).toISOString().slice(0, 10) : "";
     return (
       <input
         type="date"

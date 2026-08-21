@@ -7,6 +7,7 @@ import type {
   PropertyDef,
   SortRule,
 } from "../../convex/lib/types";
+import { isNumber, isString } from "../../convex/lib/predicates";
 
 // WHAT: Client-side filter/sort evaluation for database views.
 // WHY: rows.list returns the whole (personal-scale) database reactively; views
@@ -18,13 +19,13 @@ export type RowDoc = Doc<"rows"> & { computed?: Record<string, number | null> };
 function numberValue(row: RowDoc, def: PropertyDef): number | null {
   if (def.type === "rollup") return row.computed?.[def.id] ?? null;
   const v = row.properties?.[def.id];
-  return typeof v === "number" ? v : null;
+  return isNumber(v) ? v : null;
 }
 
 function textValue(row: RowDoc, def: PropertyDef): string {
   if (def.type === "title") return row.title ?? "";
   const v = row.properties?.[def.id];
-  return typeof v === "string" ? v : "";
+  return isString(v) ? v : "";
 }
 
 export function evalRule(row: RowDoc, rule: FilterRule, def: PropertyDef): boolean {
@@ -61,7 +62,7 @@ export function evalRule(row: RowDoc, rule: FilterRule, def: PropertyDef): boole
     }
     case "select":
     case "status": {
-      const id = typeof raw === "string" ? raw : "";
+      const id = isString(raw) ? raw : "";
       switch (rule.op) {
         case "is": return id === rule.value;
         case "isNot": return id !== rule.value;

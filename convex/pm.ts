@@ -5,6 +5,7 @@ import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
 import { localMsToCalendarDate, DAY_MS } from "./lib/scheduler";
 import { getMergedSettings, runReflow } from "./scheduling";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
+import { isString } from "./lib/predicates";
 import { seedTemplatesHelper } from "./templates";
 
 // WHAT: Notion Projects parity — sub-tasks, dependencies, sprints — delivered
@@ -231,7 +232,7 @@ export const applyPmUpgrade = mutation({
       const inSprint: Id<"rows">[] = [];
       for (const row of taskRows) {
         const sv = row.properties?.[taskConfig.statusPropId];
-        if (typeof sv === "string" && completeIds.has(sv)) continue;
+        if (isString(sv) && completeIds.has(sv)) continue;
         const due = row.properties?.[taskConfig.datePropId] as
           | { start: number; end?: number }
           | undefined;
@@ -459,7 +460,7 @@ export const completeSprint = mutation({
         const task = await ctx.db.get(id as Id<"rows">);
         if (!task) continue;
         const sv = task.properties?.[tasksDb.taskConfig.statusPropId];
-        const isDone = typeof sv === "string" && completeIds.has(sv);
+        const isDone = isString(sv) && completeIds.has(sv);
         if (isDone || !sprintPropId) {
           stay.push(id);
           continue;

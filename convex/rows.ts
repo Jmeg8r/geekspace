@@ -2,6 +2,7 @@ import { mutation, query, type QueryCtx, type MutationCtx } from "./_generated/s
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { PropertyDef } from "./lib/types";
+import { isString } from "./lib/predicates";
 import { runReflow } from "./scheduling";
 
 // WHAT: Database rows — every row is also a page (it can hold BlockNote content).
@@ -102,7 +103,7 @@ async function enrichRows(
             targets.length === 0
               ? 0
               : Math.round(
-                  (100 * values.filter((x) => typeof x === "string" && completeIds.has(x)).length) /
+                  (100 * values.filter((x) => isString(x) && completeIds.has(x)).length) /
                     targets.length
                 );
           break;
@@ -195,7 +196,7 @@ export const updateProperty = mutation({
       newProperties[args.propId] = args.value;
     }
 
-    const patch: Record<string, unknown> = {
+    const patch: Partial<Doc<"rows">> = {
       properties: newProperties,
       updatedAt: Date.now(),
     };

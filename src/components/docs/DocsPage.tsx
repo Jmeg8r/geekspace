@@ -40,13 +40,17 @@ function fmtSize(bytes: number): string {
 function guessMime(file: File): string {
   if (file.type && file.type !== "application/octet-stream") return file.type;
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
+  const map = {
     md: "text/markdown", txt: "text/plain", json: "application/json",
     js: "text/javascript", ts: "text/typescript", py: "text/x-python",
     sh: "application/x-sh", yml: "text/yaml", yaml: "text/yaml",
     log: "text/plain", csv: "text/csv",
-  };
-  return map[ext] ?? "application/octet-stream";
+  } satisfies Record<string, string>;
+  // SAFETY: `ext` comes from an arbitrary uploaded filename and may not be a
+  // recognized extension. Object.hasOwn guards the lookup so a filename like
+  // "file.toString" can't resolve through the prototype chain to an
+  // inherited function instead of falling back to the default mime type.
+  return Object.hasOwn(map, ext) ? map[ext as keyof typeof map] : "application/octet-stream";
 }
 
 export function DocsPage() {

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { DateValue, PropertyDef, TemplatePayload } from "./lib/types";
 import { DAY_MS, localMsToCalendarDate } from "./lib/scheduler";
+import { isNumber } from "./lib/predicates";
 import { getMergedSettings, runReflow } from "./scheduling";
 
 // WHAT: Project templates — capture a live project (tasks become relative day
@@ -90,7 +91,7 @@ export const saveFromProject = mutation({
     );
 
     const offsetOf = (dv: DateValue | undefined) =>
-      dv && typeof dv.start === "number"
+      dv && isNumber(dv.start)
         ? Math.round(((dv.end ?? dv.start) - today) / DAY_MS)
         : undefined;
 
@@ -120,8 +121,7 @@ export const saveFromProject = mutation({
         return {
           title: t.title,
           priorityName: priorityProp?.options?.find((o) => o.id === p[tc.priorityPropId])?.name,
-          estimateMin:
-            typeof p[tc.estimatePropId] === "number" ? (p[tc.estimatePropId] as number) : undefined,
+          estimateMin: isNumber(p[tc.estimatePropId]) ? p[tc.estimatePropId] : undefined,
           dueOffsetDays: offsetOf(p[tc.datePropId] as DateValue | undefined),
           blockedByTitles: blockedBy.length ? blockedBy : undefined,
           content: t.content,
@@ -162,7 +162,8 @@ export const instantiate = mutation({
     let order = now;
 
     // Project row
-    const projectProperties: Record<string, unknown> = { title: args.title };
+    const projectProperties: Record<string, unknown> = {};
+    projectProperties.title = args.title;
     const projTodo = projStatusProp?.options?.find((o) => o.group === "todo");
     if (projStatusProp && projTodo) projectProperties[projStatusProp.id] = projTodo.id;
     if (projDateProp && payload.targetOffsetDays !== undefined) {
@@ -184,10 +185,9 @@ export const instantiate = mutation({
     const idByTitle = new Map<string, Id<"rows">>();
     const taskIds: Id<"rows">[] = [];
     for (const t of payload.tasks) {
-      const properties: Record<string, unknown> = {
-        title: t.title,
-        [wiring.taskProjectPropId]: [projectRowId],
-      };
+      const properties: Record<string, unknown> = {};
+      properties.title = t.title;
+      properties[wiring.taskProjectPropId] = [projectRowId];
       if (taskTodo) properties[tc.statusPropId] = taskTodo.id;
       if (t.estimateMin !== undefined) properties[tc.estimatePropId] = t.estimateMin;
       if (t.dueOffsetDays !== undefined) {

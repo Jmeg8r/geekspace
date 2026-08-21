@@ -8,7 +8,7 @@ import { listMicrophones, openStream, resolveMicChoice } from "../src/lib/record
 type Track = { kind: string; label: string; stop: () => void };
 
 function fakeStream(tracks: Track[] = []) {
-  return { getTracks: () => tracks, getAudioTracks: () => tracks } as unknown as MediaStream;
+  return { getTracks: () => tracks, getAudioTracks: () => tracks };
 }
 
 function stubMediaDevices(impl: {
