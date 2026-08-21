@@ -14,18 +14,36 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 
-const BACKEND_VERSION = "precompiled-2026-06-09-b6aaa1a";
-const BINARY = path.join(
-  os.homedir(),
-  ".cache/convex/binaries",
-  BACKEND_VERSION,
-  "convex-local-backend"
-);
+// WHY: Windows executables carry the .exe suffix; mirrors the same idiom in
+// electron/convexBackend.mjs so both places name the binary identically.
+const EXE = process.platform === "win32" ? ".exe" : "";
+
+// Keep in sync with electron/convexBackend.mjs's BUNDLED_BACKEND_VERSION — the
+// packaged app's runtime resolver and this build-time baker must agree on
+// which precompiled backend version they're each pinned to.
+const BACKEND_VERSION = "precompiled-2026-07-21-82d5e9f";
+// WHY the platform branch: verified on-machine that the convex CLI caches the
+// downloaded backend binary under %LOCALAPPDATA% on Windows, vs. the XDG-ish
+// ~/.cache everywhere else (see electron/convexBackend.mjs).
+const BINARY =
+  process.platform === "win32"
+    ? path.join(
+        process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
+        "convex",
+        "binaries",
+        BACKEND_VERSION,
+        "convex-local-backend" + EXE
+      )
+    : path.join(os.homedir(), ".cache/convex/binaries", BACKEND_VERSION, "convex-local-backend");
 const CLOUD_PORT = 3210;
 const SITE_PORT = 3211;
 const URL = `http://127.0.0.1:${CLOUD_PORT}`;
 const SRC_CONFIG = path.join(ROOT, ".convex", "local", "default", "config.json");
 const OUT = path.join(ROOT, "build", "convex-seed");
+// WHY: `.bin/convex` is a shim (a bash script on POSIX; a `.cmd`/`.ps1` pair on
+// Windows) — unlaunchable directly and unsafe to invoke via a shell (see the
+// spawnSync call below). The package's real JS entry works on both platforms.
+const CONVEX_CLI = path.join(ROOT, "node_modules", "convex", "bin", "main.js");
 
 function die(msg) {
   console.error(`✖ prebake: ${msg}`);
@@ -76,6 +94,9 @@ async function main() {
   if (!fs.existsSync(SRC_CONFIG)) {
     die(`no local deployment config at ${SRC_CONFIG}\n  Run \`npm run dev\` once to create the local deployment.`);
   }
+  if (!fs.existsSync(CONVEX_CLI)) {
+    die(`convex CLI entry not found at ${CONVEX_CLI}\n  Run \`npm install\` first.`);
+  }
   if (await isHealthy()) {
     die("something is already listening on :3210 — stop `npm run dev` before pre-baking.");
   }
@@ -123,13 +144,30 @@ async function main() {
     await waitHealthy(child);
 
     console.log("• deploying functions (convex deploy)…");
+    // WHY process.execPath + CONVEX_CLI, not the `.bin/convex` shim: on
+    // Windows that shim is a bash script (unlaunchable without a shell), and
+    // its `.cmd` sibling throws EINVAL when spawned without `shell: true` on
+    // patched Node (CVE-2024-27980). process.execPath is node here (this
+    // script itself runs under node), so running the real entry point works
+    // identically on both platforms.
     const dep = spawnSync(
-      path.join(ROOT, "node_modules/.bin/convex"),
-      ["deploy", "--env-file", SHENV, "--typecheck", "disable"],
+      process.execPath,
+      [CONVEX_CLI, "deploy", "--env-file", SHENV, "--typecheck", "disable"],
       { cwd: ROOT, stdio: ["ignore", "inherit", "inherit"], timeout: 180000, killSignal: "SIGKILL" }
     );
     if (dep.status !== 0) {
-      throw new Error(`convex deploy failed (status ${dep.status}${dep.signal ? ", " + dep.signal : ""})`);
+      // F6: on Windows, the convex CLI can finish `deploy`'s actual work
+      // successfully and THEN crash during process teardown — "Assertion
+      // failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c,
+      // line 76" — exiting nonzero regardless. Exit status alone is therefore
+      // not a reliable failure signal here: don't die yet, fall through to
+      // the seed + pages:list probe below, which IS authoritative. If the
+      // deploy genuinely failed, the probe (or the seed mutation itself) will
+      // also fail, and both signals get reported together below.
+      console.warn(
+        `⚠ prebake: convex deploy exited with status ${dep.status}${dep.signal ? " (" + dep.signal + ")" : ""}. ` +
+          "This matches a known Windows libuv-teardown crash that happens AFTER a successful deploy — verifying via seed + probe before deciding."
+      );
     }
 
     console.log("• seeding starter template…");
@@ -138,11 +176,21 @@ async function main() {
       args: {},
       format: "json",
     });
-    if (res.status !== "success") throw new Error(`seed failed: ${JSON.stringify(res)}`);
+    if (res.status !== "success") {
+      throw new Error(
+        `seed failed: ${JSON.stringify(res)}` +
+          (dep.status !== 0 ? ` (convex deploy also exited with status ${dep.status})` : "")
+      );
+    }
 
     const probe = await postJson("/api/query", { path: "pages:list", args: {}, format: "json" });
     const count = Array.isArray(probe.value) ? probe.value.length : 0;
-    if (count < 1) throw new Error("seed produced no pages");
+    if (count < 1) {
+      throw new Error(
+        "seed produced no pages" +
+          (dep.status !== 0 ? ` (convex deploy also exited with status ${dep.status})` : "")
+      );
+    }
     console.log(`• seeded ${count} top-level pages`);
   } finally {
     // Clean stop so SQLite checkpoints its WAL into the snapshot.
@@ -154,6 +202,10 @@ async function main() {
       }, 5000);
       child.on("exit", () => { clearTimeout(t); resolve(); });
     });
+    // WHY: NTFS refuses to rmSync a directory containing a file with an open
+    // handle. The backend's log file (opened above) is still held until we
+    // close it here, before the WORK dir is removed below.
+    fs.closeSync(logFile);
   }
 
   // --- capture the snapshot (only the files the runtime needs) ---
@@ -164,18 +216,35 @@ async function main() {
     path.join(WORK, "convex_local_backend.sqlite3"),
     path.join(OUT, "convex_local_backend.sqlite3")
   );
+  // WHY: on Windows the kill above is TerminateProcess (no SQLite checkpoint
+  // on exit), so committed seed rows may still live in the WAL; shipping the
+  // sidecars is correct — SQLite replays them on the packaged app's first
+  // open. On mac, a clean SIGTERM checkpoints first, so these files don't
+  // exist and the existsSync guards make this a no-op.
+  for (const suffix of ["-wal", "-shm"]) {
+    const src = path.join(WORK, `convex_local_backend.sqlite3${suffix}`);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, path.join(OUT, `convex_local_backend.sqlite3${suffix}`));
+    }
+  }
   fs.cpSync(
     path.join(WORK, "convex_local_storage"),
     path.join(OUT, "convex_local_storage"),
     { recursive: true }
   );
-  fs.rmSync(WORK, { recursive: true, force: true });
+  try {
+    fs.rmSync(WORK, { recursive: true, force: true });
+  } catch (err) {
+    // WHY warn, not die: this is tmpdir cleanup, not a correctness issue — an
+    // AV scanner can hold a transient lock on a file we just closed.
+    console.warn(`⚠ prebake: could not remove work dir ${WORK}: ${err?.message ?? err}`);
+  }
   console.log(`• seed → ${path.relative(ROOT, OUT)}`);
 
   // --- copy the backend binary into build/ for electron-builder extraResources ---
-  const OUT_BINARY = path.join(ROOT, "build", "convex-local-backend");
+  const OUT_BINARY = path.join(ROOT, "build", "convex-local-backend" + EXE);
   fs.copyFileSync(BINARY, OUT_BINARY);
-  fs.chmodSync(OUT_BINARY, 0o755);
+  fs.chmodSync(OUT_BINARY, 0o755); // no-op on Windows (no +x bit to set)
   console.log(`• binary → ${path.relative(ROOT, OUT_BINARY)}`);
 
   // --- bundle the ARCHITECT MCP server into one self-contained file ---
@@ -184,12 +253,29 @@ async function main() {
   // imports don't resolve from a Resources/ path, and ESM-in-asar is unreliable).
   // esbuild inlines everything into one real file that runs from anywhere.
   const OUT_MCP = path.join(ROOT, "build", "geekspace-mcp.mjs");
-  const esb = spawnSync(
-    path.join(ROOT, "node_modules/.bin/esbuild"),
-    ["mcp/index.mjs", "--bundle", "--platform=node", "--format=esm", `--outfile=${OUT_MCP}`],
-    { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] }
-  );
-  if (esb.status !== 0) throw new Error("esbuild bundle of mcp/index.mjs failed");
+  // WHY the JS API, not a spawned `.bin/esbuild`: on macOS esbuild's
+  // postinstall step replaces bin/esbuild with a native binary, while on
+  // Windows the .bin entry is a shim script — no single spawn form is
+  // portable across both. The JS API runs identically everywhere (esbuild is
+  // already in node_modules as vite's dependency).
+  const ESBUILD_PKG = path.join(ROOT, "node_modules", "esbuild");
+  if (!fs.existsSync(ESBUILD_PKG)) {
+    die(`esbuild not found at ${ESBUILD_PKG}\n  Run \`npm install\` first.`);
+  }
+  try {
+    const esbuild = await import("esbuild");
+    esbuild.buildSync({
+      entryPoints: [path.join(ROOT, "mcp", "index.mjs")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile: OUT_MCP,
+      absWorkingDir: ROOT,
+      logLevel: "warning",
+    });
+  } catch (err) {
+    die(`esbuild bundle of mcp/index.mjs failed: ${err?.message ?? err}`);
+  }
   console.log(`• mcp server → ${path.relative(ROOT, OUT_MCP)}`);
 
   console.log("✔ prebake complete → build/{convex-seed, convex-local-backend, geekspace-mcp.mjs}");

@@ -47,6 +47,24 @@ export const tzOffsetMin = () => new Date().getTimezoneOffset();
 export const isElectron = (): boolean =>
   Boolean((window as { geekspace?: { isElectron?: boolean } }).geekspace?.isElectron);
 
+export const desktopPlatform = (): string | undefined =>
+  (window as { geekspace?: { platform?: string } }).geekspace?.platform;
+
+// WHY: browser dev (no preload bridge, so desktopPlatform() is undefined) has
+// no platform string to read — sniff the UA so mac-styled shortcuts/copy
+// still look right when QA'ing in a plain browser tab.
+export function isMacLike(): boolean {
+  const platform = desktopPlatform();
+  if (platform !== undefined) return platform === "darwin";
+  return /Mac|iPhone|iPad/.test(navigator.platform ?? navigator.userAgent);
+}
+
+export const isWinDesktop = (): boolean => isElectron() && desktopPlatform() === "win32";
+
+// WHY: module-level is fine — preload runs before renderer modules, so
+// geekspace.platform is already set by the time this const evaluates.
+export const MOD_LABEL = isMacLike() ? "⌘" : "Ctrl+";
+
 export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n));
 }

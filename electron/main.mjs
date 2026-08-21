@@ -24,6 +24,16 @@ import {
   prewarmKnowledge,
   searchKnowledge,
 } from "./knowledgeSearch.mjs";
+import {
+  addFeed,
+  listFeeds,
+  markProcessed,
+  pollFeeds,
+  prewarmReader,
+  recentItems,
+  removeFeed,
+  searchItems,
+} from "./readerMcp.mjs";
 import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import {
@@ -51,15 +61,45 @@ try {
   /* no .env.local — fine */
 }
 
+// WHY: intentional behavior change — previously a second launch attached to
+// the first instance's backend, and quitting the first killed the backend out
+// from under the second; on Windows, single-instance-focus is also the
+// idiomatic taskbar behavior.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) app.quit();
+
+app.on("second-instance", () => {
+  const w = BrowserWindow.getAllWindows()[0];
+  if (w) {
+    if (w.isMinimized()) w.restore();
+    w.show();
+    w.focus();
+  }
+});
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1480,
     height: 940,
     minWidth: 960,
     minHeight: 620,
-    // WHY: hiddenInset gives the native macOS traffic lights floating over our own chrome.
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 18, y: 19 },
+    // WHY: hiddenInset floats mac traffic lights over our chrome; on Windows
+    // the native Window Controls Overlay gives the same seamless look,
+    // re-themed at runtime via gs:chrome:setOverlay; autoHideMenuBar keeps the
+    // default menu's accelerators (Ctrl+Shift+I, Ctrl+R) working in dev
+    // without a visible bar.
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset",
+          trafficLightPosition: { x: 18, y: 19 },
+        }
+      : process.platform === "win32"
+        ? {
+            titleBarStyle: "hidden",
+            titleBarOverlay: { color: "#1A1A2E", symbolColor: "#E8E8F0", height: 36 },
+            autoHideMenuBar: true,
+          }
+        : {}),
     backgroundColor: "#1A1A2E",
     show: false,
     webPreferences: {
@@ -104,16 +144,38 @@ function handle(channel, fn) {
   });
 }
 
-handle("gs:isRunning", ({ name }) => isAppRunning(name));
-handle("gs:openApp", ({ name }) => openApp(name));
-handle("gs:listCalendars", () => listCalendars());
-handle("gs:fetchCalendarEvents", ({ start, end, names }) =>
-  fetchCalendarEvents(start, end, names)
-);
-handle("gs:fetchInbox", ({ limit }) => fetchInbox(limit));
-handle("gs:openMessage", ({ messageId }) => {
-  shell.openExternal(messageUrl(messageId));
+// ----- Window chrome -----
+// WHY: native caption buttons must follow the app theme (dark/light); no-op
+// off Windows since only win32 has a Window Controls Overlay to re-theme.
+// Height is pinned to 36 to match the renderer's drag strip.
+handle("gs:chrome:setOverlay", ({ color, symbolColor }) => {
+  if (process.platform !== "win32") return;
+  const isHexColor = (s) => typeof s === "string" && /^#[0-9a-fA-F]{6}$/.test(s);
+  if (!isHexColor(color) || !isHexColor(symbolColor)) return;
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (typeof win.setTitleBarOverlay === "function") {
+      win.setTitleBarOverlay({ color, symbolColor, height: 36 });
+    }
+  }
 });
+
+// WHY: defense in depth behind the preload gate — preload.cjs only attaches
+// `integrations` on darwin, so the renderer can't reach these channels on
+// Windows/Linux anyway, but we skip registering them at all. Also the seam
+// where a future Windows Calendar/Mail provider would register its own
+// gs:* handlers.
+if (process.platform === "darwin") {
+  handle("gs:isRunning", ({ name }) => isAppRunning(name));
+  handle("gs:openApp", ({ name }) => openApp(name));
+  handle("gs:listCalendars", () => listCalendars());
+  handle("gs:fetchCalendarEvents", ({ start, end, names }) =>
+    fetchCalendarEvents(start, end, names)
+  );
+  handle("gs:fetchInbox", ({ limit }) => fetchInbox(limit));
+  handle("gs:openMessage", ({ messageId }) => {
+    shell.openExternal(messageUrl(messageId));
+  });
+}
 
 // ----- AI Meeting Notes -----
 handle("gs:meeting:tools", () => toolStatus());
@@ -207,7 +269,23 @@ handle("gs:openExternal", ({ url }) => {
   if (typeof url === "string" && /^https?:\/\//.test(url)) shell.openExternal(url);
 });
 
+// ----- Reader (aib-reader RSS) -----
+handle("gs:reader:listFeeds", () => listFeeds());
+handle("gs:reader:recentItems", ({ limit, since, category }) =>
+  recentItems({ limit, since, category })
+);
+handle("gs:reader:searchItems", ({ query, limit }) => searchItems(query, limit));
+handle("gs:reader:markProcessed", ({ itemIds, consumer }) => markProcessed(itemIds, consumer));
+handle("gs:reader:addFeed", ({ url, category }) => addFeed(url, category));
+handle("gs:reader:removeFeed", ({ url }) => removeFeed(url));
+handle("gs:reader:pollFeeds", ({ categories }) => pollFeeds(categories));
+
 app.whenReady().then(async () => {
+  // WHY: closes the race where whenReady resolves before the app.quit() from a
+  // failed single-instance lock (above) actually processes — without this,
+  // a second launch could still attach a second backend and flash a window.
+  if (!gotSingleInstanceLock) return;
+
   // Bring up (or attach to) the local Convex backend BEFORE the window loads —
   // the renderer hard-requires it on :3210. In dev this attaches to the
   // `convex dev` backend; packaged, it spawns the bundled binary.
@@ -235,6 +313,8 @@ app.whenReady().then(async () => {
   createWindow();
   // Warm the knowledge connector (connect + tools/list only — no quota used).
   prewarmKnowledge().catch(() => {});
+  // Warm the reader connector (spawns aib-reader-mcp + tools/list).
+  prewarmReader().catch(() => {});
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

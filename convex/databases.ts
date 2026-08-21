@@ -76,7 +76,7 @@ export const addProperty = mutation({
 });
 
 function defaultPropName(type: string, existing: PropertyDef[]): string {
-  const base: Record<string, string> = {
+  const base = {
     text: "Text",
     number: "Number",
     select: "Select",
@@ -89,8 +89,12 @@ function defaultPropName(type: string, existing: PropertyDef[]): string {
     rollup: "Rollup",
     createdTime: "Created",
     updatedTime: "Updated",
-  };
-  const name = base[type] ?? "Property";
+  } satisfies Record<string, string>;
+  // SAFETY: `type` is unvalidated client input and may not be a recognized
+  // property type. Object.hasOwn guards the lookup so a key like "toString"
+  // or "constructor" can't resolve through the prototype chain to an
+  // inherited function instead of falling back to "Property".
+  const name = Object.hasOwn(base, type) ? base[type as keyof typeof base] : "Property";
   let candidate = name;
   let n = 1;
   while (existing.some((p) => p.name === candidate)) candidate = `${name} ${++n}`;

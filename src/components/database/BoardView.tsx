@@ -16,8 +16,10 @@ import type {
   DateValue,
   PropertyDef,
   SelectOption,
+  StatusGroup,
 } from "../../../convex/lib/types";
 import type { RowDoc } from "../../lib/viewLogic";
+import { isNumber, isString } from "../../../convex/lib/predicates";
 import { fmtDateValue } from "../../lib/dates";
 import { cn, tzOffsetMin } from "../../lib/utils";
 import { useUI } from "../../state/ui";
@@ -41,7 +43,7 @@ export function BoardView({ db, view, rows, relationTitles }: ViewProps) {
     if (!groupProp?.options) return [];
     const opts = [...groupProp.options];
     if (groupProp.type === "status") {
-      const order = { todo: 0, inprogress: 1, complete: 2 } as Record<string, number>;
+      const order = { todo: 0, inprogress: 1, complete: 2 } satisfies Record<StatusGroup, number>;
       opts.sort((a, b) => (order[a.group ?? "todo"] ?? 0) - (order[b.group ?? "todo"] ?? 0));
     }
     return [
@@ -61,7 +63,7 @@ export function BoardView({ db, view, rows, relationTitles }: ViewProps) {
   const rowsByColumn = new Map<string, RowDoc[]>(columns.map((c) => [c.id, []]));
   for (const row of rows) {
     const v = row.properties?.[groupProp.id];
-    const key = typeof v === "string" && rowsByColumn.has(v) ? v : NONE;
+    const key = isString(v) && rowsByColumn.has(v) ? v : NONE;
     rowsByColumn.get(key)!.push(row);
   }
 
@@ -209,7 +211,7 @@ function CardBody({
       );
     } else if (def.type === "rollup" && (def.numberFormat === "progress" || def.rollup?.aggregate === "percentComplete")) {
       const n = row.computed?.[def.id];
-      if (typeof n === "number") snippets.push(<ProgressBar key={def.id} value={n} />);
+      if (isNumber(n)) snippets.push(<ProgressBar key={def.id} value={n} />);
     } else if (def.type === "relation" && Array.isArray(v) && v.length) {
       snippets.push(
         <span key={def.id} className="truncate text-[12px] text-ink-2">

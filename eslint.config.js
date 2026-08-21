@@ -48,6 +48,7 @@ export default tseslint.config(
       "convex/**/*.{ts,tsx}",
       "scripts/**/*.{ts,mjs,js}",
       "mcp/**/*.{ts,mjs,js}",
+      "tools/**/*.{ts,mjs,js}",
       "tests/**/*.{ts,tsx}",
       "*.config.{ts,mjs,js}",
     ],
@@ -57,9 +58,11 @@ export default tseslint.config(
 
   // TypeScript already flags undefined identifiers; the core no-undef rule
   // produces false positives on TS and is explicitly not recommended by
-  // typescript-eslint, so turn it off project-wide.
+  // typescript-eslint. Scoped to TS/TSX only — plain JS/MJS (electron/,
+  // scripts/, mcp/, *.config.js) have no type-checker backstop, so no-undef
+  // stays on there.
   {
-    files: ["**/*.{ts,tsx,mjs,js}"],
+    files: ["**/*.{ts,tsx}"],
     rules: { "no-undef": "off" },
   },
 );

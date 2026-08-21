@@ -231,7 +231,7 @@ export function AgentPanel() {
                 ? "Ollama is running but has no usable models — pull one (e.g. ollama pull qwen3-coder:30b)."
                 : "Ollama isn't reachable — start it, or switch to the Claude lane."
               : state === "no-auth"
-                ? "Sign in to Claude Code on this Mac (run `claude` once), then reopen this panel."
+                ? "Sign in to Claude Code on this machine (run `claude` once), then reopen this panel."
                 : "The agent is unavailable — make sure the app launched via npm run dev."}
           </p>
         ) : (

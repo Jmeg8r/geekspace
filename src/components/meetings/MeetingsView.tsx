@@ -16,9 +16,9 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
-import { cn, debounce, isElectron, tzOffsetMin } from "../../lib/utils";
+import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
-import { recorder } from "../../lib/recorder";
+import { listMicrophones, recorder, resolveMicChoice, type MicDevice } from "../../lib/recorder";
 import {
   meetingAskMic,
   meetingsAvailable,
@@ -58,8 +58,19 @@ export function MeetingsView() {
 
   const missing: string[] = [];
   if (tools) {
-    if (!tools.ffmpeg) missing.push("ffmpeg (`brew install ffmpeg`)");
-    if (!tools.whisper) missing.push("whisper.cpp (`brew install whisper-cpp`)");
+    // WHY: mirrors the Phase 2 main-process error strings (electron/meetingProcessor.mjs).
+    if (!tools.ffmpeg) {
+      missing.push(
+        isMacLike() ? "ffmpeg (`brew install ffmpeg`)" : "ffmpeg (`winget install Gyan.FFmpeg`)"
+      );
+    }
+    if (!tools.whisper) {
+      missing.push(
+        isMacLike()
+          ? "whisper.cpp (`brew install whisper-cpp`)"
+          : "whisper.cpp (drop whisper-cli.exe into %USERPROFILE%\\.geekspace\\tools)"
+      );
+    }
   }
 
   return (
@@ -76,7 +87,7 @@ export function MeetingsView() {
           </button>
         </div>
         <p className="pb-6 text-[13px] text-ink-2">
-          Record → transcribe (whisper.cpp) → summarize (your local Ollama). Nothing leaves this Mac.
+          Record → transcribe (whisper.cpp) → summarize (your local Ollama). Nothing leaves this machine.
         </p>
 
         {!meetingsAvailable() && (
@@ -184,6 +195,11 @@ function StatusChip({ meeting }: { meeting: Doc<"meetings"> }) {
 
 function StartMeetingModal({ onClose }: { onClose: () => void }) {
   const start = useMutation(api.meetings.start);
+  const settings = useQuery(api.settings.get);
+  const setMicDevice = useMutation(api.settings.setMicDevice);
+  const [mics, setMics] = useState<MicDevice[]>([]);
+  const [micId, setMicId] = useState<string>("");
+  const [micError, setMicError] = useState<string | null>(null);
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
   const todaysEvents =
@@ -202,6 +218,42 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
 
+  // WHY ask before enumerating: device labels stay blank until the page has mic
+  // access, and a picker full of unnamed entries is worse than none.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const granted = await meetingAskMic();
+      if (cancelled || !granted.ok || !granted.data) return;
+      try {
+        const found = await listMicrophones();
+        if (!cancelled) setMics(found);
+      } catch (e) {
+        if (!cancelled) setMicError(String((e as Error)?.message ?? e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Preselect the saved mic when it is still connected. When it isn't, say so
+  // instead of silently recording from whatever macOS now calls the default —
+  // that substitution is exactly how a meeting gets recorded as 43min silence.
+  useEffect(() => {
+    if (settings === undefined || mics.length === 0) return;
+    const saved = settings.micDeviceId;
+    if (!saved) return;
+    if (mics.some((m) => m.deviceId === saved)) {
+      setMicId(saved);
+    } else {
+      setMicId("");
+      setMicError(
+        `Saved microphone "${settings.micDeviceLabel ?? saved}" isn't connected — using the system default.`
+      );
+    }
+  }, [settings, mics]);
+
   async function begin() {
     setStarting(true);
     setErr(null);
@@ -211,12 +263,22 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
         setErr("Microphone access denied — System Settings → Privacy & Security → Microphone.");
         return;
       }
+      // WHY persist unconditionally: picking "System default" must overwrite a
+      // previously saved device, or the next meeting's preselection restores it
+      // and records from an input the user deliberately deselected.
+      const chosen = resolveMicChoice(micId, mics);
+      await setMicDevice({ micDeviceId: chosen.deviceId, micDeviceLabel: chosen.label });
       const meetingId = await start({
         title,
         meetingType,
         eventId: eventId ? (eventId as Id<"events">) : undefined,
       });
-      await recorder.start({ meetingId, title, meetingType });
+      await recorder.start({
+        meetingId,
+        title,
+        meetingType,
+        deviceId: chosen.deviceId || undefined,
+      });
       onClose();
     } catch (e) {
       setErr(String((e as Error)?.message ?? e));
@@ -268,6 +330,27 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
               ))}
             </select>
           </label>
+        )}
+        <label className="mb-3 flex items-center gap-2 text-[13px]">
+          <span className="text-ink-2">Mic</span>
+          <select
+            value={micId}
+            onChange={(e) => {
+              setMicId(e.target.value);
+              setMicError(null);
+            }}
+            className="min-w-0 flex-1 rounded-md border border-border bg-surface px-1.5 py-1 text-[12.5px] outline-none"
+          >
+            <option value="">System default</option>
+            {mics.map((m) => (
+              <option key={m.deviceId} value={m.deviceId}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {micError && (
+          <p className="pb-2 text-[11.5px] leading-snug text-[var(--pal-red)]">{micError}</p>
         )}
         <p className="pb-3 text-[11.5px] leading-snug text-ink-3">
           Records your microphone. The summary is tailored to the meeting type. For the other side

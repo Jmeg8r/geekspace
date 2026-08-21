@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore } from "react";
-import { Mic, Pause, Play, Square, X } from "lucide-react";
-import { cn } from "../../lib/utils";
-import { recorder } from "../../lib/recorder";
+import { AlertTriangle, Mic, Pause, Play, Square, X } from "lucide-react";
+import { cn, isMacLike } from "../../lib/utils";
+import { recorder, SILENCE_WARN_SEC } from "../../lib/recorder";
 import { cancelRecording, finishRecording } from "../../lib/meetingPipeline";
 import { useUI } from "../../state/ui";
 
@@ -16,6 +16,7 @@ export function RecorderWidget() {
   const mm = String(Math.floor(state.elapsedSec / 60)).padStart(2, "0");
   const ss = String(state.elapsedSec % 60).padStart(2, "0");
   const bars = [0.15, 0.35, 0.55, 0.75, 0.92];
+  const silent = state.status === "recording" && state.silentSec >= SILENCE_WARN_SEC;
 
   async function stop() {
     setStopping(true);
@@ -29,9 +30,30 @@ export function RecorderWidget() {
 
   return (
     <div
-      className="fade-in fixed bottom-5 right-5 z-[55] flex items-center gap-3 rounded-xl border border-border bg-raised px-3.5 py-2.5"
+      className={cn(
+        "fade-in fixed bottom-5 right-5 z-[55] rounded-xl border bg-raised",
+        silent ? "border-[var(--pal-red)]" : "border-border"
+      )}
       style={{ boxShadow: "var(--shadow-lg)" }}
     >
+      {silent && (
+        // WHY role="alert": this banner is the only in-flight signal that a
+        // meeting is recording nothing, so it has to interrupt rather than wait
+        // to be discovered — the whole point is catching it before the meeting ends.
+        <div
+          role="alert"
+          className="flex max-w-[22rem] items-start gap-2 border-b border-border px-3.5 py-2 text-[12px] leading-snug text-[var(--pal-red)]"
+        >
+          <AlertTriangle size={14} className="mt-px shrink-0" />
+          <span>
+            <strong className="font-semibold">No audio detected</strong> from{" "}
+            {state.deviceLabel || "the selected input"} for {state.silentSec}s. Check{" "}
+            {isMacLike() ? "System Settings → Sound → Input" : "Settings → System → Sound → Input"}{" "}
+            — this recording will be silent.
+          </span>
+        </div>
+      )}
+      <div className="flex items-center gap-3 px-3.5 py-2.5">
       <span
         className={cn(
           "h-2.5 w-2.5 shrink-0 rounded-full bg-[var(--pal-red)]",
@@ -91,6 +113,7 @@ export function RecorderWidget() {
       >
         <X size={14} />
       </button>
+      </div>
     </div>
   );
 }

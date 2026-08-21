@@ -63,7 +63,7 @@ export const setStatus = mutation({
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const patch: Record<string, unknown> = { status: args.status };
+    const patch: Partial<Doc<"meetings">> = { status: args.status };
     if (args.progress !== undefined) patch.progress = args.progress;
     if (args.error !== undefined) patch.error = args.error;
     await ctx.db.patch(args.meetingId, patch);

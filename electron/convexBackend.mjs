@@ -15,6 +15,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+// WHY: Windows executables carry the .exe suffix; every binary path below
+// appends this so we mirror exactly what the convex CLI itself downloads and
+// names on each platform.
+const EXE = process.platform === "win32" ? ".exe" : "";
+
 // WHY constants, not config: the renderer's Convex URL is compiled into dist/ at
 // build time (VITE_CONVEX_URL), so the backend MUST listen on this exact port.
 // The contract is fixed; we don't read it from config.json (which happens to
@@ -27,7 +32,11 @@ const HEALTH_URL = `${CONVEX_URL}/version`;
 // The precompiled backend version we bundle. The on-disk SQLite schema is tied
 // to the binary version, so a future bump must re-bake the seed (see the guard
 // in startOrAttach). Keep in sync with the binary shipped via extraResources.
-const BUNDLED_BACKEND_VERSION = "precompiled-2026-06-09-b6aaa1a";
+// WHY bumped to 2026-07-21: convex 1.41.0 (pinned by package-lock, the CLI that
+// actually populates the dev-cache binaryPath() reads from) downloads this
+// version, not the older one this used to pin. The seed is re-baked at package
+// time (see scripts/prebake-seed.mjs), so this bump is already satisfied.
+const BUNDLED_BACKEND_VERSION = "precompiled-2026-07-21-82d5e9f";
 
 // --- paths (dev vs packaged) ---------------------------------------------
 
@@ -38,10 +47,28 @@ const DATA_DIR = path.join(app.getPath("appData"), "Geekspace", "convex");
 const LOG_DIR = path.join(app.getPath("appData"), "Geekspace", "logs");
 
 function binaryPath() {
+  // WHY env override first: makes future CLI cache-location drift (or a
+  // manually-placed binary) a non-event — set GEEKSPACE_CONVEX_BINARY and it
+  // wins over both the packaged and dev-cache lookups below.
+  const override = process.env.GEEKSPACE_CONVEX_BINARY;
+  if (override && fs.existsSync(override)) return override;
+
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, "convex-local-backend");
+    return path.join(process.resourcesPath, "convex-local-backend" + EXE);
   }
   // Dev: the same binary the convex CLI downloaded into its cache.
+  // WHY the platform branch: verified on-machine that the CLI caches under
+  // %LOCALAPPDATA% on Windows, vs. the XDG-ish ~/.cache everywhere else.
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+    return path.join(
+      localAppData,
+      "convex",
+      "binaries",
+      BUNDLED_BACKEND_VERSION,
+      "convex-local-backend" + EXE
+    );
+  }
   return path.join(
     os.homedir(),
     ".cache",
@@ -214,6 +241,12 @@ export async function stopBackend() {
   if (!managed || !child) return;
   const proc = child;
   log("Stopping backend (SIGTERM)…");
+  // WHY this is safe on Windows too: Node maps POSIX signals to
+  // TerminateProcess there, so this is effectively an ungraceful kill (no
+  // signal handler runs, unlike SIGTERM on POSIX). The data dir is WAL-mode
+  // SQLite, so crash recovery on next open is the safety contract — the
+  // Windows path is power-cut-equivalent, and committed transactions are
+  // durable either way.
   proc.kill("SIGTERM");
 
   await new Promise((resolve) => {

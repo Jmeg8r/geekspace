@@ -94,7 +94,7 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const page = await ctx.db.get(args.pageId);
     if (!page) return;
-    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+    const patch: Partial<Doc<"pages">> = { updatedAt: Date.now() };
     if (args.title !== undefined) patch.title = args.title;
     if (args.icon !== undefined) patch.icon = args.icon === "" ? undefined : args.icon;
     await ctx.db.patch(args.pageId, patch);

@@ -4,7 +4,7 @@ import { api } from "./../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { useUI } from "./state/ui";
 import { ThemeProvider } from "./state/theme";
-import { tzOffsetMin } from "./lib/utils";
+import { isWinDesktop, tzOffsetMin } from "./lib/utils";
 import { integrationsAvailable } from "./lib/integrations";
 import { syncMacCalendar } from "./lib/macSync";
 import { onMeetingProgress } from "./lib/meetingsBridge";
@@ -14,6 +14,7 @@ import { CalendarView } from "./components/calendar/CalendarView";
 import { MeetingsView } from "./components/meetings/MeetingsView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
 import { KnowledgePage } from "./components/search/KnowledgePage";
+import { ReaderPage } from "./components/reader/ReaderPage";
 import { AgentPanel } from "./components/agent/AgentPanel";
 import { TemplatesModal } from "./components/templates/TemplatesModal";
 import { DocsPage } from "./components/docs/DocsPage";
@@ -116,24 +117,34 @@ export default function App() {
 
   return (
     <ThemeProvider theme={settings?.theme ?? "system"}>
-      <div className="flex h-screen w-screen overflow-hidden bg-bg text-ink">
-        <Sidebar />
-        <main className="min-w-0 flex-1">
-          {nav.kind === "home" && <HomeView />}
-          {nav.kind === "calendar" && <CalendarView />}
-          {nav.kind === "meetings" && <MeetingsView />}
-          {nav.kind === "knowledge" && <KnowledgePage />}
-          {nav.kind === "docs" && <DocsPage />}
-          {nav.kind === "page" && (
-            <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
-          )}
-        </main>
-        <AgentPanel />
-        <RowPeek />
-        <RecorderWidget />
-        {commandOpen && <CommandPalette />}
-        {settingsOpen && <SettingsModal />}
-        {templatesOpen && <TemplatesModal onClose={() => setTemplatesOpen(false)} />}
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-bg text-ink">
+        {isWinDesktop() && (
+          // WHY: the Window Controls Overlay's caption buttons float top-right
+          // regardless of our layout below — this strip puts them on chrome
+          // instead of page content. h-9 (36px) matches the overlay height set
+          // in electron/main.mjs and gs:chrome:setOverlay.
+          <div className="app-drag h-9 shrink-0 border-b border-border bg-sidebar" />
+        )}
+        <div className="flex min-h-0 flex-1">
+          <Sidebar />
+          <main className="min-w-0 flex-1">
+            {nav.kind === "home" && <HomeView />}
+            {nav.kind === "calendar" && <CalendarView />}
+            {nav.kind === "meetings" && <MeetingsView />}
+            {nav.kind === "knowledge" && <KnowledgePage />}
+            {nav.kind === "reader" && <ReaderPage />}
+            {nav.kind === "docs" && <DocsPage />}
+            {nav.kind === "page" && (
+              <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
+            )}
+          </main>
+          <AgentPanel />
+          <RowPeek />
+          <RecorderWidget />
+          {commandOpen && <CommandPalette />}
+          {settingsOpen && <SettingsModal />}
+          {templatesOpen && <TemplatesModal onClose={() => setTemplatesOpen(false)} />}
+        </div>
       </div>
     </ThemeProvider>
   );
