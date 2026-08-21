@@ -1,4 +1,5 @@
 import { useState, type CSSProperties } from "react";
+import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { useMutation } from "convex/react";
 import {
   ChevronDown,
@@ -23,8 +24,8 @@ type Page = Doc<"pages">;
 export interface RowDragProps {
   setNodeRef: (el: HTMLElement | null) => void;
   style: CSSProperties;
-  attributes: Record<string, unknown>;
-  listeners: Record<string, unknown> | undefined;
+  attributes: DraggableAttributes;
+  listeners: DraggableSyntheticListeners;
   isDragging: boolean;
 }
 

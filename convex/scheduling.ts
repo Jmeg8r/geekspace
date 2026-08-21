@@ -12,6 +12,7 @@ import {
 } from "./lib/scheduler";
 import type { DateValue, PropertyDef } from "./lib/types";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
+import { isNumber } from "./lib/predicates";
 
 // WHAT: Gathers tasks + busy time and recomputes every engine-owned time block.
 // WHY: this is the "Notion Calendar magic" — every mutation that touches tasks,
@@ -99,13 +100,13 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
         statusProp?.options?.find((o) => o.id === statusVal)?.group ?? "todo";
       if (group === "complete") continue;
       const estimate = p[db.taskConfig.estimatePropId];
-      if (typeof estimate !== "number" || estimate <= 0) continue;
+      if (!isNumber(estimate) || estimate <= 0) continue;
       const remaining = estimate - (loggedMin.get(row._id) ?? 0);
       if (remaining <= 0) continue;
 
       const dateVal = p[db.taskConfig.datePropId] as DateValue | undefined;
       let dueMs: number | undefined;
-      if (dateVal && typeof dateVal.start === "number") {
+      if (dateVal && isNumber(dateVal.start)) {
         dueMs = dateVal.includeTime
           ? (dateVal.end ?? dateVal.start)
           : calendarDateToLocalMs(dateVal.end ?? dateVal.start, tz, s.dayEndMin);

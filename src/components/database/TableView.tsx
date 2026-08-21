@@ -268,15 +268,15 @@ function OptionsEditor({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) 
           onChange={(e) => setNewName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && newName.trim()) {
-              save([
-                ...options,
-                {
-                  id: makeId(),
-                  name: newName.trim(),
-                  color: nextOptionColor(options.map((o) => o.color)),
-                  ...(def.type === "status" ? { group: "todo" as StatusGroup } : {}),
-                },
-              ]);
+              const newOption: SelectOption = {
+                id: makeId(),
+                name: newName.trim(),
+                color: nextOptionColor(options.map((o) => o.color)),
+              };
+              if (def.type === "status") {
+                newOption.group = "todo";
+              }
+              save([...options, newOption]);
               setNewName("");
             }
           }}

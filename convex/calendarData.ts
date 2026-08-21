@@ -1,5 +1,6 @@
 import { query } from "./_generated/server";
 import type { DateValue, PropertyDef } from "./lib/types";
+import { isNumber } from "./lib/predicates";
 
 // WHAT: Read models for the calendar + home dashboard — database rows with
 // dates (Notion Calendar-style "connected databases") and the cross-database
@@ -29,7 +30,7 @@ export const listForCalendar = query({
         .collect();
       for (const row of rows) {
         const date = row.properties?.[db.calendarDatePropId] as DateValue | undefined;
-        if (!date || typeof date.start !== "number") continue;
+        if (!date || !isNumber(date.start)) continue;
         const statusVal = statusPropId ? row.properties?.[statusPropId] : undefined;
         const done =
           statusProp?.options?.find((o) => o.id === statusVal)?.group === "complete";
@@ -103,8 +104,8 @@ export const myTasks = query({
         out.push({
           rowId: row._id,
           title: row.title || "Untitled",
-          due: due && typeof due.start === "number" ? due : undefined,
-          estimateMin: typeof estimate === "number" ? estimate : undefined,
+          due: due && isNumber(due.start) ? due : undefined,
+          estimateMin: isNumber(estimate) ? estimate : undefined,
           priorityName: prOption?.name,
           priorityColor: prOption?.color,
           inProgress: group === "inprogress",

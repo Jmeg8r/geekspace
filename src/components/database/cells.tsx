@@ -11,6 +11,7 @@ import type {
   StatusGroup,
 } from "../../../convex/lib/types";
 import { makeId } from "../../../convex/lib/types";
+import { isNumber, isString } from "../../../convex/lib/predicates";
 import type { RowDoc } from "../../lib/viewLogic";
 import { fmtDateValue, fmtDuration } from "../../lib/dates";
 import { chipClass, nextOptionColor } from "../../lib/optionColors";
@@ -151,7 +152,7 @@ function NumberCell({ def, row }: CellProps) {
       />
     );
   }
-  const n = typeof server === "number" ? server : null;
+  const n = isNumber(server) ? server : null;
   return (
     <button
       onClick={() => {
@@ -185,7 +186,7 @@ function SelectCell({ def, row }: CellProps) {
   const raw = row.properties?.[def.id];
   const selectedIds: string[] = multi
     ? Array.isArray(raw) ? (raw as string[]) : []
-    : typeof raw === "string" && raw ? [raw] : [];
+    : isString(raw) && raw ? [raw] : [];
   const options = def.options ?? [];
   const selected = selectedIds
     .map((id) => options.find((o) => o.id === id))
@@ -205,8 +206,10 @@ function SelectCell({ def, row }: CellProps) {
       id: makeId(),
       name,
       color: nextOptionColor(options.map((o) => o.color)),
-      ...(def.type === "status" ? { group: "todo" as StatusGroup } : {}),
     };
+    if (def.type === "status") {
+      option.group = "todo";
+    }
     await updateProp({
       databaseId: row.databaseId,
       propId: def.id,
