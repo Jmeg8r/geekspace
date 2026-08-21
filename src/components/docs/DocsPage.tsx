@@ -47,9 +47,10 @@ function guessMime(file: File): string {
     log: "text/plain", csv: "text/csv",
   } satisfies Record<string, string>;
   // SAFETY: `ext` comes from an arbitrary uploaded filename and may not be a
-  // recognized extension; the `?? "application/octet-stream"` fallback covers
-  // any key not actually present in `map`, so a wrong assertion is harmless.
-  return map[ext as keyof typeof map] ?? "application/octet-stream";
+  // recognized extension. Object.hasOwn guards the lookup so a filename like
+  // "file.toString" can't resolve through the prototype chain to an
+  // inherited function instead of falling back to the default mime type.
+  return Object.hasOwn(map, ext) ? map[ext as keyof typeof map] : "application/octet-stream";
 }
 
 export function DocsPage() {

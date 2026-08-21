@@ -34,11 +34,15 @@ export const create = mutation({
       timeline: "Timeline",
     } satisfies Record<string, string>;
     // SAFETY: `args.type` is unvalidated client input and may not be a
-    // recognized view type; the `?? "View"` fallback covers any key not
-    // actually present in `defaultNames`, so a wrong assertion is harmless.
+    // recognized view type. Object.hasOwn guards the lookup so a key like
+    // "toString" or "constructor" can't resolve through the prototype chain
+    // to an inherited function instead of falling back to "View".
+    const defaultName = Object.hasOwn(defaultNames, args.type)
+      ? defaultNames[args.type as keyof typeof defaultNames]
+      : "View";
     const doc: WithoutSystemFields<Doc<"views">> = {
       databaseId: args.databaseId,
-      name: args.name ?? defaultNames[args.type as keyof typeof defaultNames] ?? "View",
+      name: args.name ?? defaultName,
       type: args.type,
       order: Date.now(),
     };

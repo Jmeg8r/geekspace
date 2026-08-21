@@ -91,9 +91,10 @@ function defaultPropName(type: string, existing: PropertyDef[]): string {
     updatedTime: "Updated",
   } satisfies Record<string, string>;
   // SAFETY: `type` is unvalidated client input and may not be a recognized
-  // property type; the `?? "Property"` fallback covers any key not actually
-  // present in `base`, so a wrong assertion here cannot produce a bad label.
-  const name = base[type as keyof typeof base] ?? "Property";
+  // property type. Object.hasOwn guards the lookup so a key like "toString"
+  // or "constructor" can't resolve through the prototype chain to an
+  // inherited function instead of falling back to "Property".
+  const name = Object.hasOwn(base, type) ? base[type as keyof typeof base] : "Property";
   let candidate = name;
   let n = 1;
   while (existing.some((p) => p.name === candidate)) candidate = `${name} ${++n}`;
