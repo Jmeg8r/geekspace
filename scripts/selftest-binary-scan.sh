@@ -354,6 +354,35 @@ if [ "$STUB_RC" -ne 0 ] && grep -qF 'fails the version guard' <<<"$STUB_OUT"; th
   ok "unsupported gitleaks on PATH is refused by the version pre-flight"
 else bad "unsupported gitleaks was not refused up front (rc=$STUB_RC)" "$STUB_OUT"; fi
 
+# 10b. The archive canary must also fail closed, with its OWN cause string. A
+#      binary can pass the version floor (case 10's stub is refused before that
+#      point, so it can't exercise this) yet still not understand
+#      --max-archive-depth -- the exact split canary_archive_ok() exists to
+#      catch. Stub a gitleaks that reports a floor-passing version but errors
+#      on `dir --max-archive-depth`, and assert the archive-specific message,
+#      not just UNKNOWN -- the whole point of the four-cause split in
+#      scan-staged-binaries.sh is that a regression collapsing them back
+#      together must be caught here.
+new_repo c10b
+build_xlsx book.xlsx "token $SECRET"
+git add book.xlsx
+mkdir -p "$WORK/stub2"
+cat > "$WORK/stub2/gitleaks" <<'STUB'
+#!/bin/sh
+case "$1" in
+  version) echo "8.30.1"; exit 0 ;;
+  dir) exit 2 ;;
+  *) exit 0 ;;
+esac
+STUB
+chmod +x "$WORK/stub2/gitleaks"
+set +e
+STUB_OUT="$(PATH="$WORK/stub2:$PATH" "$SUT" 2>&1)"; STUB_RC=$?
+set -e
+if [ "$STUB_RC" -ne 0 ] && grep -qF 'cannot traverse archives' <<<"$STUB_OUT"; then
+  ok "gitleaks that fails archive traversal is reported with its own cause"
+else bad "archive canary did not fail closed with its own cause (rc=$STUB_RC)" "$STUB_OUT"; fi
+
 # ---------------------------------------------------------------------------
 # CI SOURCES. Everything above scans the index. The job this kit calls
 # authoritative has no index, and for the whole life of this script that meant it
@@ -556,7 +585,7 @@ echo "  $pass passed, $fail failed"
 # 20 against 25 cases let five disappear while the suite still reported success. A
 # guard that tolerates loss cannot detect loss.
 # Bumping this when you add a case is the point: it forces the change to be noticed.
-_EXPECTED_CASES=25
+_EXPECTED_CASES=26
 _total=$((pass + fail))
 if [ "$_total" -ne "$_EXPECTED_CASES" ]; then
   echo "  ✗ $_total case(s) ran, expected exactly $_EXPECTED_CASES"

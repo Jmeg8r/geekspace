@@ -378,7 +378,12 @@ commit-msg:
       # CodeRabbit and `gh pr create --fill` both key off commit subjects.
       # Consistent prefixes make PR titles write themselves.
       run: |
-        head -n1 {1} | grep -qE '^(feat|fix|docs|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: .{3,}' || {
+        subject=$(head -n1 "{1}")
+        # Git writes these itself: merges, reverts, and autosquash markers.
+        case "$subject" in
+          "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*) exit 0 ;;
+        esac
+        printf '%s\n' "$subject" | grep -qE '^(feat|fix|docs|refactor|test|chore|perf|ci|build|revert)(\(.+\))?!?: .{3,}' || {
           echo "✗ Commit subject must be conventional, e.g.:"
           echo "    feat(ladder): add project 07 file walker"
           echo "    fix(jdex): handle missing index on first run"
