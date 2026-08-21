@@ -1,5 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { WithoutSystemFields } from "convex/server";
+import type { Doc } from "./_generated/dataModel";
 import type { PropertyDef } from "./lib/types";
 
 export const list = query({
@@ -24,16 +26,19 @@ export const create = mutation({
     const db = await ctx.db.get(args.databaseId);
     if (!db) return null;
     const props = db.properties as PropertyDef[];
-    const defaultNames: Record<string, string> = {
+    const defaultNames = {
       table: "Table",
       board: "Board",
       list: "List",
       calendar: "Calendar",
       timeline: "Timeline",
-    };
-    const doc: Record<string, unknown> = {
+    } satisfies Record<string, string>;
+    // SAFETY: `args.type` is unvalidated client input and may not be a
+    // recognized view type; the `?? "View"` fallback covers any key not
+    // actually present in `defaultNames`, so a wrong assertion is harmless.
+    const doc: WithoutSystemFields<Doc<"views">> = {
       databaseId: args.databaseId,
-      name: args.name ?? defaultNames[args.type] ?? "View",
+      name: args.name ?? defaultNames[args.type as keyof typeof defaultNames] ?? "View",
       type: args.type,
       order: Date.now(),
     };
@@ -47,7 +52,7 @@ export const create = mutation({
       const dateProp = props.find((p) => p.type === "date");
       if (dateProp) doc.datePropId = dateProp.id;
     }
-    return ctx.db.insert("views", doc as never);
+    return ctx.db.insert("views", doc);
   },
 });
 

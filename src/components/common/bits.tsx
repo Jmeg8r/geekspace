@@ -45,7 +45,7 @@ export function ProgressBar({ value, className }: { value: number; className?: s
   );
 }
 
-export const PROP_ICONS: Record<PropertyType, LucideIcon> = {
+export const PROP_ICONS = {
   title: Type,
   text: AlignLeft,
   number: Hash,
@@ -59,9 +59,9 @@ export const PROP_ICONS: Record<PropertyType, LucideIcon> = {
   rollup: Sigma,
   createdTime: Clock,
   updatedTime: Clock,
-};
+} satisfies Record<PropertyType, LucideIcon>;
 
-export const PROP_TYPE_LABELS: Record<PropertyType, string> = {
+export const PROP_TYPE_LABELS = {
   title: "Title",
   text: "Text",
   number: "Number",
@@ -75,15 +75,15 @@ export const PROP_TYPE_LABELS: Record<PropertyType, string> = {
   rollup: "Rollup",
   createdTime: "Created time",
   updatedTime: "Updated time",
-};
+} satisfies Record<PropertyType, string>;
 
-export const VIEW_ICONS: Record<ViewType, LucideIcon> = {
+export const VIEW_ICONS = {
   table: Table2,
   board: Kanban,
   list: List,
   calendar: CalendarDays,
   timeline: ChartGantt,
-};
+} satisfies Record<ViewType, LucideIcon>;
 
 export function Kbd({ children }: { children: string }) {
   return (

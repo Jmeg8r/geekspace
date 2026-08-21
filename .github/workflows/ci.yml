@@ -1,6 +1,6 @@
 name: CI
 
-# Runs the verify suite (typecheck + scheduler tests) on every PR and on main.
+# Runs the verify suite (lint + typecheck + scheduler tests) on every PR and on main.
 # Matrixed across ubuntu-latest and windows-latest; the job name is suffixed per-OS,
 # so use "Typecheck & tests (ubuntu-latest)" and "Typecheck & tests (windows-latest)"
 # as the required status checks in main's ruleset.
@@ -44,5 +44,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify (typecheck + tests)
+      - name: Verify (lint + typecheck + tests)
         run: npm run verify

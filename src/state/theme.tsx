@@ -15,10 +15,10 @@ const chromeBridge = () =>
 // caption buttons read as part of the app chrome instead of a stock white bar.
 // dark mirrors .dark's --bg/--ink (also the BrowserWindow ctor defaults in
 // electron/main.mjs); light mirrors :root's --sidebar/--ink.
-const OVERLAY_COLORS: Record<"dark" | "light", { color: string; symbolColor: string }> = {
+const OVERLAY_COLORS = {
   dark: { color: "#1A1A2E", symbolColor: "#E8E8F0" },
   light: { color: "#F2F3F5", symbolColor: "#363737" },
-};
+} satisfies Record<"dark" | "light", { color: string; symbolColor: string }>;
 
 export function ThemeProvider({ theme, children }: { theme: string; children: ReactNode }) {
   const [systemDark, setSystemDark] = useState(

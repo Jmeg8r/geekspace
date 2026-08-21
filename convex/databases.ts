@@ -76,7 +76,7 @@ export const addProperty = mutation({
 });
 
 function defaultPropName(type: string, existing: PropertyDef[]): string {
-  const base: Record<string, string> = {
+  const base = {
     text: "Text",
     number: "Number",
     select: "Select",
@@ -89,8 +89,11 @@ function defaultPropName(type: string, existing: PropertyDef[]): string {
     rollup: "Rollup",
     createdTime: "Created",
     updatedTime: "Updated",
-  };
-  const name = base[type] ?? "Property";
+  } satisfies Record<string, string>;
+  // SAFETY: `type` is unvalidated client input and may not be a recognized
+  // property type; the `?? "Property"` fallback covers any key not actually
+  // present in `base`, so a wrong assertion here cannot produce a bad label.
+  const name = base[type as keyof typeof base] ?? "Property";
   let candidate = name;
   let n = 1;
   while (existing.some((p) => p.name === candidate)) candidate = `${name} ${++n}`;

@@ -92,10 +92,7 @@ export async function listMicrophones(): Promise<MicDevice[]> {
  * reads "nothing saved" instead of silently restoring a previous device the user
  * deselected. Callers pass `deviceId || undefined` to openStream.
  */
-export function resolveMicChoice(
-  micId: string,
-  mics: MicDevice[]
-): { deviceId: string; label: string } {
+export function resolveMicChoice(micId: string, mics: MicDevice[]) {
   const chosen = mics.find((m) => m.deviceId === micId);
   return { deviceId: chosen?.deviceId ?? "", label: chosen?.label ?? "" };
 }
