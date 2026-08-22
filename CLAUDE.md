@@ -39,6 +39,23 @@ Advisory only for now — see `bin/review-pr.sh`. Draft list; expand as real pat
 - **No hardcoded secrets, tokens, or credentials** — even ones gitleaks' pattern list might miss
   (a user-specific auth cookie, an internal URL with an embedded key). Env vars or config files
   outside version control only.
+- **Audio/recording code fails loud, never silent, on a missing or dead input device.** A
+  recording path that can produce an empty file with no warning is the exact bug class already
+  found and fixed once here (`src/lib/recorder.ts`'s silence detection, "never record a silent
+  meeting without saying so"). New recording/transcription code needs the same discipline.
+- **New `Record<string, unknown>` (or any other type-erased dictionary) needs a real reason, not
+  convenience.** `no-unsafe-dictionary-type` is warn-only in oxlint with 8 known, deferred sites
+  (`convex/lib/types.ts`'s dynamic property bags — see `docs/anti-slop.md`); a PR adding a new one
+  should name the real value union instead of erasing to `unknown`.
+- **Ad hoc `typeof` checks on schemaless Convex data reuse the shared predicates**
+  (`convex/lib/predicates.ts`'s `isNumber`/`isString`), not a new inline `typeof x === "..."`.
+  19 sites were deliberately factored this way during the anti-slop adoption — a new inline
+  check re-introduces the pattern that was removed.
+- **New native-capability usage (mic, calendar, Mail, AppleEvents) needs a matching macOS
+  entitlement, not just an `Info.plist` usage-description string.** Under Hardened Runtime the
+  entitlement is what actually grants access — missing it fails silently on end-user machines
+  while working on an unsigned dev build, which is exactly what happened once already on this
+  repo (mic/AppleEvents entitlements). A renderer helper process must inherit them too.
 
 <!-- COMPOUND:START -->
 ## Compound Engineering Setup
