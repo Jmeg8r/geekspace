@@ -17,6 +17,29 @@ npm run package    # build + electron-builder --mac
 npm run package:win  # build + electron-builder --win (NSIS installer)
 ```
 
+## Review standards
+
+Checked by the forge's local AI review gate (`.forgejo/workflows/ai-review.yml`) on every PR.
+Advisory only for now — see `bin/review-pr.sh`. Draft list; expand as real patterns emerge.
+
+- **Electron IPC and preload must not leak Node/OS access to the renderer.** `contextIsolation`
+  stays on and `nodeIntegration` off; new `electron/preload.cjs` exposures need to be narrow,
+  named APIs — not passthroughs of `ipcRenderer`/`fs`/`child_process`.
+- **New type assertions need a `SAFETY:` comment stating the checked invariant.** The anti-slop
+  oxlint rule (`require-safety-comment-for-type-assertion`) is warning-only, not build-blocking —
+  this gate is where an unjustified `as` actually gets caught.
+- **Errors are never swallowed silently.** A caught error either surfaces to the user, logs with
+  enough context to debug, or is deliberately ignored with a one-line reason in the code — never
+  a bare empty `catch`.
+- **Convex mutations/queries validate untrusted input at the boundary**, not deep inside helper
+  functions — `convex/*.ts` handlers are the trust boundary between the client and the database.
+- **Cross-platform code (mac + win) accounts for both.** A change to `electron/`, `scripts/`, or
+  platform-specific packaging that only makes sense on one OS needs an explicit reason, not an
+  assumption.
+- **No hardcoded secrets, tokens, or credentials** — even ones gitleaks' pattern list might miss
+  (a user-specific auth cookie, an internal URL with an embedded key). Env vars or config files
+  outside version control only.
+
 <!-- COMPOUND:START -->
 ## Compound Engineering Setup
 
