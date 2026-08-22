@@ -1,0 +1,47 @@
+# WHAT: The forge's PR gate — local AI review of the change and its blast radius.
+# WHY:  Advisory only; merge-side enforcement is forge-pr's fail-closed policy (a
+#       verdict must EXIST at head; a FAIL needs --acknowledge-findings). The scripts
+#       it runs, bin/review-pr.sh and bin/blast-radius.py, are DEPLOYED COPIES from
+#       sovereign-forge bin/ — byte-identical on purpose so `diff` can verify them.
+#       Change them THERE and re-copy; never edit the copies here.
+name: ai-review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: arm64
+    steps:
+      - name: Check out the PR with full history
+        uses: actions/checkout@v4
+        with:
+          # The gate diffs against the base branch, so a shallow clone would leave it
+          # with nothing to compare and it would (correctly) refuse to review.
+          fetch-depth: 0
+
+      - name: Install the gate's dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq jq python3 curl git >/dev/null
+          echo "jq $(jq --version), python3 $(python3 --version)"
+
+      - name: Run the review
+        env:
+          # Forgejo mints a repo-scoped, per-run token automatically — deliberately not
+          # a personal token, since CI runs untrusted dependency code.
+          FORGE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BROKER_TOKEN: ${{ secrets.BROKER_TOKEN }}
+          FORGE_API: http://100.88.14.2:3300/api/v1
+          BROKER_URL: http://100.88.14.2:3401
+          REVIEW_REPO: ${{ github.repository }}
+          # This repo's CLAUDE.md is not numbered like sovereign-forge's — point the
+          # standards extraction at the named section the gate should read.
+          STANDARDS_BEGIN: '^## Review standards'
+          STANDARDS_END: '^## '
+        run: |
+          git fetch origin "${{ github.base_ref }}:${{ github.base_ref }}" || true
+          bin/review-pr.sh \
+            --pr "${{ github.event.number }}" \
+            --base "${{ github.base_ref }}"
