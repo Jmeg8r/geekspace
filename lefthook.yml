@@ -268,9 +268,19 @@ pre-commit:
         "$SCANNER" pre-commit-scan "$(git rev-parse --show-toplevel)"
 
     # Catch broken workflows before they burn Actions minutes on a flaky day.
+    #
+    # BOTH roots, deliberately. Forgejo silently ignores .github/workflows once
+    # .forgejo/workflows exists, so a forge-primary repo keeps its CI in
+    # .forgejo — where a .github-only glob matches nothing. lefthook then prints
+    # `lint-workflows (skip) no files for inspection` and the commit proceeds:
+    # in the hook summary a skipped gate is indistinguishable from a clean one,
+    # which is how this stayed dead on astgl-articles from its cutover onward.
+    #
+    # Verified on lefthook 2.1.10 — the brace alternation matches both roots and
+    # both extensions, and does NOT match a stray *.yml outside a workflows dir.
     lint-workflows:
       tags: lint
-      glob: ".github/workflows/*.{yml,yaml}"
+      glob: "{.github,.forgejo}/workflows/*.{yml,yaml}"
       run: actionlint -- {staged_files}
 
     # Keep the CodeRabbit config honest.
@@ -675,12 +685,57 @@ pre-push:
           bash scripts/gitleaks-guard.sh git --no-banner --redact
         fi
 
+    # Lint every workflow this repo actually ships, at BOTH roots.
+    #
+    # Forgejo SILENTLY ignores .github/workflows once .forgejo/workflows exists,
+    # so a repo that has cut over to the forge keeps its CI in .forgejo. Bare
+    # `actionlint` only auto-discovers .github/workflows, and the previous
+    # `-d .github/workflows` guard went FALSE on such a repo — so this job
+    # PASSED having linted ZERO files. Confirmed dead on astgl-articles from its
+    # cutover onward; mcp-techkb would have gone the same way on its.
+    #
+    # Two failure directions, both wrong. With the empty .github/workflows that
+    # `git mv` leaves behind, bare actionlint exits 3 ("no YAML file was found")
+    # and blocks for the wrong reason; on a clean checkout the guard is false and
+    # the job skips silently. Enumerating both roots explicitly fixes both.
+    #
+    # A zero-file scan is a FAILURE, not a pass. Every kit-provisioned repo gets
+    # a workflow — 10-repo-init.sh installs the secret-scan job — so zero files
+    # means it was deleted or moved somewhere neither root covers, and a check
+    # that scanned nothing is UNKNOWN, never clean. The N-examined count prints
+    # for the same reason: a bare green says nothing about what was in scope.
+    #
+    # `find` is run PER ROOT, guarded by an existence test, and its exit status is
+    # CHECKED. The earlier shape -- both roots in one call with `2>/dev/null || true`
+    # -- conflated two different things: a directory that is legitimately absent (the
+    # normal case on every repo that uses only one root) and a directory that exists
+    # but could not be READ. The second is a scan failure, and swallowing it
+    # reintroduces exactly what this job exists to prevent -- an unreadable active
+    # .forgejo/workflows beside a readable stale .github/workflows would lint the
+    # stale files and report success over partial coverage. Absent is skipped;
+    # unreadable BLOCKS. Nothing is redirected to /dev/null, so a real error stays
+    # visible on stderr.
     workflows:
       tags: lint
       run: |
-        if [ -d .github/workflows ]; then
-          actionlint
+        set -eu
+        files=""
+        for d in .github/workflows .forgejo/workflows; do
+          [ -d "$d" ] || continue
+          if ! found=$(find "$d" -maxdepth 1 -type f \
+                         \( -name '*.yml' -o -name '*.yaml' \)); then
+            echo "✗ workflow lint could not enumerate $d — a partial scan is not a pass"
+            exit 1
+          fi
+          [ -n "$found" ] || continue
+          if [ -n "$files" ]; then files=$(printf '%s\n%s' "$files" "$found"); else files="$found"; fi
+        done
+        if [ -z "$files" ]; then
+          echo "✗ workflow lint scanned ZERO files — expected .forgejo/workflows or .github/workflows"
+          exit 1
         fi
+        printf '%s\n' "$files" | tr '\n' '\0' | xargs -0 actionlint --
+        echo "  actionlint: linted $(printf '%s\n' "$files" | grep -c .) workflow file(s)"
 
     # The binary secret gate is itself testable, so test it. A scanner nobody
     # verifies is how the original hole survived review in the first place.
