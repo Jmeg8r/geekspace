@@ -398,12 +398,38 @@ fi
 # verdict only, for the same reason the check above is — a partial concerns/fail already
 # stops at forge-pr, and killing it here would cost the human its findings.
 OVERCOUNTED=$(jq -r '.examined_overcounted' "$V")
-if [ "$VERDICT" = "pass" ] && [ "$OVERCOUNTED" != "false" ]; then
-  if [ "$OVERCOUNTED" = "true" ]; then
-    die "broker clamped an overcounted files_examined to $EXAMINED — the model claimed to read more files than it was supplied, so the count is not evidence of coverage and a clean verdict on it is UNKNOWN, not a pass"
-  fi
-  die "broker did not report examined_overcounted (got '$OVERCOUNTED') — this gate cannot confirm $EXAMINED was not a clamped overcount, and an unconfirmable count is UNKNOWN, not a pass"
-fi
+case "$OVERCOUNTED" in
+  false) : ;;
+  # REPORTED, not fatal — downgraded once files_examined_changed existed. When this
+  # guard was written the AGGREGATE count was the only coverage signal there was, so a
+  # clamped overcount destroyed the evidence entirely and refusing was right. It is no
+  # longer the only signal: the changed-scoped count below is checked separately and
+  # carries its own overcount flag, which stays fatal. What is left here is a model that
+  # cannot count, and the clamp already bounds its claim to the true supplied total —
+  # the error direction is "read MORE than I was given", never less.
+  #
+  # Measured before downgrading: 14 of 613 cached verdicts (2%) carry this flag, and the
+  # cache key includes the request, so a PR that trips it stays blocked until someone
+  # pushes an empty commit to force a re-judge. Hard-failing 2% of PRs on the model's
+  # arithmetic, with recovery only by fabricating a commit, is not proportionate to a
+  # signal that is now redundant. Live example: geekspace PR #23, blocked on
+  # "examined 3/3" with the model claiming more.
+  true)  echo "   NOTE: broker clamped an overcounted files_examined to $EXAMINED — the aggregate self-report is unusable; coverage rests on the changed-file count checked below" ;;
+  # ABSENT stays fatal. That is schema drift between two processes with no shared
+  # contract, not a model miscount, and it is the case where this client genuinely
+  # cannot tell what it is looking at.
+  # ABSENT stays fatal, but ONLY on a merge-eligible verdict. Rewriting this check as a
+  # case dropped the "$VERDICT" = pass guard the previous `if` carried, which made schema
+  # drift kill a concerns/fail run before section 6 could post its findings — discarding
+  # actionable review output to prevent a merge that a non-pass verdict already prevents
+  # at forge-pr. That is the same trade the two checks above refuse to make (Codex [P2]).
+  *)
+    if [ "$VERDICT" = "pass" ]; then
+      die "broker did not report examined_overcounted (got '$OVERCOUNTED') — this gate cannot confirm $EXAMINED was not a clamped overcount, and an unconfirmable count is UNKNOWN, not a pass"
+    fi
+    echo "   NOTE: broker did not report examined_overcounted (got '$OVERCOUNTED') — coverage is unconfirmable, but the '$VERDICT' verdict already blocks the merge, so the findings are posted rather than discarded"
+    ;;
+esac
 # The changed-file count is clamped by the same broker for the same reason, so it carries
 # the same blind spot and needs the same flag. A model claiming it read 9 of 3 changed
 # files is pinned to 3, which then clears the "read every changed file" check above on a
@@ -437,11 +463,33 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
   --argjson changed "${#CHANGED[@]}" '
   "## 🤖 Local AI review — **" + (.verdict|ascii_upcase) + "**\n\n" +
   "`" + $sha + "` · model `" + .model + "` · " +
-  (.files_examined|tostring) + "/" + (.files_supplied_total|tostring) + " supplied file(s) examined · " +
+  (.files_examined|tostring) + "/" + (.files_supplied_total|tostring) + " supplied file(s) examined" +
+  (if .examined_overcounted == true then " ⚠️ (clamped — unreliable)"
+   elif .examined_overcounted != false then " ⚠️ (unconfirmed)"
+   else "" end) + " · " +
   (.files_examined_changed|tostring) + "/" + ($changed|tostring) + " changed file(s) read · " +
   $br + " dependent(s) from " + $scanned + " scanned · " +
   (.standards_checked|tostring) + "/" + (.standards_supplied|tostring) + " project standards checked" +
   (if .cached then " · _cached verdict_" else "" end) + "\n\n" +
+  # The console NOTE is ephemeral; THIS is the artifact a human and forge-pr actually
+  # read. Without it the comment presents a clamped N/N as full coverage, and the
+  # unread-context warning cannot fire either because the clamp made the numbers equal —
+  # the durable record would state more than the gate knows (Codex [P2]).
+  # Both untrustworthy shapes get the caveat, not just the clamp. An ABSENT flag reaches
+  # this point only on a non-pass verdict (a PASS dies upstream), and that path continues
+  # ON PURPOSE so the findings survive -- but continuing while the comment renders an
+  # ordinary N/N would hand the reader a coverage claim nothing verified. Same principle
+  # as the clamp case, same gap otherwise (Codex [P2]).
+  (if .examined_overcounted == true then
+     "> ⚠️ The model reported reading more files than it was supplied, so the broker " +
+     "clamped the aggregate count above and it is **not** evidence of coverage. The " +
+     "changed-file count beside it is validated separately and is what this verdict " +
+     "rests on.\n\n"
+   elif .examined_overcounted != false then
+     "> ⚠️ The broker did not report whether the aggregate count above was clamped, so " +
+     "this gate could not confirm it. The findings below stand; the coverage ratio does " +
+     "not.\n\n"
+   else "" end) +
   (if (.findings|length) == 0 then "No findings in the changed code or its blast radius.\n"
    else ((.findings | map(
      "### " + (if .severity=="critical" then "🔴" elif .severity=="major" then "🟠" else "🟡" end) +
