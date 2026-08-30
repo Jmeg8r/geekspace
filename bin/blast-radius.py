@@ -120,6 +120,47 @@ PY_FAMILY_SUFFIX = {".py", ".pyi"}
 # measured and is not viable: word-boundary "re" hits 16 of 30 tracked files here and
 # "db" 19 of 50 in mcp-techkb.
 DYNAMIC_IMPORT_CALLS = {"import_module", "__import__"}
+# Which loader each MODULE provides, and therefore which `<ns>.<attr>` spellings name
+# one. A table over the whole input domain rather than an equality check on a single
+# spelling: `<ns>.__import__` was rejected outright, so an importer of a one- or
+# two-character module written that way disappeared entirely -- the name is below
+# word_token's floor and the literal tokens hold only the filename, so the target
+# reported ZERO dependents, the exact failure this resolver exists to prevent (Codex
+# [P2] on mcp-techkb PR #18, 2026-08-29).
+#
+# `importlib.__import__` is in here because it EXISTS -- verified against the
+# interpreter: present, same five-argument signature, and it really imports. Codex
+# named only the `builtins` spelling; the same miss in code that already imports
+# importlib is the other half of the same class, and fixing the reported instance
+# alone would have left it.
+#
+# DELIBERATELY NOT ACCEPTED, all three for the same reason -- there is no BINDING to
+# check, only a value to track:
+#   getattr(<ns>, "__import__")     a computed attribute name, which is the answer
+#                                   this resolver already gives every computed name
+#                                   (an interpolated JS specifier, import_module(f())).
+#   <ns>.__dict__["__import__"],    subscripts of an opaque container; resolving them
+#   sys.modules["builtins"].…       is value-flow analysis, the same class of tool
+#                                   _loader_bindings already declines for scope.
+#   __builtins__.__import__         verified against the interpreter: `__builtins__`
+#                                   is a DICT in any imported module and a module only
+#                                   in __main__, so outside a directly-run script that
+#                                   spelling is an AttributeError, not an import. It is
+#                                   also a CPython implementation detail no import
+#                                   statement ever binds, so nothing could be proven
+#                                   about it even in the case where it works.
+#
+# SELF-REFERENCE, measured not assumed: the key "builtins" is a word_token match, so a
+# repo file named builtins.py now counts THIS file as a dependent where it did not
+# before (measured: PRE [] -> POST [bin/blast-radius.py]). Accepted, and already the
+# documented policy -- importlib.py, ast.py and json.py have the same property today
+# for the same reason, and word_token below states why a stem shadowing a preloaded
+# stdlib module is knowingly not excluded. The name cannot be spelled any other way
+# without making the binding check unreadable, and the direction is over-report.
+LOADER_MODULE_ATTRS = {
+    "importlib": frozenset({"import_module", "__import__"}),
+    "builtins": frozenset({"__import__"}),
+}
 # PEP 561: a stub-only distribution ships `<name>-stubs/`, and what it provides stubs
 # FOR is `<name>` -- that is the only name an importer ever writes. Carrying the
 # directory name through unchanged derives a form with a hyphen in it, which is not a
@@ -360,10 +401,52 @@ def _literal_str(node: ast.expr | None) -> str | None:
     return None
 
 
-def _loader_bindings(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
-    """Which names in this file actually refer to importlib's loader, and WHICH one.
+def _module_loader(fn: ast.Attribute, modules_ns: dict[str, set[str]]) -> str | None:
+    """Which loader `<ns>.<attr>` names, or None when it names none.
 
-    The second value maps a bound name to the loader it names, not merely to the fact
+    The accepted shape stated once, over the whole domain: `<ns>` must be a name an
+    import statement IN THIS FILE bound to a loader module, and `<attr>` must be a
+    loader that module actually provides (LOADER_MODULE_ATTRS). Both halves are needed
+    and neither is new -- the module check is the same one that keeps a project's own
+    registry helper named `import_module` from being read as a Python import, and the
+    attribute check is what an equality test against a single spelling was standing in
+    for. Shared by the call site and the alias loop so the two cannot drift: an alias
+    of a spelling the caller accepts must be accepted too, or `imp = builtins.__import__`
+    is a miss the direct call is not.
+
+    ANY of the name's candidate modules satisfies it, which is what makes the set a set.
+    A file is read per FILE, not per lexical scope (see _loader_bindings), so one name
+    can carry two bindings -- `import importlib as loader` at module level and
+    `import builtins as loader` inside a function. Recording only the last one ast.walk
+    reached let the inner binding erase the outer, and the top-level
+    `loader.import_module("q")` was then rejected for naming an attribute `builtins`
+    does not provide: a real importer of a one-character module DISAPPEARED, which is
+    the very failure the qualified-spelling fix was written to close (Codex [P2] on
+    PR #66, caught before merge; measured pre-fix ['shadowed.py'] -> post-fix []).
+    Union, not scope analysis, for the reason _loader_bindings already gives: resolving
+    it properly is Python name-binding analysis, and the residual error here is an
+    over-match, the direction this resolver accepts everywhere else.
+    """
+    if not isinstance(fn.value, ast.Name):
+        return None
+    mods = modules_ns.get(fn.value.id)
+    if not mods or not any(fn.attr in LOADER_MODULE_ATTRS[m] for m in mods):
+        return None
+    return fn.attr
+
+
+def _loader_bindings(tree: ast.AST) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Which names in this file actually refer to a module loader, and WHICH ones.
+
+    Both values map a bound name to a SET, and for one reason: a file is read per
+    FILE, not per lexical scope, so one name can carry two bindings at once and the
+    later must not erase the earlier. Keeping a single value collapsed them by
+    ast.walk order and silently discarded a real call -- once on the module axis and
+    again on the kind axis after only the first was fixed (Codex [P2], both rounds on
+    PR #66). The residual error is an over-match, which is the direction this resolver
+    accepts everywhere else.
+
+    The second value maps a bound name to the loaders it names, not merely to the fact
     that it names one. The two loaders take different arguments -- `import_module`
     resolves a relative name against `package`, `__import__` against `level` -- so a
     set of names loses exactly the thing the caller needs: an alias of `__import__`
@@ -383,19 +466,34 @@ def _loader_bindings(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
     dependency heuristic, and the failure is an over-match, the direction this
     resolver accepts everywhere else.
     """
-    modules_ns: set[str] = set()               # names bound to the importlib MODULE
-    kinds = {"__import__": "__import__"}       # bound name -> which loader it is
+    # bound name -> every loader MODULE it names. A SET because one name can be bound
+    # twice in a file read per-file rather than per-scope, and the later binding must
+    # not erase the earlier one.
+    modules_ns: dict[str, set[str]] = {}
+    # bound name -> every loader KIND it names. A set for the same reason modules_ns
+    # is one, and it must be BOTH: fixing only the module map left the identical
+    # collapse one axis over, where `from importlib import import_module as load` and
+    # an inner `from builtins import __import__ as load` reduced `load` to whichever
+    # ast.walk reached last (Codex [P2], second round on PR #66).
+    kinds: dict[str, set[str]] = {"__import__": {"__import__"}}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for a in node.names:
-                if a.name == "importlib" or a.name.startswith("importlib."):
-                    # `import importlib.util` binds the ROOT name, not the dotted one.
-                    modules_ns.add(a.asname or a.name.split(".")[0])
-        elif (isinstance(node, ast.ImportFrom) and node.module == "importlib"
-              and not node.level):
+                # `import importlib.util` binds the ROOT name, not the dotted one.
+                root = a.name.split(".")[0]
+                if root in LOADER_MODULE_ATTRS:
+                    modules_ns.setdefault(a.asname or root, set()).add(root)
+        elif (isinstance(node, ast.ImportFrom) and not node.level
+              and node.module in LOADER_MODULE_ATTRS):
             for a in node.names:
-                if a.name == "import_module":
-                    kinds[a.asname or a.name] = "import_module"
+                # The attribute names ARE the kind strings, so no mapping is needed --
+                # and reading the table rather than one hard-coded name is what lets
+                # `from builtins import __import__ as imp` bind, the same way
+                # `from importlib import import_module as im` already did. Unaliased it
+                # would work by luck, since `kinds` is seeded with the builtin; aliased
+                # it was a miss.
+                if a.name in LOADER_MODULE_ATTRS[node.module]:
+                    kinds.setdefault(a.asname or a.name, set()).add(a.name)
     # `load = importlib.import_module` then `load("<mod>")` is an ordinary plugin
     # pattern, and missing it is a MISS -- the dangerous direction -- because a name
     # short enough to need this route is excluded from word_token by design (Codex
@@ -413,18 +511,22 @@ def _loader_bindings(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
                 targets, v = [node.target], node.value
             else:
                 continue
-            if (isinstance(v, ast.Attribute) and v.attr == "import_module"
-                    and isinstance(v.value, ast.Name) and v.value.id in modules_ns):
-                kind = "import_module"
+            if isinstance(v, ast.Attribute):
+                k = _module_loader(v, modules_ns)
+                new_kinds = {k} if k else set()
             elif isinstance(v, ast.Name):
-                kind = kinds.get(v.id)          # carries the ORIGIN's kind along
+                new_kinds = kinds.get(v.id, set())   # carries the ORIGIN's kinds along
             else:
-                kind = None
-            if not kind:
+                new_kinds = set()
+            if not new_kinds:
                 continue
             for tgt in targets:
-                if isinstance(tgt, ast.Name) and tgt.id not in kinds:
-                    kinds[tgt.id] = kind
+                # UNION, not first-wins: an alias rebound in another scope adds a
+                # candidate rather than being ignored, the same way modules_ns now
+                # accumulates. Termination is unchanged -- `grew` is set only when a
+                # kind is genuinely added, and there are two kinds in total.
+                if isinstance(tgt, ast.Name) and not new_kinds <= kinds.get(tgt.id, set()):
+                    kinds.setdefault(tgt.id, set()).update(new_kinds)
                     grew = True
         if not grew:
             break
@@ -452,7 +554,8 @@ def _with_fromlist(node: ast.Call, parts: list[str], fname: str) -> set[str]:
 
 
 def _dynamic_module(node: ast.Call, here: list[str],
-                    modules_ns: set[str], kinds: dict[str, str]) -> set[str]:
+                    modules_ns: dict[str, set[str]],
+                    kinds: dict[str, set[str]]) -> set[str]:
     """The modules a loader CALL names. Empty when it names nothing resolvable.
 
     A SET, not one name, because `__import__` takes a FROMLIST:
@@ -461,6 +564,13 @@ def _dynamic_module(node: ast.Call, here: list[str],
     name short enough to need this route the source never contains the qualified form
     either, so it was a miss with nothing to fall back on (Codex [P2], fifth round on
     PR #58).
+
+    A loader is recognised by WHICH LOADER IT IS, never by how it was spelled --
+    `__import__`, `builtins.__import__`, `importlib.__import__` and an alias of any of
+    them are one call taking one set of arguments. Accepting only the bare name and
+    `importlib.import_module` made a module-qualified `__import__` fall through, and
+    for a one- or two-character module that is not a degradation but a disappearance:
+    nothing else in the file spells the name (Codex [P2] on mcp-techkb PR #18).
 
     The two loaders spell "relative" differently and neither infers the caller's
     package the way an import statement does. Verified against the interpreter rather
@@ -471,14 +581,27 @@ def _dynamic_module(node: ast.Call, here: list[str],
     """
     fn = node.func
     if isinstance(fn, ast.Attribute):
-        if not (fn.attr == "import_module"
-                and isinstance(fn.value, ast.Name) and fn.value.id in modules_ns):
-            return set()
-        fname = "import_module"
-    elif isinstance(fn, ast.Name) and fn.id in kinds:
-        fname = kinds[fn.id]   # the loader it NAMES, not the name it was given
+        # The table decides, not an equality test against one spelling. Which loader
+        # the attribute names then flows through unchanged: `<ns>.__import__` gets the
+        # level/globals/fromlist contract below, `<ns>.import_module` the package one.
+        # An attribute names exactly one loader -- the attribute IS the name -- so this
+        # side never has more than one candidate however many modules `<ns>` may mean.
+        fname = _module_loader(fn, modules_ns)
+        names = {fname} if fname else set()
+    elif isinstance(fn, ast.Name):
+        names = kinds.get(fn.id, set())   # the loaders it NAMES, not the name it got
     else:
         return set()
+    # Resolved under EACH candidate and unioned. A name carrying two kinds is a
+    # per-file read of two scopes, and picking one of them is how the outer call got
+    # discarded; trying both costs an over-match on a file that already had two
+    # loaders bound to one name, and misses nothing.
+    return set().union(*(_loader_call(node, here, f) for f in names)) if names else set()
+
+
+def _loader_call(node: ast.Call, here: list[str], fname: str) -> set[str]:
+    """The modules ONE loader kind reads out of this call. Split from the candidate
+    selection above so a name bound to both kinds can be resolved under each."""
     # `is None`, not falsiness: a literal EMPTY name is meaningful. `from . import
     # <mod>` compiles to `__import__("", globals(), locals(), ("<mod>",), 1)`, and a
     # loader written that way is an ordinary importer -- conflating "no literal
