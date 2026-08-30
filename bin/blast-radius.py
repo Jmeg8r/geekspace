@@ -109,6 +109,25 @@ MAX_FILE_BYTES = 512_000
 # Files whose relative import specifiers get resolved structurally. Everything not in
 # this set stays on literal-reference matching.
 JS_FAMILY_SUFFIX = {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+# Files that ARE an importable Python module, in both directions: whose own path yields
+# a module name, and whose imports get read. Both, because they are one claim -- a stub
+# is imported by the same name as the module it describes, so resolving one direction
+# without the other reports zero dependents for every changed stub.
+PY_FAMILY_SUFFIX = {".py", ".pyi"}
+# A module named by a STRING at a loader call rather than by the import grammar. The
+# quotes make the name unambiguous at ANY length, which is what makes this the right
+# route for a name too short for word_token's floor -- lowering that floor instead was
+# measured and is not viable: word-boundary "re" hits 16 of 30 tracked files here and
+# "db" 19 of 50 in mcp-techkb.
+DYNAMIC_IMPORT_CALLS = {"import_module", "__import__"}
+# PEP 561: a stub-only distribution ships `<name>-stubs/`, and what it provides stubs
+# FOR is `<name>` -- that is the only name an importer ever writes. Carrying the
+# directory name through unchanged derives a form with a hyphen in it, which is not a
+# valid identifier and so can never match any import: the target resolved to nothing
+# usable and reported zero dependents (Codex [P2] on PR #58, 2026-08-29). Stripping it
+# cannot introduce a false match for the same reason -- the un-stripped form was
+# unmatchable to begin with.
+STUBS_DIR_SUFFIX = "-stubs"
 # What an importer WRITES -> the source extensions NodeNext maps it onto. A table,
 # not a blanket: the mapping is per-extension in BOTH directions. '.mjs' must reach a
 # '.d.mts' declaration, and must NOT claim a same-stem '.ts' that TypeScript would
@@ -223,6 +242,35 @@ def literal_tokens(rel: str, basename_counts: dict[str, int]) -> list[str]:
     return [t for t in toks if len(t) > 2]
 
 
+def _strip_stubs(parts: list[str]) -> list[str]:
+    """PEP 561's `<name>-stubs` -> `<name>`, stated once so both sides agree.
+
+    Applied to the TARGET's own path and to an IMPORTER's package alike. Normalizing
+    only one side is worse than normalizing neither: the two derivations then disagree
+    and a stub package's own sibling imports match nothing at all (Codex [P2], third
+    round on PR #58). The suffix cannot be part of a real module name -- a hyphen is
+    not valid in an identifier -- so this can only ever turn an unmatchable form into
+    a matchable one.
+    """
+    n = len(STUBS_DIR_SUFFIX)
+    return [c[:-n] if c.endswith(STUBS_DIR_SUFFIX) else c for c in parts]
+
+
+def _module_parts(p: Path) -> list[str]:
+    """The path components a module's dotted name is built from.
+
+    Shared so module_dotted_forms() and word_token() cannot disagree about what a file
+    is called -- they derived it separately, and a rule added to one silently did not
+    reach the other.
+    """
+    parts = list(p.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]  # the package IS its directory
+    if p.suffix == ".pyi":
+        parts = _strip_stubs(parts)
+    return [c for c in parts if c]
+
+
 def module_dotted_forms(rel: str) -> set[str]:
     """Every dotted name a Python file could be imported by. Empty for a non-.py file.
 
@@ -236,11 +284,9 @@ def module_dotted_forms(rel: str) -> set[str]:
     never writes it, so the file's own stem names nothing.
     """
     p = Path(rel)
-    if p.suffix != ".py":
+    if p.suffix not in PY_FAMILY_SUFFIX:
         return set()
-    parts = list(p.with_suffix("").parts)
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]  # the package IS its directory
+    parts = _module_parts(p)
     return {".".join(parts[i:]) for i in range(len(parts)) if parts[i:]}
 
 
@@ -256,11 +302,9 @@ def word_token(rel: str) -> str | None:
     substring: "widget" matches `python -m widget` and not the word "widgets".
     """
     p = Path(rel)
-    if p.suffix != ".py":
+    if p.suffix not in PY_FAMILY_SUFFIX:
         return None
-    parts = list(p.with_suffix("").parts)
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
+    parts = _module_parts(p)
     if not parts:
         return None
     name = parts[-1]
@@ -288,6 +332,213 @@ def word_token(rel: str) -> str | None:
     return name
 
 
+def _arg(call: ast.Call, pos: int, kw: str) -> ast.expr | None:
+    """One argument of a call, written either positionally or by keyword."""
+    if len(call.args) > pos:
+        return call.args[pos]
+    for keyword in call.keywords:
+        if keyword.arg == kw:
+            return keyword.value
+    return None
+
+
+def _dict_value(node: ast.expr | None, key: str) -> ast.expr | None:
+    """The value a DICT LITERAL gives `key`, or None when it is not one or lacks it."""
+    if not isinstance(node, ast.Dict):
+        return None
+    for k, v in zip(node.keys, node.values):
+        if isinstance(k, ast.Constant) and k.value == key:
+            return v
+    return None
+
+
+def _literal_str(node: ast.expr | None) -> str | None:
+    """The string a node IS, or None. A computed name resolves to nothing at rest --
+    the same answer this resolver already gives an interpolated JS specifier."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _loader_bindings(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
+    """Which names in this file actually refer to importlib's loader, and WHICH one.
+
+    The second value maps a bound name to the loader it names, not merely to the fact
+    that it names one. The two loaders take different arguments -- `import_module`
+    resolves a relative name against `package`, `__import__` against `level` -- so a
+    set of names loses exactly the thing the caller needs: an alias of `__import__`
+    read as an `import_module` looks at the wrong argument and drops the call
+    (Codex [P2], second round on PR #58).
+
+    Matching any call whose last identifier happens to be `import_module` treats a
+    project's own registry helper as a Python import, and for a short target that
+    invents a dependent out of unrelated code. `from .importlib import import_module`
+    is likewise a package's OWN helper, which is why the level is checked and not just
+    the module name. `__import__` needs no binding: it is a builtin, always in scope.
+
+    Read per FILE, not per lexical scope, so a name deliberately shadowing importlib
+    (a parameter or local of that name) is still read as the loader. Declined rather
+    than overlooked: resolving that is Python name-binding analysis -- scope stacks,
+    parameters, comprehensions, class bodies -- which is a different tool from a
+    dependency heuristic, and the failure is an over-match, the direction this
+    resolver accepts everywhere else.
+    """
+    modules_ns: set[str] = set()               # names bound to the importlib MODULE
+    kinds = {"__import__": "__import__"}       # bound name -> which loader it is
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "importlib" or a.name.startswith("importlib."):
+                    # `import importlib.util` binds the ROOT name, not the dotted one.
+                    modules_ns.add(a.asname or a.name.split(".")[0])
+        elif (isinstance(node, ast.ImportFrom) and node.module == "importlib"
+              and not node.level):
+            for a in node.names:
+                if a.name == "import_module":
+                    kinds[a.asname or a.name] = "import_module"
+    # `load = importlib.import_module` then `load("<mod>")` is an ordinary plugin
+    # pattern, and missing it is a MISS -- the dangerous direction -- because a name
+    # short enough to need this route is excluded from word_token by design (Codex
+    # [P2] on PR #58, 2026-08-29). Iterated to a fixed point so a second hop
+    # (`a = importlib.import_module` then `b = a`) resolves too; bounded by the number
+    # of assignments, since each pass either adds a name or stops.
+    # AnnAssign as well as Assign: `load: Callable = importlib.import_module` is an
+    # ordinary annotated alias, and reading only the bare form dropped it.
+    for _ in range(len(kinds) + 8):
+        grew = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets, v = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, v = [node.target], node.value
+            else:
+                continue
+            if (isinstance(v, ast.Attribute) and v.attr == "import_module"
+                    and isinstance(v.value, ast.Name) and v.value.id in modules_ns):
+                kind = "import_module"
+            elif isinstance(v, ast.Name):
+                kind = kinds.get(v.id)          # carries the ORIGIN's kind along
+            else:
+                kind = None
+            if not kind:
+                continue
+            for tgt in targets:
+                if isinstance(tgt, ast.Name) and tgt.id not in kinds:
+                    kinds[tgt.id] = kind
+                    grew = True
+        if not grew:
+            break
+    return modules_ns, kinds
+
+
+def _with_fromlist(node: ast.Call, parts: list[str], fname: str) -> set[str]:
+    """The module a call names, plus any submodules a literal fromlist asks for.
+
+    `__import__("<pkg>", fromlist=("<mod>",))` imports <pkg>.<mod>; import_module has
+    no fromlist. A non-literal entry, and the "*" wildcard, name nothing at rest --
+    the same answer every other computed name here gets.
+    """
+    if not parts:
+        return set()
+    base = ".".join(parts)
+    out = {base}
+    if fname != "__import__":
+        return out
+    fl = _arg(node, 3, "fromlist")
+    if isinstance(fl, (ast.Tuple, ast.List, ast.Set)):
+        out.update(f"{base}.{v}" for v in (_literal_str(e) for e in fl.elts)
+                   if v and v != "*")
+    return out
+
+
+def _dynamic_module(node: ast.Call, here: list[str],
+                    modules_ns: set[str], kinds: dict[str, str]) -> set[str]:
+    """The modules a loader CALL names. Empty when it names nothing resolvable.
+
+    A SET, not one name, because `__import__` takes a FROMLIST:
+    `__import__("<pkg>", fromlist=("<mod>",))` imports `<pkg>.<mod>`, and recording
+    only `<pkg>` loses the submodule that is the actual subject of the call. For a
+    name short enough to need this route the source never contains the qualified form
+    either, so it was a miss with nothing to fall back on (Codex [P2], fifth round on
+    PR #58).
+
+    The two loaders spell "relative" differently and neither infers the caller's
+    package the way an import statement does. Verified against the interpreter rather
+    than assumed: `import_module(".<mod>")` with no package raises TypeError, and
+    `__import__(".<mod>")` looks for a module literally so named. Resolving either
+    against the importer's own location would invent a dependent for a call that
+    cannot load anything.
+    """
+    fn = node.func
+    if isinstance(fn, ast.Attribute):
+        if not (fn.attr == "import_module"
+                and isinstance(fn.value, ast.Name) and fn.value.id in modules_ns):
+            return set()
+        fname = "import_module"
+    elif isinstance(fn, ast.Name) and fn.id in kinds:
+        fname = kinds[fn.id]   # the loader it NAMES, not the name it was given
+    else:
+        return set()
+    # `is None`, not falsiness: a literal EMPTY name is meaningful. `from . import
+    # <mod>` compiles to `__import__("", globals(), locals(), ("<mod>",), 1)`, and a
+    # loader written that way is an ordinary importer -- conflating "no literal
+    # argument" with "the empty string" dropped it before the level or the fromlist
+    # was ever read (Codex [P2], sixth round on PR #58). Verified against the
+    # interpreter: that call imports <pkg>.<mod>, and the same call at level 0 is a
+    # ValueError, which is why empty is accepted ONLY with a positive level.
+    mod = _literal_str(_arg(node, 0, "name"))
+    if mod is None:
+        return set()
+
+    if fname == "__import__":
+        # Relative only via `level`, its fifth argument -- never by a leading dot.
+        if mod.startswith("."):
+            return set()
+        lvl = _arg(node, 4, "level")
+        level = (lvl.value if isinstance(lvl, ast.Constant)
+                 and isinstance(lvl.value, int) and not isinstance(lvl.value, bool)
+                 else 0)
+        # A relative __import__ takes its package from the GLOBALS it is handed, not
+        # from where the call is written -- verified against the interpreter:
+        # `__import__("<mod>", {"__package__": "<other>"}, None, (), 1)` loads
+        # <other>.<mod> from anywhere. So a dict literal saying so wins over the
+        # caller's own location (Codex [P2], fourth round on PR #58).
+        # An OPAQUE globals expression still falls back to the caller's location, and
+        # deliberately: in real code that argument is the caller's own globals, and
+        # refusing to resolve it would trade an exotic misattribution for an ordinary
+        # miss -- the direction that lets a breaking change through.
+        if not mod and not level:
+            return set()  # `__import__("")` at level 0 is a ValueError, not an import
+        base = list(here) if level else []
+        named_pkg = _literal_str(_dict_value(_arg(node, 1, "globals"), "__package__"))
+        if level and named_pkg is not None:
+            base = named_pkg.split(".") if named_pkg else []
+    else:
+        if not mod:
+            return set()  # import_module has no empty-name form
+        if not mod.startswith("."):
+            return _with_fromlist(node, [mod], fname)
+        # import_module resolves a relative name against `package`, and REQUIRES one.
+        pkg_arg = _arg(node, 1, "package")
+        pkg = _literal_str(pkg_arg)
+        if pkg:
+            base = pkg.split(".")
+        elif isinstance(pkg_arg, ast.Name) and pkg_arg.id == "__package__":
+            # The canonical spelling, and the only non-literal package worth resolving:
+            # at module scope `__package__` IS the importer's own package.
+            base = list(here)
+        else:
+            return set()
+        level = len(mod) - len(mod.lstrip("."))
+        mod = mod.lstrip(".")
+
+    climb = max(level - 1, 0)
+    if climb > len(base):
+        return set()  # climbs out of the repo: names nothing in it
+    parts = base[:len(base) - climb] + ([mod] if mod else [])
+    return _with_fromlist(node, parts, fname)
+
+
 def imported_names(text: str, rel: str) -> set[str] | None:
     """The dotted module names a Python source imports, via AST — or None when it will
     not parse, in which case the caller falls back to literal matching alone.
@@ -304,9 +555,24 @@ def imported_names(text: str, rel: str) -> set[str] | None:
         tree = ast.parse(text)
     except (SyntaxError, ValueError):
         return None
-    pkg_parts = list(Path(rel).parent.parts)
+    ip = Path(rel)
+    pkg_parts = list(ip.parent.parts)
+    if pkg_parts == ["."]:
+        pkg_parts = []
+    if ip.suffix == ".pyi":
+        # The same normalization the target side does -- a relative import inside a
+        # stub package resolves under the name the package PROVIDES stubs for.
+        pkg_parts = _strip_stubs(pkg_parts)
+    modules_ns, loader_kinds = _loader_bindings(tree)
     names: set[str] = set()
     for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            # A module named by a literal string at a loader call. For a name too short
+            # for word_token's floor this is the ONLY place it appears, so without it a
+            # real plugin loader is invisible while the same call is found for any
+            # longer name.
+            names |= _dynamic_module(node, pkg_parts, modules_ns, loader_kinds)
+            continue
         if isinstance(node, ast.Import):
             for a in node.names:
                 names.add(a.name)
@@ -413,7 +679,8 @@ def find_dependents(root: Path, targets: list[str],
     # pkg.sub` and `from pkg.sub import X` both execute it -- so an importer whose name
     # merely STARTS with the package form is a real dependent of the initializer. Module
     # targets stay exact; only package targets match by prefix.
-    pkg_map = {t: Path(t).name == "__init__.py" for t in targets}
+    pkg_map = {t: Path(t).stem == "__init__" and Path(t).suffix in PY_FAMILY_SUFFIX
+               for t in targets}
     deps: dict[str, set] = {t: set() for t in targets}
     scanned, errors = 0, []
 
@@ -446,7 +713,8 @@ def find_dependents(root: Path, targets: list[str],
         # AST imports for a .py dependent, resolved once per FILE like the JS
         # specifiers above. None when the file will not parse, in which case the
         # literal check below is the only signal -- the conservative fallback.
-        imports = imported_names(text, rel) if f.suffix == ".py" else None
+        imports = (imported_names(text, rel)
+                   if f.suffix in PY_FAMILY_SUFFIX else None)
         for t, tokens in token_map.items():
             wrx = word_map.get(t)
             named = (t in resolved or any(tok in text for tok in tokens)

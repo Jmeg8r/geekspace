@@ -314,8 +314,9 @@ if [ "$VERDICT" = "error" ] || [ "$code" != "200" ]; then
 fi
 
 EXAMINED=$(jq -r .files_examined "$V"); SUBMITTED=$(jq -r .files_supplied_total "$V")
+EXAMINED_CHANGED=$(jq -r .files_examined_changed "$V")
 FINDINGS=$(jq '.findings | length' "$V")
-echo "   verdict: $VERDICT — $FINDINGS finding(s), examined $EXAMINED/$SUBMITTED supplied file(s)"
+echo "   verdict: $VERDICT — $FINDINGS finding(s), examined $EXAMINED/$SUBMITTED supplied file(s) ($EXAMINED_CHANGED/${#CHANGED[@]} changed)"
 
 # The ratio is ENFORCED here, not merely printed. It used to be printed and nothing
 # else: the broker only rejects files_examined=0, forge-pr parses the ratio but decides
@@ -333,6 +334,14 @@ esac
 case "$SUBMITTED" in ''|*[!0-9]*)
   die "broker reported files_supplied_total='$SUBMITTED', which is not a count — the size of the review is UNKNOWN, never clean" ;;
 esac
+# Same allowlist, and it is also this client's version check on the broker. A broker older
+# than review-verdict@2 does not send the field at all, so jq yields "null" and the gate
+# refuses. That is deliberate: the alternative is falling back to files_examined, which
+# silently restores the weaker check below and leaves an un-redeployed service looking
+# like a working gate. The message names the cause so the refusal is actionable.
+case "$EXAMINED_CHANGED" in ''|*[!0-9]*)
+  die "broker reported files_examined_changed='$EXAMINED_CHANGED', which is not a count — a broker older than review-verdict@2 does not send this field, so redeploy review-broker.py. This gate will not fall back to files_examined, because that is the weaker check this one replaced" ;;
+esac
 # What counts as "enough examined" is the CHANGED file count, not the supplied total.
 # files_examined counts changed files AND blast-radius files together (review-broker.py
 # states this in the prompt), and the context files are supporting material the model is
@@ -342,20 +351,38 @@ esac
 # one that gets routed around, which is worse than the defect it was meant to close.
 #
 # So the rule is: every CHANGED file must have been read, because those are the subject
-# of the review. This is NECESSARY, not sufficient — the broker reports one scalar and
-# never says WHICH files were read, so "examined >= changed" cannot prove the examined
-# ones were the changed ones. It does catch the case that motivated it (a clean verdict
-# after reading 1 file of 12) and every case where the count alone makes a full read
-# impossible. Making it sufficient needs the broker to report the changed-file count
-# separately; that is a schema and prompt change to a separate deployed service, and is
-# deliberately not bundled into this fix.
+# of the review — and it is now checked against a count that can actually express that.
+# files_examined could not. It sums the changed files AND the blast-radius files, so
+# "examined >= changed" was satisfied by 2 changed files plus 1 dependent while one of the
+# changed files went unread: NECESSARY, but not sufficient. review-broker.py now also
+# reports files_examined_changed, counting the changed files alone (review-verdict@2). It
+# obtains it by asking the model WHICH changed files it read and counting the paths that
+# are genuinely in the changed set, so that count cannot exceed the changed-file total and
+# no honest pair of counts clears the check below while a changed file was skipped.
+#
+# "Sufficient" is about the ARITHMETIC ONLY. Both numbers remain the model's self-report:
+# it says how many changed files it read and nothing here proves it read them. What is
+# closed is the gap where a truthful total concealed an untouched changed file; a model
+# that simply lies still passes. Do not let any comment, doc or tool description upgrade
+# this into verification.
 #
 # Only a merge-eligible verdict is gated. forge-pr treats PASS as safe to merge and
 # blocks on every other word, so a partial "concerns"/"fail" already stops at the same
 # place while its findings stay readable in the posted comment; killing those would cost
-# the human the review without buying any safety.
-if [ "$VERDICT" = "pass" ] && [ "$EXAMINED" -lt "${#CHANGED[@]}" ]; then
-  die "model examined $EXAMINED file(s) but the PR changes ${#CHANGED[@]} — it cannot have read them all, and a clean verdict on a partial examination is UNKNOWN, not a pass"
+# the human the review without buying any safety. Same reason the broker reports this
+# shortfall instead of turning it into verdict "error": an error verdict dies above,
+# before section 6 posts anything, and destroys findings the human should still see.
+if [ "$VERDICT" = "pass" ] && [ "$EXAMINED_CHANGED" -lt "${#CHANGED[@]}" ]; then
+  die "model read $EXAMINED_CHANGED of the ${#CHANGED[@]} CHANGED file(s) — a clean verdict on a partial examination is UNKNOWN, not a pass"
+fi
+# The two counts must also agree with each other. The broker bounds
+# files_examined_changed by the CHANGED-file count alone and deliberately does not
+# reconcile it against files_examined, precisely so this check has something to catch: the
+# two turns are independent self-reports and can disagree. A changed-file count above the
+# total is evidence about neither number, and reconciling it upstream would have meant
+# reporting a count the model never gave while leaving this guard unable to fire.
+if [ "$VERDICT" = "pass" ] && [ "$EXAMINED_CHANGED" -gt "$EXAMINED" ]; then
+  die "broker reported files_examined_changed=$EXAMINED_CHANGED against files_examined=$EXAMINED — the changed-file count cannot exceed the total, so the two contradict each other and neither is evidence of coverage"
 fi
 # The count above can also be wrong in the direction the comparison cannot see.
 # review-broker.py CLAMPS files_examined down to files_supplied_total when the model
@@ -377,6 +404,22 @@ if [ "$VERDICT" = "pass" ] && [ "$OVERCOUNTED" != "false" ]; then
   fi
   die "broker did not report examined_overcounted (got '$OVERCOUNTED') — this gate cannot confirm $EXAMINED was not a clamped overcount, and an unconfirmable count is UNKNOWN, not a pass"
 fi
+# The changed-file count is clamped by the same broker for the same reason, so it carries
+# the same blind spot and needs the same flag. A model claiming it read 9 of 3 changed
+# files is pinned to 3, which then clears the "read every changed file" check above on a
+# number the broker had just declared unreliable. Written as a second block rather than
+# folded into the one above: the two are independently reviewable, and the wording differs
+# because the bound differs (supplied total vs changed-file count).
+#
+# Only a literal false clears it, for the reason given above — absent means this client
+# cannot tell whether the number was clamped, and cannot-tell is UNKNOWN.
+CHANGED_OVERCOUNTED=$(jq -r '.examined_changed_overcounted' "$V")
+if [ "$VERDICT" = "pass" ] && [ "$CHANGED_OVERCOUNTED" != "false" ]; then
+  if [ "$CHANGED_OVERCOUNTED" = "true" ]; then
+    die "broker clamped an overcounted files_examined_changed to $EXAMINED_CHANGED — the model claimed to read more changed files than the PR contains, so the count is not evidence of coverage and a clean verdict on it is UNKNOWN, not a pass"
+  fi
+  die "broker did not report examined_changed_overcounted (got '$CHANGED_OVERCOUNTED') — this gate cannot confirm $EXAMINED_CHANGED was not a clamped overcount, and an unconfirmable count is UNKNOWN, not a pass"
+fi
 # An unread DEPENDENT is a real degradation, just not a failing one. Say so on the
 # console rather than letting "$EXAMINED/$SUBMITTED" above pass for a full read; the
 # same ratio is rendered into the posted comment, where forge-pr and a human both see it.
@@ -385,10 +428,17 @@ if [ "$EXAMINED" -lt "$SUBMITTED" ]; then
 fi
 
 # ---- 6. post it back --------------------------------------------------------------
-BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR_SCANNED" '
+# --argjson for the changed count so it renders as a bare number, not a quoted string.
+# The "N/M supplied file(s) examined" segment must keep its exact wording and position:
+# forge-pr parses it with VERDICT_META_RE, and a comment whose meta line stops matching
+# makes forge-pr raise rather than merge. The changed-file segment is therefore appended
+# AFTER it, never inserted before.
+BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR_SCANNED" \
+  --argjson changed "${#CHANGED[@]}" '
   "## 🤖 Local AI review — **" + (.verdict|ascii_upcase) + "**\n\n" +
   "`" + $sha + "` · model `" + .model + "` · " +
   (.files_examined|tostring) + "/" + (.files_supplied_total|tostring) + " supplied file(s) examined · " +
+  (.files_examined_changed|tostring) + "/" + ($changed|tostring) + " changed file(s) read · " +
   $br + " dependent(s) from " + $scanned + " scanned · " +
   (.standards_checked|tostring) + "/" + (.standards_supplied|tostring) + " project standards checked" +
   (if .cached then " · _cached verdict_" else "" end) + "\n\n" +
