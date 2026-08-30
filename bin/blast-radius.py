@@ -70,11 +70,34 @@ Usage:
 """
 from __future__ import annotations
 
+# IMPORT-PATH GUARD, before any shadowable import. Running bin/blast-radius.py puts
+# bin/ FIRST on sys.path, and this file is deployed into bin/ of every consuming repo —
+# so a PR that merely ADDS bin/json.py (or subprocess.py, re.py, pathlib.py) has that
+# module execute inside this script, which the gate job runs with BROKER_TOKEN and a
+# forge token in scope. Pinning the workflow's checkout to a reviewed SHA guards nothing
+# if the script's own imports resolve into the PR's tree. Only `sys` is touched before
+# the guard: it is a builtin and cannot be shadowed. String ops rather than os.path,
+# because importing os here would itself be shadowable.
+import sys
+
+# Suffix comparison, not equality: on macOS sys.path[0] is the RESOLVED directory
+# (/private/var/...) while __file__ keeps the symlinked form (/var/...), so a plain
+# `==` silently never matches and the guard quietly does nothing. Caught by running the
+# hijack fixture from a tempfile.TemporaryDirectory (unresolved) rather than a
+# pre-resolved one -- the upstream copy this came from compares by equality and has the
+# same hole, it just never ran a test that could see it.
+_script_dir = __file__.rsplit("/", 1)[0] if "/" in __file__ else "."
+_p0 = sys.path[0] if sys.path else None
+if _p0 is not None and (_p0 in ("", ".", _script_dir)
+                        or _p0.endswith(_script_dir) or _script_dir.endswith(_p0)):
+    sys.path.pop(0)
+del _script_dir, _p0
+
+import ast
 import json
 import os
 import re
 import subprocess
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -86,6 +109,25 @@ MAX_FILE_BYTES = 512_000
 # Files whose relative import specifiers get resolved structurally. Everything not in
 # this set stays on literal-reference matching.
 JS_FAMILY_SUFFIX = {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+# Files that ARE an importable Python module, in both directions: whose own path yields
+# a module name, and whose imports get read. Both, because they are one claim -- a stub
+# is imported by the same name as the module it describes, so resolving one direction
+# without the other reports zero dependents for every changed stub.
+PY_FAMILY_SUFFIX = {".py", ".pyi"}
+# A module named by a STRING at a loader call rather than by the import grammar. The
+# quotes make the name unambiguous at ANY length, which is what makes this the right
+# route for a name too short for word_token's floor -- lowering that floor instead was
+# measured and is not viable: word-boundary "re" hits 16 of 30 tracked files here and
+# "db" 19 of 50 in mcp-techkb.
+DYNAMIC_IMPORT_CALLS = {"import_module", "__import__"}
+# PEP 561: a stub-only distribution ships `<name>-stubs/`, and what it provides stubs
+# FOR is `<name>` -- that is the only name an importer ever writes. Carrying the
+# directory name through unchanged derives a form with a hyphen in it, which is not a
+# valid identifier and so can never match any import: the target resolved to nothing
+# usable and reported zero dependents (Codex [P2] on PR #58, 2026-08-29). Stripping it
+# cannot introduce a false match for the same reason -- the un-stripped form was
+# unmatchable to begin with.
+STUBS_DIR_SUFFIX = "-stubs"
 # What an importer WRITES -> the source extensions NodeNext maps it onto. A table,
 # not a blanket: the mapping is per-extension in BOTH directions. '.mjs' must reach a
 # '.d.mts' declaration, and must NOT claim a same-stem '.ts' that TypeScript would
@@ -128,33 +170,429 @@ def tracked_files(root: Path) -> list[Path]:
     return [root / p for p in out.stdout.split("\0") if p]
 
 
-def readable_text(p: Path) -> str | None:
+# Sentinel for a file that SHOULD be inspectable — not a known-binary suffix, not a
+# symlink — but could not be read: too large, unreadable, or not UTF-8. That is NOT a
+# clean skip. It might import or reference a changed target, so an empty blast radius
+# computed over it is UNKNOWN, not "no dependents" — the same call every other check in
+# this tool makes. Returned distinctly from None so the caller can tell "nothing to see
+# here" from "I could not look".
+SKIPPED = object()
+
+
+def readable_text(p: Path):
+    """str content, None for a genuine non-text or symlink skip, or SKIPPED for a
+    would-be-text file that could not be read (the caller fails closed on SKIPPED)."""
     if p.suffix.lower() in SKIP_SUFFIX:
+        return None
+    # A tracked SYMLINK is never read and never followed. read_text() follows it, so a
+    # link committed into the repo made this sweep read whatever it pointed at — and in
+    # CI that includes .git/config, which holds the forge token. The content would then
+    # be searched for target tokens and the path reported as a "dependent", putting the
+    # link's own name next to data it should never have opened. A symlink's TEXT is not
+    # a dependency signal in any case: what it references is a path, not an import.
+    try:
+        if p.is_symlink() or not p.is_file():
+            return None
+    except OSError:
         return None
     try:
         if p.stat().st_size > MAX_FILE_BYTES:
-            return None
+            return SKIPPED  # a large TEXT file may still be a dependent
         return p.read_text(encoding="utf-8", errors="strict")
     except (OSError, UnicodeDecodeError):
-        return None  # binary or unreadable: not a text dependent
+        return SKIPPED  # unreadable or non-UTF-8, but not a known binary type
 
 
-def candidate_tokens(rel: str, basename_counts: dict[str, int]) -> list[str]:
-    """How other files would refer to this one.
+def literal_tokens(rel: str, basename_counts: dict[str, int]) -> list[str]:
+    """How a file refers to this one by NAME — path or basename, matched as a substring.
 
-    The bare basename is a usable reference only when it is unique among tracked
-    files plus the targets themselves (see MATCHING above for the measured failure
-    when it is not, and why deleted targets are part of the count).
+    The bare basename is a usable reference only when it is unique among tracked files
+    plus the targets themselves (see MATCHING above for the measured failure when it is
+    not, and why deleted targets are part of the count). The >2 filter keeps a 1-2 char
+    name from matching half the tree.
+
+    Python MODULE names are no longer in here. They used to be, matched by substring, and
+    that forced a choice with no good answer: keep the >2 filter and a real `io.py` finds
+    no importers at all, or drop it and "io" matches ratio, region, and every other word
+    containing those letters — flooding the radius until the broker's file cap truncates
+    a real importer away. Both were measured (Codex, 2026-08-22). Exact matching against
+    AST-extracted imports dissolves the tradeoff, so module forms moved to
+    module_dotted_forms() and this function stayed literal.
     """
     p = Path(rel)
     toks = {rel}
     if basename_counts.get(p.name, 0) == 1:
         toks.add(p.name)
-    if p.suffix == ".py":
-        # <dir>/<name>.py -> "<name>", and package-ish dotted form for imports
-        toks.add(p.stem)
-        toks.add(".".join(p.with_suffix("").parts))
+    # DOTTED module forms stay literal tokens; only the BARE stem left. The flood was
+    # always the stem -- "bench" matching "benchmark" in a .gitignore -- never
+    # "benchmark.ollama-perf.bench", which is specific enough to be safe as a substring.
+    # And dropping the dotted forms entirely broke every module reference that never
+    # reaches an AST: `python -m plugins.foo` in a workflow YAML, an
+    # importlib.import_module("plugins.foo") string, an import inside a .pyi (not parsed
+    # as .py), and any source using syntax newer than the scanner's own Python, where
+    # ast.parse fails and literal matching is the only remaining signal. Measured: a
+    # fixture with those callers went from three dependents to ZERO -- an empty blast
+    # radius on a breaking change, the exact failure this tool exists to prevent
+    # (Codex [P1] on PR #54).
+    #
+    # Only forms containing a dot: the bare last component is the stem, which is the one
+    # that floods. A suffix like "plugins.foo" also lets a `python -m plugins.foo` match
+    # a file at src/plugins/foo.py, where the full path form would not.
+    toks |= {f for f in module_dotted_forms(rel) if "." in f}
     return [t for t in toks if len(t) > 2]
+
+
+def _strip_stubs(parts: list[str]) -> list[str]:
+    """PEP 561's `<name>-stubs` -> `<name>`, stated once so both sides agree.
+
+    Applied to the TARGET's own path and to an IMPORTER's package alike. Normalizing
+    only one side is worse than normalizing neither: the two derivations then disagree
+    and a stub package's own sibling imports match nothing at all (Codex [P2], third
+    round on PR #58). The suffix cannot be part of a real module name -- a hyphen is
+    not valid in an identifier -- so this can only ever turn an unmatchable form into
+    a matchable one.
+    """
+    n = len(STUBS_DIR_SUFFIX)
+    return [c[:-n] if c.endswith(STUBS_DIR_SUFFIX) else c for c in parts]
+
+
+def _module_parts(p: Path) -> list[str]:
+    """The path components a module's dotted name is built from.
+
+    Shared so module_dotted_forms() and word_token() cannot disagree about what a file
+    is called -- they derived it separately, and a rule added to one silently did not
+    reach the other.
+    """
+    parts = list(p.with_suffix("").parts)
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]  # the package IS its directory
+    if p.suffix == ".pyi":
+        parts = _strip_stubs(parts)
+    return [c for c in parts if c]
+
+
+def module_dotted_forms(rel: str) -> set[str]:
+    """Every dotted name a Python file could be imported by. Empty for a non-.py file.
+
+    <dir>/<name>.py -> {"<name>", "<dir>.<name>", ...} — every suffix of the path, because
+    which directory is the source root (src/, the repo root, a package dir) is not known
+    here. Safe to be generous now that these are matched EXACTLY against the importer's
+    real AST imports rather than searched for as substrings; as substrings the same set
+    would be exactly the flood described above.
+
+    <pkg>/__init__.py -> the forms for the PACKAGE, with __init__ dropped: `import pkg`
+    never writes it, so the file's own stem names nothing.
+    """
+    p = Path(rel)
+    if p.suffix not in PY_FAMILY_SUFFIX:
+        return set()
+    parts = _module_parts(p)
+    return {".".join(parts[i:]) for i in range(len(parts)) if parts[i:]}
+
+
+def word_token(rel: str) -> str | None:
+    """The BARE module name for a .py file, or None when there is not a usable one.
+
+    Kept apart from literal_tokens because it is matched on WORD BOUNDARIES rather than
+    as a substring. That distinction is the whole fix: as a raw substring "bench" matched
+    the word "benchmark" in a .gitignore and produced 85 phantom dependents from one
+    target, while dropping it entirely lost every non-AST reference -- `python -m widget`
+    in a workflow, importlib.import_module("widget"), a .pyi import, or any source
+    ast.parse cannot read. Boundary matching keeps the reference and refuses the
+    substring: "widget" matches `python -m widget` and not the word "widgets".
+    """
+    p = Path(rel)
+    if p.suffix not in PY_FAMILY_SUFFIX:
+        return None
+    parts = _module_parts(p)
+    if not parts:
+        return None
+    name = parts[-1]
+    # The >2 minimum is the same one literal_tokens applies, and for the same reason: a
+    # 1-2 character name is a WORD in ordinary prose, so even boundary-matched it floods.
+    # Measured: a 1-char a.py matched 15 of 17 tracked files in this repo, which under
+    # the broker's 120-file cap would displace the genuine callers it was meant to find
+    # (Codex [P2], round 3). Such a module is not left unresolved -- AST matching finds
+    # `import a` exactly, and that path has no length floor. What is given up is only the
+    # NON-AST reference to a 1-2 char module (a bare `python -m a` in a YAML), where a
+    # text search for that name could never have been trustworthy anyway.
+    #
+    # KNOWINGLY NOT EXCLUDED: names that shadow an already-imported stdlib module. A repo
+    # file named io.py does not really shadow `io`, which is in sys.modules before any
+    # repo code runs, so its importers are arguably phantoms (Codex [P2], round 2). An
+    # earlier revision excluded them via frozenset(sys.modules) and had to be reverted:
+    # that set is VERSION-DEPENDENT -- `io` is preloaded on Python 3.9, 3.12 and 3.13 but
+    # NOT on 3.14 -- so the same PR resolved a different blast radius depending on which
+    # interpreter CI happened to install. review-broker.py requires a merge gate to return
+    # the same verdict for the same head_sha, and a resolver whose answers move with the
+    # runtime cannot deliver that. Over-reporting is also the safe direction here: a
+    # phantom dependent is reviewable noise, a missed one is a silent breaking change.
+    if len(name) <= 2:
+        return None
+    return name
+
+
+def _arg(call: ast.Call, pos: int, kw: str) -> ast.expr | None:
+    """One argument of a call, written either positionally or by keyword."""
+    if len(call.args) > pos:
+        return call.args[pos]
+    for keyword in call.keywords:
+        if keyword.arg == kw:
+            return keyword.value
+    return None
+
+
+def _dict_value(node: ast.expr | None, key: str) -> ast.expr | None:
+    """The value a DICT LITERAL gives `key`, or None when it is not one or lacks it."""
+    if not isinstance(node, ast.Dict):
+        return None
+    for k, v in zip(node.keys, node.values):
+        if isinstance(k, ast.Constant) and k.value == key:
+            return v
+    return None
+
+
+def _literal_str(node: ast.expr | None) -> str | None:
+    """The string a node IS, or None. A computed name resolves to nothing at rest --
+    the same answer this resolver already gives an interpolated JS specifier."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _loader_bindings(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
+    """Which names in this file actually refer to importlib's loader, and WHICH one.
+
+    The second value maps a bound name to the loader it names, not merely to the fact
+    that it names one. The two loaders take different arguments -- `import_module`
+    resolves a relative name against `package`, `__import__` against `level` -- so a
+    set of names loses exactly the thing the caller needs: an alias of `__import__`
+    read as an `import_module` looks at the wrong argument and drops the call
+    (Codex [P2], second round on PR #58).
+
+    Matching any call whose last identifier happens to be `import_module` treats a
+    project's own registry helper as a Python import, and for a short target that
+    invents a dependent out of unrelated code. `from .importlib import import_module`
+    is likewise a package's OWN helper, which is why the level is checked and not just
+    the module name. `__import__` needs no binding: it is a builtin, always in scope.
+
+    Read per FILE, not per lexical scope, so a name deliberately shadowing importlib
+    (a parameter or local of that name) is still read as the loader. Declined rather
+    than overlooked: resolving that is Python name-binding analysis -- scope stacks,
+    parameters, comprehensions, class bodies -- which is a different tool from a
+    dependency heuristic, and the failure is an over-match, the direction this
+    resolver accepts everywhere else.
+    """
+    modules_ns: set[str] = set()               # names bound to the importlib MODULE
+    kinds = {"__import__": "__import__"}       # bound name -> which loader it is
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "importlib" or a.name.startswith("importlib."):
+                    # `import importlib.util` binds the ROOT name, not the dotted one.
+                    modules_ns.add(a.asname or a.name.split(".")[0])
+        elif (isinstance(node, ast.ImportFrom) and node.module == "importlib"
+              and not node.level):
+            for a in node.names:
+                if a.name == "import_module":
+                    kinds[a.asname or a.name] = "import_module"
+    # `load = importlib.import_module` then `load("<mod>")` is an ordinary plugin
+    # pattern, and missing it is a MISS -- the dangerous direction -- because a name
+    # short enough to need this route is excluded from word_token by design (Codex
+    # [P2] on PR #58, 2026-08-29). Iterated to a fixed point so a second hop
+    # (`a = importlib.import_module` then `b = a`) resolves too; bounded by the number
+    # of assignments, since each pass either adds a name or stops.
+    # AnnAssign as well as Assign: `load: Callable = importlib.import_module` is an
+    # ordinary annotated alias, and reading only the bare form dropped it.
+    for _ in range(len(kinds) + 8):
+        grew = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets, v = node.targets, node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                targets, v = [node.target], node.value
+            else:
+                continue
+            if (isinstance(v, ast.Attribute) and v.attr == "import_module"
+                    and isinstance(v.value, ast.Name) and v.value.id in modules_ns):
+                kind = "import_module"
+            elif isinstance(v, ast.Name):
+                kind = kinds.get(v.id)          # carries the ORIGIN's kind along
+            else:
+                kind = None
+            if not kind:
+                continue
+            for tgt in targets:
+                if isinstance(tgt, ast.Name) and tgt.id not in kinds:
+                    kinds[tgt.id] = kind
+                    grew = True
+        if not grew:
+            break
+    return modules_ns, kinds
+
+
+def _with_fromlist(node: ast.Call, parts: list[str], fname: str) -> set[str]:
+    """The module a call names, plus any submodules a literal fromlist asks for.
+
+    `__import__("<pkg>", fromlist=("<mod>",))` imports <pkg>.<mod>; import_module has
+    no fromlist. A non-literal entry, and the "*" wildcard, name nothing at rest --
+    the same answer every other computed name here gets.
+    """
+    if not parts:
+        return set()
+    base = ".".join(parts)
+    out = {base}
+    if fname != "__import__":
+        return out
+    fl = _arg(node, 3, "fromlist")
+    if isinstance(fl, (ast.Tuple, ast.List, ast.Set)):
+        out.update(f"{base}.{v}" for v in (_literal_str(e) for e in fl.elts)
+                   if v and v != "*")
+    return out
+
+
+def _dynamic_module(node: ast.Call, here: list[str],
+                    modules_ns: set[str], kinds: dict[str, str]) -> set[str]:
+    """The modules a loader CALL names. Empty when it names nothing resolvable.
+
+    A SET, not one name, because `__import__` takes a FROMLIST:
+    `__import__("<pkg>", fromlist=("<mod>",))` imports `<pkg>.<mod>`, and recording
+    only `<pkg>` loses the submodule that is the actual subject of the call. For a
+    name short enough to need this route the source never contains the qualified form
+    either, so it was a miss with nothing to fall back on (Codex [P2], fifth round on
+    PR #58).
+
+    The two loaders spell "relative" differently and neither infers the caller's
+    package the way an import statement does. Verified against the interpreter rather
+    than assumed: `import_module(".<mod>")` with no package raises TypeError, and
+    `__import__(".<mod>")` looks for a module literally so named. Resolving either
+    against the importer's own location would invent a dependent for a call that
+    cannot load anything.
+    """
+    fn = node.func
+    if isinstance(fn, ast.Attribute):
+        if not (fn.attr == "import_module"
+                and isinstance(fn.value, ast.Name) and fn.value.id in modules_ns):
+            return set()
+        fname = "import_module"
+    elif isinstance(fn, ast.Name) and fn.id in kinds:
+        fname = kinds[fn.id]   # the loader it NAMES, not the name it was given
+    else:
+        return set()
+    # `is None`, not falsiness: a literal EMPTY name is meaningful. `from . import
+    # <mod>` compiles to `__import__("", globals(), locals(), ("<mod>",), 1)`, and a
+    # loader written that way is an ordinary importer -- conflating "no literal
+    # argument" with "the empty string" dropped it before the level or the fromlist
+    # was ever read (Codex [P2], sixth round on PR #58). Verified against the
+    # interpreter: that call imports <pkg>.<mod>, and the same call at level 0 is a
+    # ValueError, which is why empty is accepted ONLY with a positive level.
+    mod = _literal_str(_arg(node, 0, "name"))
+    if mod is None:
+        return set()
+
+    if fname == "__import__":
+        # Relative only via `level`, its fifth argument -- never by a leading dot.
+        if mod.startswith("."):
+            return set()
+        lvl = _arg(node, 4, "level")
+        level = (lvl.value if isinstance(lvl, ast.Constant)
+                 and isinstance(lvl.value, int) and not isinstance(lvl.value, bool)
+                 else 0)
+        # A relative __import__ takes its package from the GLOBALS it is handed, not
+        # from where the call is written -- verified against the interpreter:
+        # `__import__("<mod>", {"__package__": "<other>"}, None, (), 1)` loads
+        # <other>.<mod> from anywhere. So a dict literal saying so wins over the
+        # caller's own location (Codex [P2], fourth round on PR #58).
+        # An OPAQUE globals expression still falls back to the caller's location, and
+        # deliberately: in real code that argument is the caller's own globals, and
+        # refusing to resolve it would trade an exotic misattribution for an ordinary
+        # miss -- the direction that lets a breaking change through.
+        if not mod and not level:
+            return set()  # `__import__("")` at level 0 is a ValueError, not an import
+        base = list(here) if level else []
+        named_pkg = _literal_str(_dict_value(_arg(node, 1, "globals"), "__package__"))
+        if level and named_pkg is not None:
+            base = named_pkg.split(".") if named_pkg else []
+    else:
+        if not mod:
+            return set()  # import_module has no empty-name form
+        if not mod.startswith("."):
+            return _with_fromlist(node, [mod], fname)
+        # import_module resolves a relative name against `package`, and REQUIRES one.
+        pkg_arg = _arg(node, 1, "package")
+        pkg = _literal_str(pkg_arg)
+        if pkg:
+            base = pkg.split(".")
+        elif isinstance(pkg_arg, ast.Name) and pkg_arg.id == "__package__":
+            # The canonical spelling, and the only non-literal package worth resolving:
+            # at module scope `__package__` IS the importer's own package.
+            base = list(here)
+        else:
+            return set()
+        level = len(mod) - len(mod.lstrip("."))
+        mod = mod.lstrip(".")
+
+    climb = max(level - 1, 0)
+    if climb > len(base):
+        return set()  # climbs out of the repo: names nothing in it
+    parts = base[:len(base) - climb] + ([mod] if mod else [])
+    return _with_fromlist(node, parts, fname)
+
+
+def imported_names(text: str, rel: str) -> set[str] | None:
+    """The dotted module names a Python source imports, via AST — or None when it will
+    not parse, in which case the caller falls back to literal matching alone.
+
+    `rel` is the importing file's own path, needed to resolve RELATIVE imports:
+      import a.b.c        -> {"a.b.c"}
+      from a.b import c   -> {"a.b", "a.b.c"}
+      from . import foo   -> {"<pkg>.foo"}
+      from .foo import X  -> {"<pkg>.foo"}
+    Parenthesised and backslash-continued imports parse natively here — those are the
+    forms a line-oriented regex kept missing.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return None
+    ip = Path(rel)
+    pkg_parts = list(ip.parent.parts)
+    if pkg_parts == ["."]:
+        pkg_parts = []
+    if ip.suffix == ".pyi":
+        # The same normalization the target side does -- a relative import inside a
+        # stub package resolves under the name the package PROVIDES stubs for.
+        pkg_parts = _strip_stubs(pkg_parts)
+    modules_ns, loader_kinds = _loader_bindings(tree)
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            # A module named by a literal string at a loader call. For a name too short
+            # for word_token's floor this is the ONLY place it appears, so without it a
+            # real plugin loader is invisible while the same call is found for any
+            # longer name.
+            names |= _dynamic_module(node, pkg_parts, modules_ns, loader_kinds)
+            continue
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                names.add(a.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                # `from . import x` is level 1 in the file's own package; each extra
+                # dot climbs one parent.
+                climb = node.level - 1
+                base = pkg_parts[:len(pkg_parts) - climb] if climb <= len(pkg_parts) else []
+                prefix = base + ([node.module] if node.module else [])
+                if prefix:
+                    names.add(".".join(prefix))
+                for a in node.names:
+                    if prefix:
+                        names.add(".".join(prefix + [a.name]))
+            elif node.module:
+                names.add(node.module)
+                for a in node.names:
+                    names.add(node.module + "." + a.name)
+    return names
 
 
 def resolve_js_specifier(importer_rel: str, spec: str, known: set[str]) -> set[str]:
@@ -228,9 +666,30 @@ def find_dependents(root: Path, targets: list[str],
     # Tracked files plus the targets: a DELETED target is absent from ls-files, and a
     # specifier naming it should still terminate rather than expand into inventions.
     known_paths = tracked_rels | target_set
-    token_map = {t: candidate_tokens(t, basename_counts) for t in targets}
+    token_map = {t: literal_tokens(t, basename_counts) for t in targets}
+    form_map = {t: module_dotted_forms(t) for t in targets}
+    # Bare module names are matched on word boundaries, compiled once per target rather
+    # than per (target, file) pair.
+    word_map = {}
+    for t in targets:
+        w = word_token(t)
+        if w:
+            word_map[t] = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(w) + r"(?![A-Za-z0-9_])")
+    # Importing ANY submodule of a package runs that package's __init__.py -- `import
+    # pkg.sub` and `from pkg.sub import X` both execute it -- so an importer whose name
+    # merely STARTS with the package form is a real dependent of the initializer. Module
+    # targets stay exact; only package targets match by prefix.
+    pkg_map = {t: Path(t).stem == "__init__" and Path(t).suffix in PY_FAMILY_SUFFIX
+               for t in targets}
     deps: dict[str, set] = {t: set() for t in targets}
     scanned, errors = 0, []
+
+    def _py_match(forms: set[str], is_pkg: bool, imports: set[str]) -> bool:
+        if forms & imports:
+            return True
+        if is_pkg:
+            return any(n == fm or n.startswith(fm + ".") for fm in forms for n in imports)
+        return False
 
     for f in files:
         rel = str(f.relative_to(root))
@@ -238,6 +697,9 @@ def find_dependents(root: Path, targets: list[str],
             continue  # a file is not its own dependent
         text = readable_text(f)
         if text is None:
+            continue
+        if text is SKIPPED:
+            errors.append(rel)  # inspectable but unreadable — main() fails closed
             continue
         scanned += 1
         # Resolved once per FILE, not once per target: the specifiers a file contains
@@ -248,8 +710,17 @@ def find_dependents(root: Path, targets: list[str],
                 if INTERPOLATION in spec:
                     continue
                 resolved |= resolve_js_specifier(rel, spec, known_paths)
+        # AST imports for a .py dependent, resolved once per FILE like the JS
+        # specifiers above. None when the file will not parse, in which case the
+        # literal check below is the only signal -- the conservative fallback.
+        imports = (imported_names(text, rel)
+                   if f.suffix in PY_FAMILY_SUFFIX else None)
         for t, tokens in token_map.items():
-            if t in resolved or any(tok in text for tok in tokens):
+            wrx = word_map.get(t)
+            named = (t in resolved or any(tok in text for tok in tokens)
+                     or (wrx is not None and wrx.search(text) is not None))
+            imported = imports is not None and _py_match(form_map[t], pkg_map[t], imports)
+            if named or imported:
                 deps[t].add(rel)
     return deps, scanned, errors
 
@@ -262,8 +733,26 @@ def positive_control(root: Path) -> tuple[bool, str]:
     control fails, the sweep is broken, not the repo.
     """
     gi = root / ".gitignore"
-    if not gi.is_file():
-        return False, "no .gitignore to use as a control"
+    # is_symlink BEFORE is_file, because is_file() FOLLOWS the link. The control reads
+    # its needle out of this file and then prints that needle into its own message, and
+    # the gate job runs with BROKER_TOKEN and a forge token in its environment -- so a
+    # .gitignore symlinked at a credential-bearing path (.git/config, /proc/self/environ,
+    # an .env) puts the target's longest line straight into the CI log. Demonstrated,
+    # not theorised: a fixture symlinking .gitignore to a file containing
+    # BROKER_TOKEN=... printed that line verbatim as "control '<token>' found in 2
+    # file(s)" and exited 0.
+    #
+    # Reachable here through owner ACCIDENT rather than a malicious PR -- this is a
+    # single-owner repo and every consumer runs the gate on `pull_request`, not
+    # `pull_request_target` -- but the cost of the accident is a secret in a log, which
+    # is not a class this project trades against convenience. A symlinked control source
+    # is UNKNOWN, not usable. Ported from the claude-memory deployed copy alongside the
+    # readable_others hardening it shipped with.
+    try:
+        if gi.is_symlink() or not gi.is_file():
+            return False, "no regular-file .gitignore to use as a control"
+    except OSError:
+        return False, "cannot stat .gitignore control source"
     # Prefer the LONGEST entry: a short generic token like "data" would still match in a
     # sweep that was half-broken, which is exactly what a control must not do.
     entries = [ln.strip().rstrip("/") for ln in gi.read_text().splitlines()
@@ -274,14 +763,39 @@ def positive_control(root: Path) -> tuple[bool, str]:
     if not needle:
         return False, ".gitignore has no usable control token"
 
+    # TWO independent claims, both required, because the token search alone is
+    # SELF-SATISFYING: the needle comes FROM .gitignore, so it matches .gitignore itself
+    # even when every other tracked file has become invisible to the walk. A sweep that
+    # could read nothing else still reported "control found in 1 file(s)", passed, and
+    # went on to report a clean empty blast radius — the control certifying only its own
+    # source, which is the precise failure this whole function exists to prevent, sitting
+    # inside the thing meant to prevent it. Measured on a fixture whose only other
+    # tracked file is a skipped binary: exit 0, "found in 1 file(s)".
+    #
+    # So also require that the walk actually READ something else: visibility of the tree,
+    # proven independently of the token's own source. Ported from the claude-memory
+    # deployed copy, which fixed this after a Codex review on 2026-08-22 and has been
+    # carrying it alone since; its pre-push tests are what caught the source of truth
+    # still shipping the weak version.
+    #
+    # isinstance, not truthiness: an EMPTY tracked file is readable and proves visibility
+    # just as well, but "" is falsy and would not have counted.
     hits = 0
+    readable_others = 0
     for f in tracked_files(root):
         text = readable_text(f)
-        if text and needle in text:
+        if not isinstance(text, str):
+            continue
+        if f != gi:
+            readable_others += 1
+        if needle in text:
             hits += 1
     if hits == 0:
         return False, f"control token {needle!r} found in 0 files — the sweep cannot see the tree"
-    return True, f"control {needle!r} found in {hits} file(s)"
+    if readable_others == 0:
+        return False, ("control token found only in its own source file and no other "
+                       "tracked file was readable — the tree is not visible to the sweep")
+    return True, f"control {needle!r} found in {hits} file(s); {readable_others} other file(s) readable"
 
 
 def changed_files(root: Path, base: str) -> tuple[list[str], list[tuple[str, str]]]:
@@ -386,7 +900,31 @@ def main() -> int:
                          f"       that cannot find a string it was told is there is broken.\n")
         return 1
 
-    deps, scanned, _ = find_dependents(root, targets, rename_pairs)
+    deps, scanned, scan_errors = find_dependents(root, targets, rename_pairs)
+    # The third return value used to be discarded into `_`: files the sweep could not
+    # read looked exactly like files with no dependents. They are now counted, named on
+    # the console, and carried in the JSON as `unreadable`, so a partial sweep is
+    # legible instead of silent.
+    #
+    # REPORTED, NOT FATAL — deliberately, and this is the one place this port departs
+    # from the claude-memory copy it came from. That copy exits 1 here, on the correct
+    # principle that an incomplete radius is UNKNOWN. It gets away with it because it is
+    # deployed in exactly one repo, which happens to track no oversized or undecodable
+    # file. Measured across the six repos this kit actually deploys into, that policy
+    # hard-fails TWO of them on their current main: claudeclaw
+    # (benchmark/longmemeval/data/longmemeval_oracle_slim.json, over the 512,000-byte
+    # cap) and geekspace (build/icon.icns, a binary suffix not in SKIP_SUFFIX). A gate
+    # that fails every run in a repo is one that gets routed around, which costs more
+    # than the partial scan it was refusing. Escalating this to fatal is a real
+    # improvement, but it needs those two files triaged first, not a flag day.
+    if scan_errors:
+        shown = ", ".join(sorted(scan_errors)[:5])
+        more = "" if len(scan_errors) <= 5 else f" (+{len(scan_errors) - 5} more)"
+        sys.stderr.write(
+            f"WARNING: {len(scan_errors)} tracked file(s) could not be read as text and "
+            f"were never searched: {shown}{more}\n"
+            f"         Any of them may reference a changed target, so this blast radius "
+            f"is INCOMPLETE, not proven empty.\n")
     # The control proves the tree is READABLE; this proves the sweep actually WALKED it.
     # Those are different claims, and only checking the first leaves a path where the
     # control passes while zero files were examined. Prompted by the gate reviewing its
@@ -400,6 +938,7 @@ def main() -> int:
     if as_json:
         print(json.dumps({
             "targets": targets, "files_scanned": scanned,
+            "unreadable": sorted(scan_errors),
             "control": control_msg,
             "dependents": {t: sorted(v) for t, v in deps.items()},
             "blast_radius": total,
