@@ -37,6 +37,25 @@ done
 
 die() { echo "GATE ERROR: $*" >&2; exit 1; }
 
+# Every count this gate reads from the broker goes through here. Digits-only is NOT
+# sufficient on its own: a JSON integer beyond the shell's signed range (say
+# 9223372036854775808) satisfies a *[!0-9]* allowlist, and every later `[ x -gt y ]` on
+# it then fails with "integer expression expected" and evaluates FALSE -- so an
+# impossible count slips every comparison meant to catch it and a PASS is posted
+# (Codex [P2] on PR #71, fifth round). Bounding the DIGIT COUNT closes the whole class
+# rather than the one value that demonstrated it: nine digits is a billion files or
+# standards, orders of magnitude past anything real and far inside the comparable range.
+# $1 = value, $2 = the broker field name, $3 = the rest of the refusal message.
+MAX_COUNT_DIGITS=9
+require_count() {
+  case "$1" in
+    ''|*[!0-9]*) die "broker reported $2='$1', which is not a count — $3" ;;
+  esac
+  if [ "${#1}" -gt "$MAX_COUNT_DIGITS" ]; then
+    die "broker reported $2='$1', which is too large to be a count this gate can compare — $3"
+  fi
+}
+
 # Credentials come from files or the CI environment, and reach curl through a mode-0600
 # header file (-H @file), never on argv — argv is world-readable through a process list
 # for the whole life of the request, which for the broker call is up to 900s. This
@@ -126,11 +145,89 @@ while IFS= read -r -d '' _st; do
     *)  CHANGED+=("$_p1"); CHANGED_STATUS+=("modified") ;;
   esac
 done < <(git diff --name-status -z -M -C -l0 "$BASE...HEAD")
+
+# ---- 1b. generated artifacts: excluded from review, never silently ----------------
+# WHY: /doco-refresh commits an Archify system map as THREE files — a typed JSON IR (the
+# authored source), an extracted SVG, and a ~700KB compiled HTML viewer. Measured on
+# mcp-personal-context PR #18: the HTML diff is 728,469 bytes — 12x the 60,000-byte
+# per-file cap below and 1.8x the broker's entire 400,000-byte budget. Every docs PR
+# therefore died at the cap with no verdict and forge-pr fell closed on the missing
+# verdict: precisely the "merge blocked by arithmetic nobody could see" failure the cap's
+# own comment warns about, now arriving on every PR of a whole class.
+#
+# THREAT MODEL (verified 2026-08-31 against the forge API: jfcadm repos report forks=0,
+# collaborators=0, private=true). The adversary here is an owner ACCIDENT, not a
+# malicious contributor smuggling code past review. An exclusion sized for that threat
+# is narrow and conditional; it is NOT a general "large files are exempt" escape, which
+# would be a real hole and is deliberately not what this is.
+#
+# Two conditions, BOTH required:
+#   1. the path is docs/diagrams/*.architecture.html — a shape this fleet only ever
+#      generates and never hand-authors;
+#   2. the sibling <name>.architecture.json IR is ALSO in this PR's changed set, so the
+#      reviewable SOURCE of that artifact is under review in the same change.
+#
+# Condition 2 is the load-bearing one. A hand-edited HTML whose IR did not change is not
+# paired, stays in CHANGED, and still dies at the cap — so the artifact can only be
+# skipped when the thing it is compiled from is being read. Dropping condition 2 would
+# turn this into the blanket exemption above.
+#
+# Excluded paths are REMOVED from CHANGED, so the "every changed file must be read" check
+# further down stays true of the files actually submitted rather than being quietly
+# widened. They are then DECLARED on stdout and in the posted comment: an undeclared
+# exclusion reads as "covered everything", which is the failure this whole gate exists to
+# prevent. Removal happens BEFORE the empty-set check below on purpose — a PR that
+# somehow contained only generated artifacts would land on "refusing to report a clean
+# review of nothing" rather than sailing through having reviewed zero files.
+GENERATED=(); GENERATED_BYTES=()
+_KEPT=(); _KEPT_STATUS=()
+_GT=$(mktemp)
+for _i in "${!CHANGED[@]}"; do
+  _f="${CHANGED[$_i]}"; _s="${CHANGED_STATUS[$_i]}"
+  _paired=0
+  case "$_f" in
+    docs/diagrams/*.architecture.html)
+      _ir="${_f%.html}.json"
+      for _c in "${CHANGED[@]}"; do
+        if [ "$_c" = "$_ir" ]; then _paired=1; break; fi
+      done
+      ;;
+  esac
+  if [ "$_paired" -eq 1 ]; then
+    git diff "$BASE...HEAD" -- "$_f" > "$_GT"
+    GENERATED+=("$_f")
+    GENERATED_BYTES+=("$(wc -c < "$_GT" | tr -d '[:space:]')")
+  else
+    _KEPT+=("$_f"); _KEPT_STATUS+=("$_s")
+  fi
+done
+rm -f "$_GT"
+# ${arr[@]+"${arr[@]}"} — an empty array under `set -u` is an unbound-variable error on
+# bash < 4.4, and the runner's bash is not pinned. Reachable whenever a PR is nothing but
+# paired artifacts, which the empty-set check below is there to refuse.
+CHANGED=(${_KEPT[@]+"${_KEPT[@]}"}); CHANGED_STATUS=(${_KEPT_STATUS[@]+"${_KEPT_STATUS[@]}"})
+
 [ "${#CHANGED[@]}" -gt 0 ] || die "no files changed vs $BASE — refusing to report a clean review of nothing"
 echo "   changed: ${#CHANGED[@]} path(s)"
+GENERATED_NOTE=""
+if [ "${#GENERATED[@]}" -gt 0 ]; then
+  echo "   generated: ${#GENERATED[@]} artifact(s) EXCLUDED from review (their IR is reviewed instead):"
+  for _i in "${!GENERATED[@]}"; do
+    echo "     - ${GENERATED[$_i]} (${GENERATED_BYTES[$_i]} bytes; source ${GENERATED[$_i]%.html}.json)"
+    GENERATED_NOTE="${GENERATED_NOTE}- \`${GENERATED[$_i]}\` (${GENERATED_BYTES[$_i]} bytes) — reviewed via its source \`${GENERATED[$_i]%.html}.json\`
+"
+  done
+fi
 
 # ---- 2. blast radius. Its own positive control; non-zero exit means UNKNOWN. ------
-BR_JSON=$(bin/blast-radius.py --json --changed-from "$BASE") \
+# GATE_BIN lets a CI job run the resolver from somewhere OTHER than the reviewed tree.
+# It matters under pull_request_target, where the workflow re-materializes the gate
+# scripts from the protected base precisely so the PR cannot supply the executable that
+# reviews it: with the path hardcoded to bin/, that job would pin review-pr.sh and then
+# run the PR's OWN bin/blast-radius.py, with the forge and broker tokens in scope.
+# Ported from claude-memory, the one consumer using that trigger; defaults to bin/, so
+# every pull_request consumer is unaffected.
+BR_JSON=$("${GATE_BIN:-bin}/blast-radius.py" --json --changed-from "$BASE") \
   || die "blast-radius resolver failed its positive control — dependency scan is UNKNOWN, not empty"
 BR_COUNT=$(echo "$BR_JSON" | jq '.blast_radius | length')
 BR_SCANNED=$(echo "$BR_JSON" | jq '.files_scanned')
@@ -164,9 +261,35 @@ fi
 # heading). Defaults preserve this repo's behaviour byte-for-byte.
 STANDARDS_BEGIN="${STANDARDS_BEGIN:-^## 3\\.}"
 STANDARDS_END="${STANDARDS_END:-^## 4\\.}"
-STANDARDS=$(awk -v b="$STANDARDS_BEGIN" -v e="$STANDARDS_END" \
-            '$0 ~ b {f=1; next} f && $0 ~ e {f=0} f && /^- \*\*/' CLAUDE.md \
-            | sed 's/^- \*\*//; s/\*\*//g' | cut -c1-300 | jq -R . | jq -s .)
+# Read from the BASE ref, not the worktree. The ruleset a review is judged against must
+# not be attacker-controlled: under pull_request_target the worktree IS the PR, so a PR
+# could rewrite CLAUDE.md to a permissive list and be graded against its own rules. The
+# CLAUDE.md diff still reaches the reviewer as part of the change; what is pinned here is
+# the yardstick. Falls back to the worktree copy when the base has none, which is the
+# bootstrap PR that introduces it.
+#
+# Bullets are joined with their continuation lines before extraction. Emitting only the
+# first physical line dropped the very clauses that carry the rule while still counting
+# the fragment as a checked standard, so a PR could violate a continuation-only
+# requirement and get an all-clear. A blank line, the next bullet, or the end marker
+# closes a bullet. Repos whose bullets are already one line (this one, mcp-techkb,
+# viceroy) are unaffected: measured, their extraction is byte-identical either way.
+_STD_SRC=$(git show "$BASE:CLAUDE.md" 2>/dev/null) || _STD_SRC=""
+[ -n "$_STD_SRC" ] || _STD_SRC=$(cat CLAUDE.md 2>/dev/null || true)
+STANDARDS=$(printf '%s\n' "$_STD_SRC" \
+            | awk -v b="$STANDARDS_BEGIN" -v e="$STANDARDS_END" '
+                function flush() { if (cur != "") { print cur; cur="" } }
+                $0 ~ b { f=1; next }
+                f && $0 ~ e { flush(); f=0 }
+                f && /^- \*\*/ { flush(); cur=$0; next }
+                f && cur != "" && /^[[:space:]]+[^[:space:]]/ {
+                    line=$0; sub(/^[[:space:]]+/, " ", line); cur=cur line; next }
+                f && cur != "" { flush() }
+                END { flush() }' \
+            | sed 's/^- \*\*//; s/\*\*//g' | jq -R . | jq -s .)
+# No per-standard truncation. cut -c1-300 cut real rules mid-clause (the longest in the
+# fleet is ~1600 chars) and dropped the later clauses that carry them, while still
+# counting the fragment as checked. The request TOTAL is bounded instead, below.
 STD_COUNT=$(echo "$STANDARDS" | jq 'length')
 # Zero standards is a FAILED gate, not a degraded one. A verdict produced without any
 # project standards is a generic review wearing this gate's badge, and the whole point is
@@ -252,7 +375,15 @@ REQUEST_ALLOWANCE=$(( BROKER_MAX_BYTES - BROKER_SAFETY_MARGIN ))
 if [ "$DIFF_BYTES" -gt "$REQUEST_ALLOWANCE" ]; then
   die "the changed-file diffs alone are $DIFF_BYTES bytes, past the broker's ${BROKER_MAX_BYTES}-byte cap — split the PR. Trimming the diff to fit would review less than it claims, which is the failure this gate exists to prevent"
 fi
-CONTEXT_BUDGET=$(( REQUEST_ALLOWANCE - DIFF_BYTES ))
+# Standards ride in the same request as the diff and the context, so they have to come
+# out of the same allowance. This used to be unaccounted, which the safety margin quietly
+# absorbed; now that whole bullets are sent rather than 300-char prefixes, the payload is
+# several KB and guessing is no longer good enough.
+STD_BYTES=$(printf '%s' "$STANDARDS" | wc -c | tr -d ' ')
+if [ "$(( DIFF_BYTES + STD_BYTES ))" -gt "$REQUEST_ALLOWANCE" ]; then
+  die "the changed-file diffs plus this repo's standards are $(( DIFF_BYTES + STD_BYTES )) bytes, past the broker's ${BROKER_MAX_BYTES}-byte cap — split the PR"
+fi
+CONTEXT_BUDGET=$(( REQUEST_ALLOWANCE - DIFF_BYTES - STD_BYTES ))
 if [ "$BR_COUNT" -gt 0 ]; then
   SHARE=$(( CONTEXT_BUDGET / BR_COUNT ))
   if [ "$SHARE" -lt "$CONTEXT_CAP_MIN" ]; then
@@ -275,9 +406,15 @@ fi
 if [ "$BR_COUNT" -gt "$CONTEXT_FILE_LIMIT" ]; then
   echo "   context: capping to $CONTEXT_FILE_LIMIT/$BR_COUNT blast-radius file(s) ($(( BR_COUNT - CONTEXT_FILE_LIMIT )) omitted)"
 fi
-echo "   budget: diff $DIFF_BYTES B; context <= $CONTEXT_BUDGET B at <= $CONTEXT_CAP B/file (broker cap $BROKER_MAX_BYTES B)"
+echo "   budget: diff $DIFF_BYTES B; standards $STD_BYTES B; context <= $CONTEXT_BUDGET B at <= $CONTEXT_CAP B/file (broker cap $BROKER_MAX_BYTES B)"
 
 # ---- 4c. assemble -----------------------------------------------------------------
+# Dependents the loop below refuses are COUNTED, not just logged. A skipped path leaves
+# BR_COUNT untouched while never reaching the broker, so files_examined can equal
+# files_supplied_total -- "everything supplied was read" -- for a review that silently
+# omitted a dependent, and section 6 would then claim the whole blast radius clean
+# (Codex [P2] on PR #71). The braces below are not a subshell, so the count survives.
+CTX_SKIPPED=0
 {
   echo '{'
   echo "\"head_sha\": $(printf '%s' "$HEAD_SHA" | jq -R .),"
@@ -287,16 +424,34 @@ echo "   budget: diff $DIFF_BYTES B; context <= $CONTEXT_BUDGET B at <= $CONTEXT
   echo '],'
   echo '"context": ['
   first=1
-  for f in $(echo "$BR_JSON" | jq -r --argjson n "$CONTEXT_FILE_LIMIT" '.blast_radius[:$n][]'); do
-    [ -r "$f" ] || continue
+  # NUL-delimited, not word-split. `for f in $(...)` splits on IFS, so a dependent
+  # path containing a space or a glob character arrived as fragments, every fragment
+  # failed the readability test, and the file was dropped -- a verdict posted without
+  # a dependent that BR_COUNT had already counted as found. Ported from claude-memory,
+  # whose fork carried this fix while every other consumer word-split.
+  while IFS= read -r -d '' f; do
+    # Regular files only, and never a symlink. `head` FOLLOWS a symlink, and
+    # actions/checkout persists the forge token into .git/config, so a tracked
+    # symlink pointing at it would ship that credential to the broker inside an
+    # ordinary-looking context file. `-r` alone passes such a symlink happily.
+    # -L is tested BEFORE -f because a symlink to a regular file also satisfies -f.
+    if [ -L "$f" ] || [ ! -f "$f" ] || [ ! -r "$f" ]; then
+      echo "   context: skipping non-regular or unreadable path: $f" >&2
+      CTX_SKIPPED=$(( CTX_SKIPPED + 1 ))
+      continue
+    fi
     [ $first -eq 1 ] || echo ','
     first=0
-    # -Rs on the path for the same reason as the changed-file entry above.
-    printf '{"path":%s,"content":%s}' "$(printf '%s' "$f" | jq -Rs .)" "$(head -c "$CONTEXT_CAP" "$f" | jq -Rs .)"
-  done
+    # -Rs on the path for the same reason as the changed-file entry above. `--` ends
+    # option parsing: a path beginning with a dash is otherwise read by head as a flag.
+    printf '{"path":%s,"content":%s}' "$(printf '%s' "$f" | jq -Rs .)" "$(head -c "$CONTEXT_CAP" -- "$f" | jq -Rs .)"
+  done < <(echo "$BR_JSON" | jq -j --argjson n "$CONTEXT_FILE_LIMIT" '.blast_radius[:$n][] | . + "\u0000"')
   echo ']}'
 } > "$REQ"
 jq -e . "$REQ" >/dev/null || die "assembled an invalid request JSON"
+if [ "$CTX_SKIPPED" -gt 0 ]; then
+  echo "   context: $CTX_SKIPPED dependent(s) were refused as non-regular or unreadable and never sent — this blast radius is INCOMPLETE"
+fi
 
 # ---- 5. ask the broker ------------------------------------------------------------
 V=$(mktemp); BHDR=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR"' EXIT
@@ -315,8 +470,55 @@ fi
 
 EXAMINED=$(jq -r .files_examined "$V"); SUBMITTED=$(jq -r .files_supplied_total "$V")
 EXAMINED_CHANGED=$(jq -r .files_examined_changed "$V")
+STD_CHECKED=$(jq -r '.standards_checked' "$V"); STD_SUPPLIED=$(jq -r '.standards_supplied' "$V")
 FINDINGS=$(jq '.findings | length' "$V")
-echo "   verdict: $VERDICT — $FINDINGS finding(s), examined $EXAMINED/$SUBMITTED supplied file(s) ($EXAMINED_CHANGED/${#CHANGED[@]} changed)"
+echo "   verdict: $VERDICT — $FINDINGS finding(s), examined $EXAMINED/$SUBMITTED supplied file(s) ($EXAMINED_CHANGED/${#CHANGED[@]} changed), $STD_CHECKED/$STD_SUPPLIED standard(s)"
+
+# The standards ratio is ENFORCED, not just rendered into the comment. This gate's whole
+# claim is that it applies rules living in THIS repo; a verdict that skipped them is a
+# generic review wearing the badge, which is the same failure the zero-standard check
+# already refuses at the other end of the pipe. Ported from claude-memory.
+#
+# Same digits-only allowlist as the file counts above, and for the same reason: "null"
+# from a broker that never sent the field must read as UNKNOWN, not as zero.
+require_count "$STD_SUPPLIED" standards_supplied "whether this repo's rules were applied is UNKNOWN, never clean"
+require_count "$STD_CHECKED" standards_checked "whether this repo's rules were applied is UNKNOWN, never clean"
+# Sent N, received M: a mismatch means standards were lost in transit, so the review was
+# graded against a ruleset this client never chose.
+if [ "$STD_SUPPLIED" != "$STD_COUNT" ]; then
+  die "broker received $STD_SUPPLIED standard(s) but this client sent $STD_COUNT — standards lost in transit; UNKNOWN, refusing"
+fi
+# More checked than supplied is not a better review, it is an impossible number.
+# Gated on a merge-eligible verdict for the same reason every other count guard here
+# is: the broker does NOT clamp this model-reported number, a non-pass verdict cannot
+# merge anyway, and killing it would discard real findings over a counting mistake.
+# Leaving it ungated repeated, in this very change, the flaw its own commit message
+# criticised in claude-memory (Codex [P2] on PR #71, third round).
+if [ "$VERDICT" = "pass" ] && [ "$STD_CHECKED" -gt "$STD_SUPPLIED" ]; then
+  die "broker reports $STD_CHECKED standard(s) checked of $STD_SUPPLIED supplied — an impossible ratio; UNKNOWN, refusing"
+elif [ "$STD_CHECKED" -gt "$STD_SUPPLIED" ]; then
+  echo "   NOTE: broker reports $STD_CHECKED standard(s) checked of $STD_SUPPLIED supplied — an impossible ratio; the findings stand, the ratio does not"
+fi
+# A PASS that checked only SOME of the rules is REPORTED, not refused. Measured against
+# live traffic before this was written: viceroy PR #16 merged on a real verdict of 2/12
+# standards checked, and claude-memory's fork -- where this port came from -- would have
+# killed it. Partial standards coverage is ordinary model behaviour, not an anomaly, and
+# a gate that fails most real PRs gets worked around, which costs more than the gap it
+# closes. The ratio is already rendered into the posted comment, so the human sees it.
+# Same posture as #68 took for a clamped aggregate: say it, do not die on it.
+# ZERO checked is not the mild end of partial, it is the generic review this gate exists
+# to refuse -- the same thing section 3 already dies on when the extraction comes back
+# empty, arriving from the other end of the pipe. forge-pr decides on the verdict word and
+# never reads this ratio, so nothing downstream would catch it (Codex [P2] on PR #71).
+# The live-traffic evidence that motivated the softening was 2/12, 10/10 and 11/11 -- all
+# non-zero -- so refusing exactly zero costs none of it.
+if [ "$VERDICT" = "pass" ] && [ "$STD_SUPPLIED" -gt 0 ] && [ "$STD_CHECKED" -eq 0 ]; then
+  die "broker checked 0 of $STD_SUPPLIED standard(s) — a clean verdict that applied none of this repo's rules is a generic review wearing this gate's badge; UNKNOWN, refusing"
+fi
+# 1..N-1 is a real but tolerable gap: reported, not refused.
+if [ "$VERDICT" = "pass" ] && [ "$STD_CHECKED" -lt "$STD_SUPPLIED" ]; then
+  echo "   NOTE: $STD_CHECKED of $STD_SUPPLIED standard(s) were checked — the verdict does not cover the rest"
+fi
 
 # The ratio is ENFORCED here, not merely printed. It used to be printed and nothing
 # else: the broker only rejects files_examined=0, forge-pr parses the ratio but decides
@@ -328,20 +530,14 @@ echo "   verdict: $VERDICT — $FINDINGS finding(s), examined $EXAMINED/$SUBMITT
 # from a field the broker omitted, an empty capture, a float, a negative — is UNKNOWN,
 # because `[ x -lt y ]` on a non-integer is a syntax error that `set -e` would turn into
 # a bare exit nobody can read as a gate refusal.
-case "$EXAMINED" in ''|*[!0-9]*)
-  die "broker reported files_examined='$EXAMINED', which is not a count — the size of the review is UNKNOWN, never clean" ;;
-esac
-case "$SUBMITTED" in ''|*[!0-9]*)
-  die "broker reported files_supplied_total='$SUBMITTED', which is not a count — the size of the review is UNKNOWN, never clean" ;;
-esac
+require_count "$EXAMINED" files_examined "the size of the review is UNKNOWN, never clean"
+require_count "$SUBMITTED" files_supplied_total "the size of the review is UNKNOWN, never clean"
 # Same allowlist, and it is also this client's version check on the broker. A broker older
 # than review-verdict@2 does not send the field at all, so jq yields "null" and the gate
 # refuses. That is deliberate: the alternative is falling back to files_examined, which
 # silently restores the weaker check below and leaves an un-redeployed service looking
 # like a working gate. The message names the cause so the refusal is actionable.
-case "$EXAMINED_CHANGED" in ''|*[!0-9]*)
-  die "broker reported files_examined_changed='$EXAMINED_CHANGED', which is not a count — a broker older than review-verdict@2 does not send this field, so redeploy review-broker.py. This gate will not fall back to files_examined, because that is the weaker check this one replaced" ;;
-esac
+require_count "$EXAMINED_CHANGED" files_examined_changed "a broker older than review-verdict@2 does not send this field, so redeploy review-broker.py. This gate will not fall back to files_examined, because that is the weaker check this one replaced"
 # What counts as "enough examined" is the CHANGED file count, not the supplied total.
 # files_examined counts changed files AND blast-radius files together (review-broker.py
 # states this in the prompt), and the context files are supporting material the model is
@@ -446,11 +642,18 @@ if [ "$VERDICT" = "pass" ] && [ "$CHANGED_OVERCOUNTED" != "false" ]; then
   fi
   die "broker did not report examined_changed_overcounted (got '$CHANGED_OVERCOUNTED') — this gate cannot confirm $EXAMINED_CHANGED was not a clamped overcount, and an unconfirmable count is UNKNOWN, not a pass"
 fi
-# An unread DEPENDENT is a real degradation, just not a failing one. Say so on the
+# An unread supplied file is a real degradation, just not a failing one. Say so on the
 # console rather than letting "$EXAMINED/$SUBMITTED" above pass for a full read; the
 # same ratio is rendered into the posted comment, where forge-pr and a human both see it.
+#
+# Reports the changed-file count instead of asserting "the changed files were covered".
+# That claim held only for a PASS -- the guards above are gated on one -- so on a
+# concerns/fail run where a CHANGED file went unread the console said the opposite of
+# what happened. Same defect as the posted comment's blast-radius wording (Codex [P2] on
+# PR #67), one level up; fixed here too rather than left because only the other one was
+# named.
 if [ "$EXAMINED" -lt "$SUBMITTED" ]; then
-  echo "   NOTE: $(( SUBMITTED - EXAMINED )) of $SUBMITTED supplied file(s) went unread — the changed files were covered, some blast-radius context was not"
+  echo "   NOTE: $(( SUBMITTED - EXAMINED )) of $SUBMITTED supplied file(s) went unread ($EXAMINED_CHANGED/${#CHANGED[@]} changed file(s) read)"
 fi
 
 # ---- 6. post it back --------------------------------------------------------------
@@ -459,8 +662,62 @@ fi
 # forge-pr parses it with VERDICT_META_RE, and a comment whose meta line stops matching
 # makes forge-pr raise rather than merge. The changed-file segment is therefore appended
 # AFTER it, never inserted before.
+#
+# The zero-findings sentence is COVERAGE-AWARE, and the coverage note below exists,
+# because the flat sentence made a claim the review had not earned: "No findings in the
+# changed code or its blast radius" went out on PR #58 at 2/10 examined, where zero of the
+# 8 blast-radius files were opened. The numbers in the meta line were correct and the
+# prose beside them contradicted them — the same "reviewed less than it claimed" shape as
+# the truncation and partial-examination defects above, arriving in the one artifact a
+# human actually reads. The honest line existed only as an `echo` to the CI console
+# (section 5's NOTE), which nobody reads on a green run.
+#
+# The note renders for EVERY verdict, not just a clean one: "2 findings" beside "8 of 10
+# unread" is exactly as material to a reader as "no findings" beside it. It asserts only
+# the two counts and never which files were skipped — the changed-file guard above holds
+# for a PASS only, so on a concerns/fail comment "the unread ones were all context" would
+# be an inference this script cannot make.
+#
+# REPORTS THE TWO RATIOS AS GIVEN, and derives nothing. Written against the whole
+# value-shape domain rather than the case that prompted it, because the two shortfalls
+# are independent and the first two attempts each fixed one cell and broke another
+# (Codex [P2] on PR #67, three rounds). With A = supplied - examined and
+# B = changed - examined_changed:
+#   A=0 B=0  no note.
+#   A>0 B=0  aggregate short; changed files complete.
+#   A=0 B>0  the two self-reports CONTRADICT each other -- changed files are a subset of
+#            supplied, so "read every supplied file" and "missed a changed file" cannot
+#            both hold. Permitted here: the coherence guard above catches only
+#            examined_changed > examined, and it is gated on a PASS besides. Rendering
+#            "0 of 3 supplied file(s) went unread" was the contradiction that killed the
+#            subtraction form.
+#   A>0 B>0  both short.
+# A derived difference is false or absurd in two of those four; the raw pair is true in
+# all four, including the incoherent one, and the reader can see the disagreement. The
+# closing sentence says "only what was read" for the same reason -- "not every supplied
+# file" contradicts examined == supplied in the third row.
+#
+# Keyed on EITHER shortfall, never the aggregate alone. files_examined == supplied with
+# files_examined_changed < changed is a combination the broker and this script deliberately
+# permit on a concerns/fail verdict (the changed-file guards above are gated on a PASS), and
+# keying only on the aggregate suppressed the warning exactly there -- a comment reading
+# "3/3 supplied file(s) examined" with no note while a CHANGED file went unread. That is the
+# aggregate-vs-changed lesson this gate already learned once, arriving in the prose layer
+# (Codex [P2] on PR #67, second round). The sentence reads from the same condition so both
+# follow one rule instead of a chain of assumptions about which verdicts carry zero findings.
+#
+# Hence "not every supplied file" and NOT "not the whole blast radius". The blast-radius
+# wording was this fix's own version of the overclaim it was written to remove: on a
+# concerns/fail verdict the shortfall can be a CHANGED file (2/3 examined, 1/2 changed
+# read is reachable and permitted), and naming the blast radius there points the reader
+# away from unreviewed changed code (Codex [P2] on PR #67). The counts say which; the
+# prose must not guess.
+#
+# It cannot be mistaken for a finding by forge-pr: FINDING_RE anchors on "### " plus a
+# severity emoji, and this line is a blockquote. Verified against the deployed parser.
 BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR_SCANNED" \
-  --argjson changed "${#CHANGED[@]}" '
+  --arg generated "$GENERATED_NOTE" \
+  --argjson changed "${#CHANGED[@]}" --argjson skipped "$CTX_SKIPPED" '
   "## 🤖 Local AI review — **" + (.verdict|ascii_upcase) + "**\n\n" +
   "`" + $sha + "` · model `" + .model + "` · " +
   (.files_examined|tostring) + "/" + (.files_supplied_total|tostring) + " supplied file(s) examined" +
@@ -471,6 +728,18 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
   $br + " dependent(s) from " + $scanned + " scanned · " +
   (.standards_checked|tostring) + "/" + (.standards_supplied|tostring) + " project standards checked" +
   (if .cached then " · _cached verdict_" else "" end) + "\n\n" +
+  # Placed AFTER the metadata line terminates, not inside it. Injected mid-line it landed
+  # between "supplied file(s) examined · " and the changed-file ratio, splitting the
+  # metadata in half and putting the "> " marker somewhere other than the start of a
+  # line, where Forgejo renders it as literal text rather than a blockquote (Codex [P2]
+  # on PR #71, fourth round). Disclosed on EVERY verdict: the $skipped term further down
+  # guards only the "no findings ... or its blast radius" sentence, which a verdict with
+  # findings never reaches.
+   (if $skipped > 0 then
+      "> ⚠️ " + ($skipped|tostring) + " dependent(s) were refused as non-regular or " +
+      "unreadable and never sent to the model, so this blast radius is **incomplete**. " +
+      "The changed files are unaffected.\n\n"
+    else "" end) +
   # The console NOTE is ephemeral; THIS is the artifact a human and forge-pr actually
   # read. Without it the comment presents a clamped N/N as full coverage, and the
   # unread-context warning cannot fire either because the clamp made the numbers equal —
@@ -490,12 +759,42 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
      "this gate could not confirm it. The findings below stand; the coverage ratio does " +
      "not.\n\n"
    else "" end) +
-  (if (.findings|length) == 0 then "No findings in the changed code or its blast radius.\n"
+  # The blast-radius claim also drops when the aggregate count is UNTRUSTWORTHY, not only
+  # when it is short, and this term is LIVE rather than defensive. A clamped count is no
+  # longer fatal on a PASS -- section 5 downgraded it to a console NOTE and continues --
+  # so "pass, zero findings, examined_overcounted=true" now reaches this template, with
+  # examined == supplied because the clamp made them equal. Both shortfall terms are
+  # therefore false, and without this one the sentence would claim a clean blast radius
+  # directly beneath the caveat above saying that same count is not evidence of coverage.
+  # Merging the two warnings without it reintroduces the overclaim both exist to remove,
+  # on a third axis. `!= false` is the allowlist the guards upstream use: absent is
+  # untrustworthy, not trustworthy (absent is still fatal on a PASS, so only `true`
+  # reaches here with zero findings -- the broker maps zero findings to `pass`).
+  (if (.findings|length) == 0 then
+     (if (.files_examined < .files_supplied_total)
+         or (.files_examined_changed < $changed)
+         or (.examined_overcounted != false)
+         or ($skipped > 0)
+      then "No findings in the changed code.\n"
+      else "No findings in the changed code or its blast radius.\n" end)
    else ((.findings | map(
      "### " + (if .severity=="critical" then "🔴" elif .severity=="major" then "🟠" else "🟡" end) +
      " " + .severity + " — " + .category + "\n" +
      "**" + .file + (if .line then ":" + (.line|tostring) else "" end) + "** — " + .summary + "\n\n" +
      .why + "\n") | join("\n"))) end) +
+  (if (.files_examined < .files_supplied_total)
+      or (.files_examined_changed < $changed) then
+     "\n> ⚠ **Reduced coverage** — read " + (.files_examined|tostring) + " of " +
+     (.files_supplied_total|tostring) + " supplied file(s), " +
+     (.files_examined_changed|tostring) + " of " + ($changed|tostring) +
+     " changed file(s). Findings above cover only what was read.\n"
+   else "" end) +
+  (if $generated == "" then "" else
+     "\n> **Generated artifacts excluded from this review** — compiled output whose typed\n" +
+     "> source IS under review in this PR. Listed so the coverage claim above is read\n" +
+     "> correctly: these bytes were never sent to the model.\n>\n" +
+     ($generated | split("\n") | map(select(. != "")) | map("> " + .) | join("\n")) + "\n"
+   end) +
   "\n---\n_Advisory only — this gate does not block merges. Reviews the change and the " +
   "files that depend on it, not the whole project._"' "$V")
 
