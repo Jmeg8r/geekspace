@@ -91,7 +91,7 @@ flowchart TD
     end
     R <-->|reactive queries & mutations<br/>WebSocket| C[(Convex local deployment<br/>127.0.0.1:3210)]
     C --> S[convex/lib/scheduler.ts<br/>pure auto-scheduling engine]
-    M[Any mutation that touches<br/>tasks, events, blocks, settings] -->|runReflow| S
+    M[Schedule-affecting mutations<br/>tasks, events, blocks, settings] -->|runReflow| S
     S -->|rewrites unlocked future blocks| C
 ```
 
@@ -101,8 +101,8 @@ flowchart TD
 |---|---|
 | Convex **anonymous local** deployment | No account, no auth, data stays on this machine, still fully reactive (dev: repo `.convex/`; packaged: `~/Library/Application Support/Geekspace/` on macOS, `%APPDATA%\Geekspace\` on Windows) |
 | Electron owns the backend lifecycle (packaged) | The app spawns the bundled `convex-local-backend` on launch and stops it on quit — self-contained, no terminal |
-| Pure scheduler module shared by server + tests | Deterministic, 16 unit tests, no UI coupling |
-| Reflow inside every relevant mutation | The cascade can never be forgotten; UI updates reactively for free |
+| Pure scheduler module shared by server + tests | Deterministic, 21 unit tests, no UI coupling |
+| Reflow inside the schedule-affecting mutations | The cascade can never be forgotten; UI updates reactively for free. **Not every** mutation that touches those tables reflows — `setMicDevice` deliberately does not (picking a microphone has nothing to do with the schedule, and reflow is unconditional), and `removeProperty`, `updateProperty` and `completeSprint` currently do not either |
 | Drag = lock | Matches Motion/Reclaim mental model: a manual placement is a promise the engine must respect |
 | Date-only values stored as UTC-midnight calendar dates | Timezone-proof dates (like Notion); timed values are real epochs |
 | Fixed tz-offset scheduling with constant reflow | Near-term blocks always correct; DST drift self-heals on every reflow |
@@ -203,3 +203,14 @@ MIT — see [LICENSE](LICENSE). A personal learning project, shared as-is; no su
 ---
 
 *An As The Geek Learns build — 2026.*
+
+<!-- archify:begin -->
+### System map
+
+![System map](docs/diagrams/geekspace.architecture.svg)
+
+Interactive: [`docs/diagrams/geekspace.architecture.html`](docs/diagrams/geekspace.architecture.html)
+— search nodes, trace routes, compare roles. Source of truth is the typed IR
+[`geekspace.architecture.json`](docs/diagrams/geekspace.architecture.json); edit that, never the
+HTML.
+<!-- archify:end -->

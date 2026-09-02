@@ -45,7 +45,8 @@ Advisory only for now — see `bin/review-pr.sh`. Draft list; expand as real pat
   meeting without saying so"). New recording/transcription code needs the same discipline.
 - **New `Record<string, unknown>` (or any other type-erased dictionary) needs a real reason, not
   convenience.** `no-unsafe-dictionary-type` is warn-only in oxlint with 8 known, deferred sites
-  (`convex/lib/types.ts`'s dynamic property bags — see `docs/anti-slop.md`); a PR adding a new one
+  (dynamic property bags spread across `convex/rows.ts`, `scheduling.ts`, `seed.ts`, `templates.ts`,
+  `meetings.ts` and two `src/components/` files — see `docs/anti-slop.md`); a PR adding a new one
   should name the real value union instead of erasing to `unknown`.
 - **Ad hoc `typeof` checks on schemaless Convex data reuse the shared predicates**
   (`convex/lib/predicates.ts`'s `isNumber`/`isString`), not a new inline `typeof x === "..."`.

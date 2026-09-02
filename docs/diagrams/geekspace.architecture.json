@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Geekspace — desktop workspace with a self-scheduling calendar",
+    "output": "geekspace.architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "main-path",
+        "label": "Edit to persisted",
+        "focus": [
+          "user",
+          "renderer",
+          "convex",
+          "store"
+        ],
+        "note": "The renderer talks to a local Convex deployment over reactive queries."
+      },
+      {
+        "id": "reflow",
+        "label": "Auto-scheduling",
+        "focus": [
+          "mutations",
+          "scheduler",
+          "convex"
+        ],
+        "note": "Any mutation touching tasks, events, blocks or settings triggers a reflow."
+      },
+      {
+        "id": "shell",
+        "label": "Desktop shell",
+        "focus": [
+          "electron",
+          "renderer",
+          "mcp"
+        ],
+        "note": "Electron hosts the renderer and the local integrations."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "User",
+      "sublabel": "macOS / Windows",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "electron",
+      "type": "backend",
+      "label": "electron/",
+      "sublabel": "shell, convexBackend.mjs",
+      "pos": [
+        250,
+        250
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "renderer",
+      "type": "frontend",
+      "label": "src/ — React 19 + Vite",
+      "sublabel": "BlockNote, Mantine, dnd-kit",
+      "pos": [
+        490,
+        250
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "views",
+      "type": "frontend",
+      "label": "views",
+      "sublabel": "table, board, list, calendar, timeline",
+      "pos": [
+        490,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "convex",
+      "type": "backend",
+      "label": "convex/",
+      "sublabel": "local deployment, reactive",
+      "pos": [
+        740,
+        250
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "127.0.0.1:3210"
+    },
+    {
+      "id": "mutations",
+      "type": "backend",
+      "label": "tasks, events, blocks",
+      "sublabel": "schedule-affecting ones reflow",
+      "pos": [
+        740,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "scheduler",
+      "type": "backend",
+      "label": "convex/lib/scheduler.ts",
+      "sublabel": "pure auto-scheduling engine",
+      "pos": [
+        980,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "local app data",
+      "sublabel": "no account, stays on the machine",
+      "pos": [
+        980,
+        250
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "mcp",
+      "type": "backend",
+      "label": "mcp/index.mjs",
+      "sublabel": "MCP server",
+      "pos": [
+        250,
+        400
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "external",
+      "label": "Claude Agent SDK",
+      "sublabel": "electron/architect.mjs",
+      "pos": [
+        490,
+        400
+      ],
+      "size": [
+        200,
+        64
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "the desktop app",
+      "wraps": [
+        "electron",
+        "renderer",
+        "views",
+        "convex",
+        "mutations",
+        "scheduler",
+        "store",
+        "mcp",
+        "agent"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-electron",
+      "from": "user",
+      "to": "electron",
+      "variant": "emphasis"
+    },
+    {
+      "id": "electron-renderer",
+      "from": "electron",
+      "to": "renderer",
+      "label": "hosts",
+      "variant": "emphasis"
+    },
+    {
+      "id": "renderer-views",
+      "from": "renderer",
+      "to": "views"
+    },
+    {
+      "id": "renderer-convex",
+      "from": "renderer",
+      "to": "convex",
+      "label": "reactive",
+      "variant": "emphasis"
+    },
+    {
+      "id": "convex-store",
+      "from": "convex",
+      "to": "store",
+      "variant": "emphasis"
+    },
+    {
+      "id": "mutations-scheduler",
+      "from": "mutations",
+      "to": "scheduler",
+      "label": "runReflow",
+      "variant": "emphasis"
+    },
+    {
+      "id": "convex-mutations",
+      "from": "convex",
+      "to": "mutations"
+    },
+    {
+      "id": "scheduler-store",
+      "from": "scheduler",
+      "to": "store",
+      "variant": "dashed"
+    },
+    {
+      "id": "electron-mcp",
+      "from": "electron",
+      "to": "mcp",
+      "variant": "dashed"
+    },
+    {
+      "id": "mcp-agent",
+      "from": "mcp",
+      "to": "agent",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Shell and renderer",
+      "items": [
+        "Electron hosts a React 19 + Vite renderer",
+        "BlockNote for the block editor; Mantine and dnd-kit for the UI",
+        "Views: table, board, list, calendar, timeline, plus week and month planners"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Data",
+      "items": [
+        "Convex anonymous LOCAL deployment on 127.0.0.1:3210",
+        "No account, no auth — data stays on the machine and is still fully reactive",
+        "Dev uses the repo's .convex/; packaged uses the OS app-data directory"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "The calendar schedules itself",
+      "items": [
+        "convex/lib/scheduler.ts is a PURE engine, 21 unit tests, no UI coupling",
+        "Schedule-affecting mutations call runReflow; it rewrites unlocked future blocks only",
+        "NOT every mutation on those tables reflows — setMicDevice deliberately skips it, and removeProperty/updateProperty/completeSprint currently do not"
+      ]
+    }
+  ]
+}
