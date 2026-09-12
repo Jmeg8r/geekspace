@@ -27,19 +27,25 @@ const CANDIDATES = [
 ];
 const cfgPath = CANDIDATES.find((p) => fs.existsSync(p));
 if (!cfgPath) {
-  console.error("✖ deploy:local: no Convex config.json found (run the app or `npm run dev` once).");
+  console.error(
+    "✖ deploy:local: no Convex config.json found (run the app or `npm run dev` once).",
+  );
   process.exit(1);
 }
 const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
 
-const envFile = path.join(os.tmpdir(), `gs-deploy-${process.pid}.env`);
+const envDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "gs-deploy-"));
+const envFile = path.join(envDirectory, "deploy.env");
 fs.writeFileSync(
   envFile,
-  `CONVEX_SELF_HOSTED_URL=${URL}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${cfg.adminKey}\n`
+  `CONVEX_SELF_HOSTED_URL=${URL}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${cfg.adminKey}\n`,
+  { mode: 0o600, flag: "wx" },
 );
 
 try {
-  console.log(`• deploying convex/ functions to ${URL} (open Geekspace must be running)…`);
+  console.log(
+    `• deploying convex/ functions to ${URL} (open Geekspace must be running)…`,
+  );
   // WHY process.execPath + CONVEX_CLI, not the `.bin/convex` shim: see the
   // CONVEX_CLI comment above. process.execPath is node here (this script
   // itself runs under node), so running the real entry point works
@@ -47,7 +53,12 @@ try {
   const res = spawnSync(
     process.execPath,
     [CONVEX_CLI, "deploy", "--env-file", envFile, "--typecheck", "disable"],
-    { cwd: ROOT, stdio: ["ignore", "inherit", "inherit"], timeout: 180000, killSignal: "SIGKILL" }
+    {
+      cwd: ROOT,
+      stdio: ["ignore", "inherit", "inherit"],
+      timeout: 180000,
+      killSignal: "SIGKILL",
+    },
   );
   if (res.status !== 0) {
     // F6: on Windows, the convex CLI can finish `deploy`'s actual work
@@ -57,10 +68,10 @@ try {
     // exit nonzero — but check the running app before assuming it failed.
     console.warn(
       `⚠ deploy:local: convex deploy exited with status ${res.status}. On Windows this can happen ` +
-        "AFTER a successful deploy (a libuv-teardown crash) — check the running Geekspace app to confirm before retrying."
+        "AFTER a successful deploy (a libuv-teardown crash) — check the running Geekspace app to confirm before retrying.",
     );
   }
   process.exitCode = res.status ?? 1;
 } finally {
-  fs.rmSync(envFile, { force: true });
+  fs.rmSync(envDirectory, { recursive: true, force: true });
 }

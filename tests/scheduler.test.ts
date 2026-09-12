@@ -26,7 +26,9 @@ const at = (dayFromMon: number, h: number, m = 0) =>
   Date.UTC(2026, 5, 8 + dayFromMon, h, m);
 const MON_8AM = at(0, 8);
 
-const task = (overrides: Partial<SchedulerTask> & { id: string }): SchedulerTask => ({
+const task = (
+  overrides: Partial<SchedulerTask> & { id: string },
+): SchedulerTask => ({
   title: overrides.id,
   remainingMin: 60,
   priority: 2,
@@ -35,7 +37,12 @@ const task = (overrides: Partial<SchedulerTask> & { id: string }): SchedulerTask
 
 describe("computeSchedule", () => {
   it("places a task at the start of working hours", () => {
-    const { blocks, warnings } = computeSchedule(MON_8AM, [task({ id: "a" })], [], cfg);
+    const { blocks, warnings } = computeSchedule(
+      MON_8AM,
+      [task({ id: "a" })],
+      [],
+      cfg,
+    );
     expect(warnings).toEqual([]);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].start).toBe(at(0, 9));
@@ -76,7 +83,7 @@ describe("computeSchedule", () => {
       MON_8AM,
       [task({ id: "big", remainingMin: 300 })],
       [],
-      cfg
+      cfg,
     );
     expect(warnings).toEqual([]);
     const durations = blocks.map((b) => (b.end - b.start) / 60000);
@@ -95,7 +102,12 @@ describe("computeSchedule", () => {
       { start: at(0, 9), end: at(0, 12) },
       { start: at(0, 12, 20), end: at(0, 16, 30) },
     ];
-    const { blocks } = computeSchedule(MON_8AM, [task({ id: "a", remainingMin: 30 })], busy, cfg);
+    const { blocks } = computeSchedule(
+      MON_8AM,
+      [task({ id: "a", remainingMin: 30 })],
+      busy,
+      cfg,
+    );
     for (const b of blocks) {
       expect((b.end - b.start) / 60000).toBeGreaterThanOrEqual(30);
       // must not be inside the 20-minute gap
@@ -109,7 +121,7 @@ describe("computeSchedule", () => {
       MON_8AM,
       [task({ id: "deep", remainingMin: 180, noSplit: true })],
       busy,
-      cfg
+      cfg,
     );
     expect(blocks).toHaveLength(1);
     expect((blocks[0].end - blocks[0].start) / 60000).toBe(180);
@@ -122,7 +134,7 @@ describe("computeSchedule", () => {
       MON_8AM,
       [task({ id: "late", dueMs: at(-1, 17) })],
       [],
-      cfg
+      cfg,
     );
     expect(blocks.every((b) => b.pastDue)).toBe(true);
     expect(warnings).toEqual([
@@ -131,23 +143,37 @@ describe("computeSchedule", () => {
   });
 
   it("warns with remaining minutes when capacity runs out", () => {
-    const tiny: SchedulerConfig = { ...cfg, horizonDays: 1, dayEndMin: 10 * 60 };
+    const tiny: SchedulerConfig = {
+      ...cfg,
+      horizonDays: 1,
+      dayEndMin: 10 * 60,
+    };
     const { blocks, warnings } = computeSchedule(
       MON_8AM,
       [task({ id: "big", remainingMin: 300 })],
       [],
-      tiny
+      tiny,
     );
     const placed = blocks.reduce((a, b) => a + (b.end - b.start) / 60000, 0);
     expect(placed).toBe(60);
     expect(warnings).toEqual([
-      { taskId: "big", title: "big", unscheduledMin: 240, reason: "no_capacity" },
+      {
+        taskId: "big",
+        title: "big",
+        unscheduledMin: 240,
+        reason: "no_capacity",
+      },
     ]);
   });
 
   it("skips non-working days", () => {
     const satMorning = Date.UTC(2026, 5, 6, 10); // Saturday
-    const { blocks } = computeSchedule(satMorning, [task({ id: "a" })], [], cfg);
+    const { blocks } = computeSchedule(
+      satMorning,
+      [task({ id: "a" })],
+      [],
+      cfg,
+    );
     expect(blocks[0].start).toBe(at(0, 9)); // Monday 9:00
   });
 
@@ -156,7 +182,7 @@ describe("computeSchedule", () => {
       MON_8AM,
       [task({ id: "a", earliestMs: at(0, 14) })],
       [],
-      cfg
+      cfg,
     );
     expect(blocks[0].start).toBe(at(0, 14));
   });
@@ -197,12 +223,21 @@ describe("task dependencies", () => {
   it("schedules a blocked task after its blocker, even when it outranks it", () => {
     const tasks = [
       task({ id: "blocker", priority: 3, remainingMin: 120 }),
-      task({ id: "urgent-but-blocked", priority: 0, dueMs: at(0, 17), blockedBy: ["blocker"] }),
+      task({
+        id: "urgent-but-blocked",
+        priority: 0,
+        dueMs: at(0, 17),
+        blockedBy: ["blocker"],
+      }),
     ];
     const { blocks } = computeSchedule(MON_8AM, tasks, [], cfg);
-    const blockerEnd = Math.max(...blocks.filter((b) => b.taskId === "blocker").map((b) => b.end));
+    const blockerEnd = Math.max(
+      ...blocks.filter((b) => b.taskId === "blocker").map((b) => b.end),
+    );
     const blockedStart = Math.min(
-      ...blocks.filter((b) => b.taskId === "urgent-but-blocked").map((b) => b.start)
+      ...blocks
+        .filter((b) => b.taskId === "urgent-but-blocked")
+        .map((b) => b.start),
     );
     expect(blockedStart).toBeGreaterThanOrEqual(blockerEnd);
   });
@@ -266,4 +301,43 @@ describe("calendar date helpers", () => {
     expect(windows[0].start).toBe(at(0, 9));
     expect(windows[0].end).toBe(at(0, 17));
   });
+});
+
+it("does not schedule a dependent after only part of its blocker fits", () => {
+  const cfg = {
+    workDays: [0, 1, 2, 3, 4, 5, 6],
+    dayStartMin: 9 * 60,
+    dayEndMin: 10 * 60,
+    minChunkMin: 30,
+    maxChunkMin: 30,
+    bufferMin: 0,
+    horizonDays: 1,
+    granularityMin: 15,
+    tzOffsetMin: 0,
+  };
+  const now = Date.UTC(2026, 8, 12, 9);
+  const result = computeSchedule(
+    now,
+    [
+      { id: "blocker", title: "Blocker", remainingMin: 90, priority: 0 },
+      {
+        id: "dependent",
+        title: "Dependent",
+        remainingMin: 15,
+        priority: 1,
+        blockedBy: ["blocker"],
+      },
+    ],
+    [],
+    cfg,
+  );
+  expect(result.blocks.some((block) => block.taskId === "dependent")).toBe(
+    false,
+  );
+  expect(
+    result.warnings.some(
+      (warning) =>
+        warning.taskId === "dependent" && warning.unscheduledMin === 15,
+    ),
+  ).toBe(true);
 });

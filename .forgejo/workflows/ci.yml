@@ -39,3 +39,9 @@ jobs:
 
       - name: Verify (lint + typecheck + tests)
         run: npm run verify
+
+      - name: Build renderer
+        run: npm run build
+
+      - name: Audit locked dependencies
+        run: npm audit --audit-level=high

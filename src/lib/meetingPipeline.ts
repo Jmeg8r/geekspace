@@ -20,7 +20,11 @@ async function uploadAudio(blob: Blob): Promise<string> {
   return storageId;
 }
 
-async function runAi(meetingId: Id<"meetings">, audio: ArrayBuffer, meetingType: string) {
+async function runAi(
+  meetingId: Id<"meetings">,
+  audio: ArrayBuffer,
+  meetingType: string,
+) {
   const settings = await convex.query(api.settings.get, {});
   const result = await meetingProcess({
     meetingId,
@@ -56,7 +60,10 @@ export async function finishRecording(): Promise<void> {
   const { blob, durationSec, meetingId, meetingType } = await recorder.stop();
   const id = meetingId as Id<"meetings">;
   try {
-    await convex.mutation(api.meetings.setStatus, { meetingId: id, status: "uploading" });
+    await convex.mutation(api.meetings.setStatus, {
+      meetingId: id,
+      status: "uploading",
+    });
     const storageId = await uploadAudio(blob);
     await convex.mutation(api.meetings.attachAudio, {
       meetingId: id,
@@ -74,7 +81,9 @@ export async function finishRecording(): Promise<void> {
 }
 
 /** Re-run transcription + summary from the stored audio. */
-export async function reprocessMeeting(meetingId: Id<"meetings">): Promise<void> {
+export async function reprocessMeeting(
+  meetingId: Id<"meetings">,
+): Promise<void> {
   const meeting = await convex.query(api.meetings.get, { meetingId });
   if (!meeting?.audioUrl) throw new Error("No audio stored for this meeting");
   await convex.mutation(api.meetings.setStatus, {
@@ -83,14 +92,30 @@ export async function reprocessMeeting(meetingId: Id<"meetings">): Promise<void>
     progress: 0,
     error: undefined,
   });
-  const audio = await (await fetch(meeting.audioUrl)).arrayBuffer();
-  await runAi(meetingId, audio, meeting.meetingType ?? "general");
+  try {
+    const response = await fetch(meeting.audioUrl, {
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok)
+      throw new Error(`Audio download failed (${response.status})`);
+    const audio = await response.arrayBuffer();
+    await runAi(meetingId, audio, meeting.meetingType ?? "general");
+  } catch (error) {
+    await convex.mutation(api.meetings.setStatus, {
+      meetingId,
+      status: "error",
+      error: String(error),
+    });
+    throw error;
+  }
 }
 
 /** Discard an in-flight recording and its meeting record. */
 export async function cancelRecording(): Promise<void> {
   const meetingId = recorder.cancel();
   if (meetingId) {
-    await convex.mutation(api.meetings.remove, { meetingId: meetingId as Id<"meetings"> });
+    await convex.mutation(api.meetings.remove, {
+      meetingId: meetingId as Id<"meetings">,
+    });
   }
 }

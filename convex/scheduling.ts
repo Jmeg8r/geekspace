@@ -1,4 +1,10 @@
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { validateSchedulerConfig } from "./lib/validation";
+import {
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import {
@@ -30,6 +36,7 @@ export async function getMergedSettings(ctx: { db: QueryCtx["db"] }) {
 export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   const { doc, merged: s } = await getMergedSettings(ctx);
   const tz = tzOffsetMin ?? s.tzOffsetMin;
+  validateSchedulerConfig({ ...s, tzOffsetMin: tz });
   // Remember the client's offset for reflows triggered without one.
   if (tzOffsetMin !== undefined) {
     if (doc && doc.tzOffsetMin !== tzOffsetMin) {
@@ -56,7 +63,7 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   const horizonEnd = now + (s.horizonDays + 1) * DAY_MS;
   const events = await ctx.db
     .query("events")
-    .withIndex("by_start", (q) => q.gte("start", now - 14 * DAY_MS))
+    .withIndex("by_start", (q) => q.lt("start", horizonEnd))
     .collect();
   const busy: Interval[] = events
     .filter((e) => !e.allDay && e.end > now && e.start < horizonEnd)
@@ -65,16 +72,19 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   // --- Existing blocks: freeze the past, respect locks, clear the rest
   const allBlocks = await ctx.db.query("timeBlocks").collect();
   const loggedMin = new Map<string, number>();
+  const reservedEnds = new Map<string, number>();
   for (const b of allBlocks) {
-    if (b.start <= now) {
+    if (b.start <= now || b.locked) {
+      reservedEnds.set(
+        b.taskRowId,
+        Math.max(reservedEnds.get(b.taskRowId) ?? 0, b.end),
+      );
       // Started/past blocks are immutable history; they count as planned work.
       loggedMin.set(
         b.taskRowId,
-        (loggedMin.get(b.taskRowId) ?? 0) + (b.end - b.start) / MIN_MS
+        (loggedMin.get(b.taskRowId) ?? 0) + (b.end - b.start) / MIN_MS,
       );
-      if (b.end > now) busy.push({ start: now, end: b.end });
-    } else if (b.locked) {
-      busy.push({ start: b.start, end: b.end });
+      if (b.end > now) busy.push({ start: Math.max(now, b.start), end: b.end });
     } else {
       await ctx.db.delete(b._id);
     }
@@ -88,7 +98,9 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     if (!db.isTaskSource || !db.taskConfig) continue;
     const props = db.properties as PropertyDef[];
     const statusProp = props.find((p) => p.id === db.taskConfig!.statusPropId);
-    const priorityProp = props.find((p) => p.id === db.taskConfig!.priorityPropId);
+    const priorityProp = props.find(
+      (p) => p.id === db.taskConfig!.priorityPropId,
+    );
     const rows = await ctx.db
       .query("rows")
       .withIndex("by_database", (q) => q.eq("databaseId", db._id))
@@ -109,17 +121,24 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       if (dateVal && isNumber(dateVal.start)) {
         dueMs = dateVal.includeTime
           ? (dateVal.end ?? dateVal.start)
-          : calendarDateToLocalMs(dateVal.end ?? dateVal.start, tz, s.dayEndMin);
+          : calendarDateToLocalMs(
+              dateVal.end ?? dateVal.start,
+              tz,
+              s.dayEndMin,
+            );
       }
 
       let priority = 2; // medium default
       const prVal = p[db.taskConfig.priorityPropId];
-      const prIdx = priorityProp?.options?.findIndex((o) => o.id === prVal) ?? -1;
+      const prIdx =
+        priorityProp?.options?.findIndex((o) => o.id === prVal) ?? -1;
       if (prIdx >= 0) priority = prIdx;
 
       const blockedByPropId = db.taskConfig.blockedByPropId;
       const rawBlockers = blockedByPropId ? p[blockedByPropId] : undefined;
-      const blockedBy = Array.isArray(rawBlockers) ? (rawBlockers as string[]) : undefined;
+      const blockedBy = Array.isArray(rawBlockers)
+        ? (rawBlockers as string[])
+        : undefined;
 
       tasks.push({
         id: row._id,
@@ -128,6 +147,10 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
         dueMs,
         priority,
         blockedBy,
+        earliestMs: Math.max(
+          now,
+          ...(blockedBy ?? []).map((id) => reservedEnds.get(id) ?? now),
+        ),
       });
       taskDb.set(row._id, db._id);
     }

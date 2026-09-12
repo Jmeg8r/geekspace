@@ -1,4 +1,10 @@
-import { mutation, query, type QueryCtx, type MutationCtx } from "./_generated/server";
+import {
+  changeProperties,
+  deleteRowAndReferences,
+  propertyBag,
+  propertyValue,
+} from "./lib/rowProperties";
+import { mutation, query, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { PropertyDef } from "./lib/types";
@@ -14,7 +20,7 @@ type EnrichedRow = Doc<"rows"> & { computed: Record<string, number | null> };
 async function enrichRows(
   ctx: QueryCtx,
   db: Doc<"databases">,
-  rows: Doc<"rows">[]
+  rows: Doc<"rows">[],
 ): Promise<{ rows: EnrichedRow[]; relationTitles: Record<string, string> }> {
   const props = db.properties as PropertyDef[];
   const relationProps = props.filter((p) => p.type === "relation");
@@ -40,7 +46,10 @@ async function enrichRows(
   const targetDbCache = new Map<string, Doc<"databases"> | null>();
   async function getTargetDb(databaseId: string) {
     if (!targetDbCache.has(databaseId)) {
-      targetDbCache.set(databaseId, await ctx.db.get(databaseId as Id<"databases">));
+      targetDbCache.set(
+        databaseId,
+        await ctx.db.get(databaseId as Id<"databases">),
+      );
     }
     return targetDbCache.get(databaseId) ?? null;
   }
@@ -55,8 +64,8 @@ async function enrichRows(
         computed[rp.id] = null;
         continue;
       }
-      const ids = ((row.properties?.[relProp.id] ?? []) as string[]).filter((id) =>
-        refDocs.has(id)
+      const ids = ((row.properties?.[relProp.id] ?? []) as string[]).filter(
+        (id) => refDocs.has(id),
       );
       const targets = ids.map((id) => refDocs.get(id)!);
       const values = targets.map((t) => t.properties?.[cfg.targetPropId]);
@@ -66,7 +75,11 @@ async function enrichRows(
           break;
         case "countValues":
           computed[rp.id] = values.filter(
-            (x) => x !== undefined && x !== null && x !== "" && !(Array.isArray(x) && x.length === 0)
+            (x) =>
+              x !== undefined &&
+              x !== null &&
+              x !== "" &&
+              !(Array.isArray(x) && x.length === 0),
           ).length;
           break;
         case "sum":
@@ -91,20 +104,22 @@ async function enrichRows(
         }
         case "percentComplete": {
           const targetDb = await getTargetDb(relProp.relation.databaseId);
-          const targetProp = (targetDb?.properties as PropertyDef[] | undefined)?.find(
-            (p) => p.id === cfg.targetPropId
-          );
+          const targetProp = (
+            targetDb?.properties as PropertyDef[] | undefined
+          )?.find((p) => p.id === cfg.targetPropId);
           const completeIds = new Set(
             (targetProp?.options ?? [])
               .filter((o) => o.group === "complete")
-              .map((o) => o.id)
+              .map((o) => o.id),
           );
           computed[rp.id] =
             targets.length === 0
               ? 0
               : Math.round(
-                  (100 * values.filter((x) => isString(x) && completeIds.has(x)).length) /
-                    targets.length
+                  (100 *
+                    values.filter((x) => isString(x) && completeIds.has(x))
+                      .length) /
+                    targets.length,
                 );
           break;
         }
@@ -141,18 +156,10 @@ export const get = query({
   },
 });
 
-async function reflowIfTaskSource(
-  ctx: MutationCtx,
-  db: Doc<"databases"> | null,
-  tzOffsetMin?: number
-) {
-  if (db?.isTaskSource) await runReflow(ctx, tzOffsetMin);
-}
-
 export const create = mutation({
   args: {
     databaseId: v.id("databases"),
-    properties: v.optional(v.any()),
+    properties: v.optional(propertyBag),
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -163,11 +170,14 @@ export const create = mutation({
     const rowId = await ctx.db.insert("rows", {
       databaseId: args.databaseId,
       title: String(properties.title ?? ""),
-      properties,
+      properties: {},
       order: now,
       updatedAt: now,
     });
-    await reflowIfTaskSource(ctx, db, args.tzOffsetMin);
+    const row = await ctx.db.get(rowId);
+    if (!row) throw new Error("New row missing");
+    await changeProperties(ctx, row, db, properties);
+    await runReflow(ctx, args.tzOffsetMin);
     return rowId;
   },
 });
@@ -176,7 +186,7 @@ export const updateProperty = mutation({
   args: {
     rowId: v.id("rows"),
     propId: v.string(),
-    value: v.optional(v.any()),
+    value: v.optional(propertyValue),
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -184,63 +194,19 @@ export const updateProperty = mutation({
     if (!row) return;
     const db = await ctx.db.get(row.databaseId);
     if (!db) return;
-    const props = db.properties as PropertyDef[];
-    const def = props.find((p) => p.id === args.propId);
-    if (!def) return;
-
-    const oldProperties = (row.properties ?? {}) as Record<string, unknown>;
-    const newProperties = { ...oldProperties };
-    if (args.value === undefined || args.value === null) {
-      delete newProperties[args.propId];
-    } else {
-      newProperties[args.propId] = args.value;
-    }
-
-    const patch: Partial<Doc<"rows">> = {
-      properties: newProperties,
-      updatedAt: Date.now(),
-    };
-    if (args.propId === "title") patch.title = String(args.value ?? "");
-    await ctx.db.patch(args.rowId, patch);
-
-    // Two-way relation sync (Notion-style synced properties).
-    if (def.type === "relation" && def.relation?.syncedPropId) {
-      const syncedId = def.relation.syncedPropId;
-      const newIds = (args.value ?? []) as string[];
-      const oldIds = (oldProperties[args.propId] ?? []) as string[];
-      const added = newIds.filter((x) => !oldIds.includes(x));
-      const removed = oldIds.filter((x) => !newIds.includes(x));
-      for (const id of added) {
-        const target = await ctx.db.get(id as Id<"rows">);
-        if (!target) continue;
-        const arr = ((target.properties?.[syncedId] ?? []) as string[]).slice();
-        if (!arr.includes(args.rowId)) {
-          arr.push(args.rowId);
-          await ctx.db.patch(target._id, {
-            properties: { ...(target.properties ?? {}), [syncedId]: arr },
-          });
-        }
-      }
-      for (const id of removed) {
-        const target = await ctx.db.get(id as Id<"rows">);
-        if (!target) continue;
-        const arr = ((target.properties?.[syncedId] ?? []) as string[]).filter(
-          (x) => x !== args.rowId
-        );
-        await ctx.db.patch(target._id, {
-          properties: { ...(target.properties ?? {}), [syncedId]: arr },
-        });
-      }
-    }
-
-    await reflowIfTaskSource(ctx, db, args.tzOffsetMin);
+    await changeProperties(ctx, row, db, { [args.propId]: args.value ?? null });
+    // Reverse relations can affect a task source in another database.
+    await runReflow(ctx, args.tzOffsetMin);
   },
 });
 
 export const setContent = mutation({
   args: { rowId: v.id("rows"), content: v.string() },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.rowId, { content: args.content, updatedAt: Date.now() });
+    await ctx.db.patch(args.rowId, {
+      content: args.content,
+      updatedAt: Date.now(),
+    });
   },
 });
 
@@ -249,13 +215,23 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const row = await ctx.db.get(args.rowId);
     if (!row) return;
+    await deleteRowAndReferences(ctx, args.rowId);
+    await runReflow(ctx, args.tzOffsetMin);
+  },
+});
+
+export const updateProperties = mutation({
+  args: {
+    rowId: v.id("rows"),
+    properties: propertyBag,
+    tzOffsetMin: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.rowId);
+    if (!row) throw new Error("Row not found");
     const db = await ctx.db.get(row.databaseId);
-    const blocks = await ctx.db
-      .query("timeBlocks")
-      .withIndex("by_task", (q) => q.eq("taskRowId", args.rowId))
-      .collect();
-    for (const b of blocks) await ctx.db.delete(b._id);
-    await ctx.db.delete(args.rowId);
-    await reflowIfTaskSource(ctx, db, args.tzOffsetMin);
+    if (!db) throw new Error("Database not found");
+    await changeProperties(ctx, row, db, args.properties);
+    await runReflow(ctx, args.tzOffsetMin);
   },
 });

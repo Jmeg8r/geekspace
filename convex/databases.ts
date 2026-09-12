@@ -24,13 +24,30 @@ function defaultStatusOptions(): SelectOption[] {
 export const addProperty = mutation({
   args: {
     databaseId: v.id("databases"),
-    type: v.string(),
+    type: v.union(
+      ...[
+        "text",
+        "number",
+        "select",
+        "multiSelect",
+        "status",
+        "date",
+        "checkbox",
+        "url",
+        "relation",
+        "rollup",
+        "createdTime",
+        "updatedTime",
+      ].map((x) => v.literal(x)),
+    ),
     name: v.optional(v.string()),
     targetDatabaseId: v.optional(v.id("databases")), // for relation
   },
   handler: async (ctx, args) => {
     const db = await ctx.db.get(args.databaseId);
     if (!db) return null;
+    if (args.type === "relation" && !args.targetDatabaseId)
+      throw new Error("Choose a related database");
     const props = db.properties as PropertyDef[];
     const propId = makeId();
     const def: PropertyDef = {
@@ -45,7 +62,10 @@ export const addProperty = mutation({
       const target = await ctx.db.get(args.targetDatabaseId);
       if (!target) return null;
       const reverseId = makeId();
-      def.relation = { databaseId: args.targetDatabaseId, syncedPropId: reverseId };
+      def.relation = {
+        databaseId: args.targetDatabaseId,
+        syncedPropId: reverseId,
+      };
       const reverse: PropertyDef = {
         id: reverseId,
         // WHY: same-database pairs (sub-tasks, dependencies) get a generic
@@ -60,7 +80,9 @@ export const addProperty = mutation({
       };
       if (args.targetDatabaseId === args.databaseId) {
         // Self-relation pair lives on the same properties array.
-        await ctx.db.patch(args.databaseId, { properties: [...props, def, reverse] });
+        await ctx.db.patch(args.databaseId, {
+          properties: [...props, def, reverse],
+        });
         return propId;
       }
       await ctx.db.patch(args.targetDatabaseId, {
@@ -94,10 +116,13 @@ function defaultPropName(type: string, existing: PropertyDef[]): string {
   // property type. Object.hasOwn guards the lookup so a key like "toString"
   // or "constructor" can't resolve through the prototype chain to an
   // inherited function instead of falling back to "Property".
-  const name = Object.hasOwn(base, type) ? base[type as keyof typeof base] : "Property";
+  const name = Object.hasOwn(base, type)
+    ? base[type as keyof typeof base]
+    : "Property";
   let candidate = name;
   let n = 1;
-  while (existing.some((p) => p.name === candidate)) candidate = `${name} ${++n}`;
+  while (existing.some((p) => p.name === candidate))
+    candidate = `${name} ${++n}`;
   return candidate;
 }
 
@@ -106,9 +131,46 @@ export const updateProperty = mutation({
     databaseId: v.id("databases"),
     propId: v.string(),
     name: v.optional(v.string()),
-    options: v.optional(v.any()),
-    numberFormat: v.optional(v.string()),
-    rollup: v.optional(v.any()),
+    options: v.optional(
+      v.array(
+        v.object({
+          id: v.string(),
+          name: v.string(),
+          color: v.string(),
+          group: v.optional(
+            v.union(
+              v.literal("todo"),
+              v.literal("inprogress"),
+              v.literal("complete"),
+            ),
+          ),
+        }),
+      ),
+    ),
+    numberFormat: v.optional(
+      v.union(
+        v.literal("plain"),
+        v.literal("minutes"),
+        v.literal("percent"),
+        v.literal("dollar"),
+        v.literal("progress"),
+      ),
+    ),
+    rollup: v.optional(
+      v.object({
+        relationPropId: v.string(),
+        targetPropId: v.string(),
+        aggregate: v.union(
+          v.literal("count"),
+          v.literal("countValues"),
+          v.literal("sum"),
+          v.literal("average"),
+          v.literal("min"),
+          v.literal("max"),
+          v.literal("percentComplete"),
+        ),
+      }),
+    ),
     includeTime: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -126,6 +188,7 @@ export const updateProperty = mutation({
       return next;
     });
     await ctx.db.patch(args.databaseId, { properties: props });
+    await runReflow(ctx);
   },
 });
 
@@ -137,32 +200,37 @@ export const removeProperty = mutation({
     const props = db.properties as PropertyDef[];
     const def = props.find((p) => p.id === args.propId);
     if (!def || def.type === "title") return; // title is permanent
-    await ctx.db.patch(args.databaseId, {
-      properties: props.filter((p) => p.id !== args.propId),
-    });
-    // Clear stored values so stale data doesn't linger.
-    const rows = await ctx.db
-      .query("rows")
-      .withIndex("by_database", (q) => q.eq("databaseId", args.databaseId))
-      .collect();
-    for (const row of rows) {
-      const p = { ...(row.properties ?? {}) };
-      if (args.propId in p) {
-        delete p[args.propId];
-        await ctx.db.patch(row._id, { properties: p });
-      }
+    const removals = new Map<string, Set<string>>([
+      [db._id, new Set([def.id])],
+    ]);
+    if (def.relation?.syncedPropId) {
+      const ids = removals.get(def.relation.databaseId) ?? new Set<string>();
+      ids.add(def.relation.syncedPropId);
+      removals.set(def.relation.databaseId, ids);
     }
-    // Remove the synced reverse property too.
-    if (def.relation?.syncedPropId && def.relation.databaseId !== args.databaseId) {
-      const target = await ctx.db.get(def.relation.databaseId as typeof args.databaseId);
-      if (target) {
-        await ctx.db.patch(target._id, {
-          properties: (target.properties as PropertyDef[]).filter(
-            (p) => p.id !== def.relation!.syncedPropId
-          ),
+    for (const [rawId, ids] of removals) {
+      const id = ctx.db.normalizeId("databases", rawId);
+      const target = id ? await ctx.db.get(id) : null;
+      if (!target) continue;
+      await ctx.db.patch(target._id, {
+        properties: target.properties.filter(
+          (p: PropertyDef) => !ids.has(p.id),
+        ),
+      });
+      const rows = await ctx.db
+        .query("rows")
+        .withIndex("by_database", (q) => q.eq("databaseId", target._id))
+        .collect();
+      for (const row of rows) {
+        const values = { ...row.properties };
+        for (const propId of ids) delete values[propId];
+        await ctx.db.patch(row._id, {
+          properties: values,
+          updatedAt: Date.now(),
         });
       }
     }
+    await runReflow(ctx);
   },
 });
 
@@ -189,7 +257,10 @@ export const setTaskSource = mutation({
         datePropId: v.string(),
         estimatePropId: v.string(),
         priorityPropId: v.string(),
-      })
+        blockedByPropId: v.optional(v.string()),
+        sprintPropId: v.optional(v.string()),
+        parentPropId: v.optional(v.string()),
+      }),
     ),
     tzOffsetMin: v.optional(v.number()),
   },

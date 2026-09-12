@@ -1,3 +1,4 @@
+import { validateRange } from "./lib/validation";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { PropertyDef } from "./lib/types";
@@ -14,7 +15,9 @@ export const listRange = query({
       .query("timeBlocks")
       .withIndex("by_start", (q) => q.gte("start", args.start - 2 * DAY_MS))
       .collect();
-    const visible = blocks.filter((b) => b.start < args.end && b.end > args.start);
+    const visible = blocks.filter(
+      (b) => b.start < args.end && b.end > args.start,
+    );
 
     const out = [];
     for (const b of visible) {
@@ -24,11 +27,12 @@ export const listRange = query({
       let done = false;
       if (db?.taskConfig) {
         const statusProp = (db.properties as PropertyDef[]).find(
-          (p) => p.id === db.taskConfig!.statusPropId
+          (p) => p.id === db.taskConfig!.statusPropId,
         );
         const statusVal = task.properties?.[db.taskConfig.statusPropId];
         done =
-          statusProp?.options?.find((o) => o.id === statusVal)?.group === "complete";
+          statusProp?.options?.find((o) => o.id === statusVal)?.group ===
+          "complete";
       }
       out.push({
         ...b,
@@ -49,6 +53,7 @@ export const move = mutation({
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    validateRange(args.start, args.end);
     // WHY: a manual drag means "I want it HERE" — the block locks so the engine
     // schedules around it (Motion/Reclaim behavior).
     await ctx.db.patch(args.blockId, {

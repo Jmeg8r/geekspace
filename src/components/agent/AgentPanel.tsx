@@ -43,8 +43,7 @@ export function AgentPanel() {
       }
       setState(r.data.state);
       setLocal(r.data.local);
-      // Default to the free lane when it's up; fall back to Claude when not.
-      if (r.data.local?.available === false && r.data.state === "online") setMode("claude");
+      // Cloud processing is selected explicitly with the lane toggle.
     });
   }, [open]);
 
@@ -56,7 +55,9 @@ export function AgentPanel() {
           ? e.text
           : e.type === "tool"
             ? `\n⚙ ${e.text}…\n`
-            : undefined;
+            : e.type === "error"
+              ? `\n⚠️ ${e.message ?? e.text ?? "Agent failed"}\n`
+              : undefined;
       if (chunk) {
         setMessages((m) => {
           const last = m[m.length - 1];
@@ -79,7 +80,11 @@ export function AgentPanel() {
     const text = input.trim();
     if (!text || streaming) return;
     setInput("");
-    setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: "" }]);
+    setMessages((m) => [
+      ...m,
+      { role: "user", text },
+      { role: "assistant", text: "" },
+    ]);
     setStreaming(true);
     const result = await agentChat(text, mode);
     setStreaming(false);
@@ -97,7 +102,8 @@ export function AgentPanel() {
 
   // Per-lane availability: the toggle picks the brain, the tools are shared.
   const checking = state === "checking";
-  const laneReady = mode === "local" ? local?.available === true : state === "online";
+  const laneReady =
+    mode === "local" ? local?.available === true : state === "online";
   const offline = !checking && !laneReady;
   const laneLabel =
     mode === "local"
@@ -129,7 +135,7 @@ export function AgentPanel() {
                   ? "bg-[var(--pal-yellow)]"
                   : laneReady
                     ? "bg-[var(--pal-green)]"
-                    : "bg-[var(--pal-red)]"
+                    : "bg-[var(--pal-red)]",
               )}
             />
             {checking ? "Checking…" : laneLabel}
@@ -137,21 +143,21 @@ export function AgentPanel() {
         </div>
         <div
           className="flex items-center rounded-lg border border-border p-0.5"
-          title="Local runs free on Ollama. Claude bills the Agent SDK credit pool — use it for complex design work."
+          title="Local uses Ollama. Claude sends the conversation and tool results to Anthropic and may incur usage charges."
         >
-          {(
-            [
-              { value: "local" as const, icon: Cpu, label: "Local" },
-              { value: "claude" as const, icon: Sparkles, label: "Claude" },
-            ]
-          ).map(({ value, icon: Icon, label }) => (
+          {[
+            { value: "local" as const, icon: Cpu, label: "Local" },
+            { value: "claude" as const, icon: Sparkles, label: "Claude" },
+          ].map(({ value, icon: Icon, label }) => (
             <button
               key={value}
               onClick={() => setMode(value)}
               disabled={streaming}
               className={cn(
                 "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold",
-                mode === value ? "bg-accent text-white" : "text-ink-3 hover:text-ink"
+                mode === value
+                  ? "bg-accent text-white"
+                  : "text-ink-3 hover:text-ink",
               )}
             >
               <Icon size={11} />
@@ -181,10 +187,13 @@ export function AgentPanel() {
         {messages.length === 0 && (
           <div className="px-2 pt-8 text-center">
             <Bot size={26} className="mx-auto text-ink-3" />
-            <p className="pt-2 text-[13px] font-medium">Your workspace expert</p>
+            <p className="pt-2 text-[13px] font-medium">
+              Your workspace expert
+            </p>
             <p className="pt-1 text-[12px] leading-relaxed text-ink-3">
-              Ask it to design databases, set up projects, restructure pages, or explain your
-              schedule. It works through the workspace itself — changes appear live.
+              Ask it to design databases, set up projects, restructure pages, or
+              explain your schedule. It works through the workspace itself —
+              changes appear live.
             </p>
             <div className="flex flex-col gap-1.5 pt-4">
               {[
@@ -204,20 +213,24 @@ export function AgentPanel() {
           </div>
         )}
         {messages.map((m, i) => (
-          <div key={i} className={cn("pb-3", m.role === "user" && "flex justify-end")}>
+          <div
+            key={i}
+            className={cn("pb-3", m.role === "user" && "flex justify-end")}
+          >
             <div
               className={cn(
                 "max-w-[88%] whitespace-pre-wrap rounded-xl px-3 py-2 text-[13px] leading-relaxed",
                 m.role === "user"
                   ? "bg-accent text-white"
-                  : "border border-border bg-raised"
+                  : "border border-border bg-raised",
               )}
             >
-              {m.text || (streaming && i === messages.length - 1 ? (
-                <Loader2 size={14} className="animate-spin text-ink-3" />
-              ) : (
-                ""
-              ))}
+              {m.text ||
+                (streaming && i === messages.length - 1 ? (
+                  <Loader2 size={14} className="animate-spin text-ink-3" />
+                ) : (
+                  ""
+                ))}
             </div>
           </div>
         ))}
@@ -254,7 +267,11 @@ export function AgentPanel() {
               onClick={() => void send()}
               className="rounded-lg bg-accent p-2 text-white hover:bg-accent-2 disabled:opacity-50"
             >
-              {streaming ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+              {streaming ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Send size={15} />
+              )}
             </button>
           </div>
         )}

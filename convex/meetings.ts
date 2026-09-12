@@ -9,7 +9,10 @@ import type { Doc, Id } from "./_generated/dataModel";
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    const meetings = await ctx.db.query("meetings").withIndex("by_startedAt").collect();
+    const meetings = await ctx.db
+      .query("meetings")
+      .withIndex("by_startedAt")
+      .collect();
     meetings.sort((a, b) => b.startedAt - a.startedAt);
     return meetings;
   },
@@ -50,7 +53,10 @@ export const rename = mutation({
     await ctx.db.patch(args.meetingId, { title: args.title });
     const meeting = await ctx.db.get(args.meetingId);
     if (meeting?.pageId) {
-      await ctx.db.patch(meeting.pageId, { title: args.title, updatedAt: Date.now() });
+      await ctx.db.patch(meeting.pageId, {
+        title: args.title,
+        updatedAt: Date.now(),
+      });
     }
   },
 });
@@ -65,6 +71,7 @@ export const setStatus = mutation({
   handler: async (ctx, args) => {
     const patch: Partial<Doc<"meetings">> = { status: args.status };
     if (args.progress !== undefined) patch.progress = args.progress;
+    if (args.status !== "error") patch.error = undefined;
     if (args.error !== undefined) patch.error = args.error;
     await ctx.db.patch(args.meetingId, patch);
   },
@@ -133,7 +140,8 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const meeting = await ctx.db.get(args.meetingId);
     if (!meeting) return;
-    if (meeting.audioStorageId) await ctx.storage.delete(meeting.audioStorageId);
+    if (meeting.audioStorageId)
+      await ctx.storage.delete(meeting.audioStorageId);
     // The notes page survives deliberately — it's workspace content now.
     await ctx.db.delete(args.meetingId);
   },
@@ -146,7 +154,11 @@ type BlockSeed = Record<string, unknown>;
 async function ensureMeetingNotesRoot(ctx: MutationCtx): Promise<Id<"pages">> {
   const pages = await ctx.db.query("pages").collect();
   const existing = pages.find(
-    (p) => p.title === "Meeting Notes" && p.kind === "doc" && !p.trashed && !p.parentId
+    (p) =>
+      p.title === "Meeting Notes" &&
+      p.kind === "doc" &&
+      !p.trashed &&
+      !p.parentId,
   );
   if (existing) return existing._id;
   return ctx.db.insert("pages", {
@@ -154,7 +166,10 @@ async function ensureMeetingNotesRoot(ctx: MutationCtx): Promise<Id<"pages">> {
     icon: "🎙️",
     kind: "doc",
     content: JSON.stringify([
-      { type: "paragraph", content: "Every recorded meeting lands here as its own page." },
+      {
+        type: "paragraph",
+        content: "Every recorded meeting lands here as its own page.",
+      },
     ]),
     favorite: false,
     trashed: false,
@@ -179,7 +194,11 @@ function transcriptBlocks(transcript: string): BlockSeed[] {
       buffer = "";
     }
     if (blocks.length >= 220) {
-      blocks.push({ type: "paragraph", content: "… transcript truncated — full text lives on the meeting record." });
+      blocks.push({
+        type: "paragraph",
+        content:
+          "… transcript truncated — full text lives on the meeting record.",
+      });
       return blocks;
     }
   }
@@ -194,7 +213,7 @@ async function buildNotesPage(
     keyPoints: string[];
     decisions: string[];
     actionItems: string[];
-  }
+  },
 ): Promise<Id<"pages"> | null> {
   const when = new Date(meeting.startedAt);
   const dur = meeting.durationSec
@@ -212,27 +231,46 @@ async function buildNotesPage(
       .map((p) => ({ type: "paragraph", content: p.trim() })),
   ];
   if (meeting.keyPoints.length > 0) {
-    blocks.push({ type: "heading", props: { level: 2 }, content: "Key points" });
-    for (const k of meeting.keyPoints) blocks.push({ type: "bulletListItem", content: k });
+    blocks.push({
+      type: "heading",
+      props: { level: 2 },
+      content: "Key points",
+    });
+    for (const k of meeting.keyPoints)
+      blocks.push({ type: "bulletListItem", content: k });
   }
   if (meeting.decisions.length > 0) {
     blocks.push({ type: "heading", props: { level: 2 }, content: "Decisions" });
-    for (const d of meeting.decisions) blocks.push({ type: "bulletListItem", content: d });
+    for (const d of meeting.decisions)
+      blocks.push({ type: "bulletListItem", content: d });
   }
   if (meeting.actionItems.length > 0) {
-    blocks.push({ type: "heading", props: { level: 2 }, content: "Action items" });
+    blocks.push({
+      type: "heading",
+      props: { level: 2 },
+      content: "Action items",
+    });
     for (const a of meeting.actionItems)
-      blocks.push({ type: "checkListItem", props: { checked: false }, content: a });
+      blocks.push({
+        type: "checkListItem",
+        props: { checked: false },
+        content: a,
+      });
   }
   if (meeting.transcript) {
-    blocks.push({ type: "heading", props: { level: 2 }, content: "Transcript" });
+    blocks.push({
+      type: "heading",
+      props: { level: 2 },
+      content: "Transcript",
+    });
     blocks.push(...transcriptBlocks(meeting.transcript));
   }
 
   const content = JSON.stringify(blocks);
+  await ctx.db.patch(meeting._id, { generatedContent: content });
   if (meeting.pageId) {
     const page = await ctx.db.get(meeting.pageId);
-    if (page && !page.trashed) {
+    if (page && !page.trashed && page.content === meeting.generatedContent) {
       await ctx.db.patch(meeting.pageId, { content, updatedAt: Date.now() });
       return meeting.pageId;
     }

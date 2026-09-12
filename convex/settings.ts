@@ -1,3 +1,4 @@
+import { validateSchedulerConfig } from "./lib/validation";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
@@ -51,12 +52,14 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const patch = Object.fromEntries(
-      Object.entries(args).filter(([, val]) => val !== undefined)
+      Object.entries(args).filter(([, val]) => val !== undefined),
     );
     const existing = await ctx.db
       .query("settings")
       .withIndex("by_key", (q) => q.eq("key", "global"))
       .unique();
+    const merged = { ...DEFAULT_SETTINGS, ...(existing ?? {}), ...patch };
+    validateSchedulerConfig(merged);
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {

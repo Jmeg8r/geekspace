@@ -1,3 +1,4 @@
+import { ensureDataDirectory } from "./dataDirectory.mjs";
 // WHAT: Owns the local Convex backend's lifecycle from inside Electron — the job
 // `npx convex dev` used to do, minus the dev/watch machinery. Starts the
 // convex-local-backend binary against a per-user data dir, waits until it's
@@ -60,13 +61,14 @@ function binaryPath() {
   // WHY the platform branch: verified on-machine that the CLI caches under
   // %LOCALAPPDATA% on Windows, vs. the XDG-ish ~/.cache everywhere else.
   if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
+    const localAppData =
+      process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
     return path.join(
       localAppData,
       "convex",
       "binaries",
       BUNDLED_BACKEND_VERSION,
-      "convex-local-backend" + EXE
+      "convex-local-backend" + EXE,
     );
   }
   return path.join(
@@ -75,7 +77,7 @@ function binaryPath() {
     "convex",
     "binaries",
     BUNDLED_BACKEND_VERSION,
-    "convex-local-backend"
+    "convex-local-backend",
   );
 }
 
@@ -99,10 +101,11 @@ let logStream = null;
 /** One health probe. Resolves true on HTTP 200 from /version, false otherwise. */
 async function isHealthy(timeoutMs = 1500) {
   try {
-    const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), timeoutMs);
-    const res = await fetch(HEALTH_URL, { signal: ctl.signal });
-    clearTimeout(t);
+    const res = await fetch(HEALTH_URL, {
+      signal: AbortSignal.timeout(timeoutMs),
+      redirect: "error",
+    });
+    await res.body?.cancel();
     return res.ok;
   } catch {
     return false;
@@ -118,13 +121,13 @@ async function waitHealthy(deadlineMs = 30000, intervalMs = 400) {
     // handler nulls `child`, so we read the recorded exit info, not child).
     if (managed && exitInfo) {
       throw new Error(
-        `Convex backend exited early (code ${exitInfo.code}). See ${logPath()}`
+        `Convex backend exited early (code ${exitInfo.code}). See ${logPath()}`,
       );
     }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   throw new Error(
-    `Convex backend did not become healthy within ${deadlineMs}ms. See ${logPath()}`
+    `Convex backend did not become healthy within ${deadlineMs}ms. See ${logPath()}`,
   );
 }
 
@@ -151,15 +154,8 @@ function readConfig() {
  * overwritten.
  */
 function ensureDataDir() {
-  if (fs.existsSync(path.join(DATA_DIR, "config.json"))) return;
-  const src = seedDir();
-  if (!fs.existsSync(path.join(src, "config.json"))) {
-    throw new Error(`No Convex data and no bundled seed found at ${src}`);
-  }
-  fs.mkdirSync(path.dirname(DATA_DIR), { recursive: true });
-  // cpSync preserves the relative layout the SQLite blob store relies on.
-  fs.cpSync(src, DATA_DIR, { recursive: true });
-  log(`Seeded fresh data dir from ${src}`);
+  if (ensureDataDirectory(DATA_DIR, seedDir()))
+    log("Initialized fresh data directory from bundled seed");
 }
 
 // --- start / stop --------------------------------------------------------
@@ -183,6 +179,9 @@ function log(msg) {
 export async function startOrAttach() {
   fs.mkdirSync(LOG_DIR, { recursive: true });
   logStream = fs.createWriteStream(logPath(), { flags: "a" });
+  logStream.on("error", (error) =>
+    console.error("Backend log error", error.message),
+  );
 
   if (await isHealthy()) {
     managed = false;
@@ -199,7 +198,7 @@ export async function startOrAttach() {
   // future-proofing.)
   if (cfg.backendVersion && cfg.backendVersion !== BUNDLED_BACKEND_VERSION) {
     log(
-      `WARNING: data dir backendVersion ${cfg.backendVersion} != bundled ${BUNDLED_BACKEND_VERSION}.`
+      `WARNING: data dir backendVersion ${cfg.backendVersion} != bundled ${BUNDLED_BACKEND_VERSION}.`,
     );
   }
 
@@ -209,36 +208,58 @@ export async function startOrAttach() {
   }
 
   const args = [
-    "--port", String(CLOUD_PORT),
-    "--site-proxy-port", String(SITE_PORT),
-    "--instance-name", cfg.deploymentName,
-    "--instance-secret", cfg.instanceSecret,
-    "--interface", "127.0.0.1", // single-user, never expose on the network
+    "--port",
+    String(CLOUD_PORT),
+    "--site-proxy-port",
+    String(SITE_PORT),
+    "--instance-name",
+    cfg.deploymentName,
+    "--instance-secret",
+    cfg.instanceSecret,
+    "--interface",
+    "127.0.0.1", // single-user, never expose on the network
     "--disable-beacon", // no phone-home for a local personal app
-    "--local-storage", path.join(DATA_DIR, "convex_local_storage"),
+    "--local-storage",
+    path.join(DATA_DIR, "convex_local_storage"),
     path.join(DATA_DIR, "convex_local_backend.sqlite3"),
   ];
 
   log(`Starting backend: ${bin} (cwd ${DATA_DIR})`);
   exitInfo = null;
-  child = spawn(bin, args, { cwd: DATA_DIR, stdio: ["ignore", "pipe", "pipe"] });
+  child = spawn(bin, args, {
+    cwd: DATA_DIR,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   managed = true;
 
   child.stdout.on("data", (d) => logStream?.write(d));
   child.stderr.on("data", (d) => logStream?.write(d));
+  child.on("error", (error) => {
+    exitInfo = { code: error.code, signal: null };
+    child = null;
+    log(`Backend could not start: ${error.message}`);
+  });
   child.on("exit", (code, signal) => {
     log(`Backend process exited (code ${code}, signal ${signal}).`);
     exitInfo = { code, signal };
     child = null;
   });
 
-  await waitHealthy();
+  try {
+    await waitHealthy();
+  } catch (error) {
+    await stopBackend();
+    throw error;
+  }
   log("Backend healthy on :3210.");
 }
 
 /** Stop the backend if (and only if) we started it. Safe to call repeatedly. */
 export async function stopBackend() {
-  if (!managed || !child) return;
+  if (!managed || !child) {
+    managed = false;
+    return;
+  }
   const proc = child;
   log("Stopping backend (SIGTERM)…");
   // WHY this is safe on Windows too: Node maps POSIX signals to

@@ -17,10 +17,22 @@ export function RowPeek() {
   const openRowId = useUI((s) => s.openRowId);
   const openRow = useUI((s) => s.openRow);
   if (!openRowId) return null;
-  return <RowPeekInner rowId={openRowId as Id<"rows">} onClose={() => openRow(null)} />;
+  return (
+    <RowPeekInner
+      key={openRowId}
+      rowId={openRowId as Id<"rows">}
+      onClose={() => openRow(null)}
+    />
+  );
 }
 
-function RowPeekInner({ rowId, onClose }: { rowId: Id<"rows">; onClose: () => void }) {
+function RowPeekInner({
+  rowId,
+  onClose,
+}: {
+  rowId: Id<"rows">;
+  onClose: () => void;
+}) {
   const data = useQuery(api.rows.get, { rowId });
   const setContent = useMutation(api.rows.setContent);
   const removeRow = useMutation(api.rows.remove);
@@ -87,8 +99,11 @@ function RowPeekInner({ rowId, onClose }: { rowId: Id<"rows">; onClose: () => vo
         <div className="pt-4">
           <Editor
             key={row._id}
+            documentId={row._id}
             initialJson={row.content}
-            onSave={(json) => void setContent({ rowId, content: json })}
+            onSave={async (json) => {
+              await setContent({ rowId, content: json });
+            }}
           />
         </div>
       </div>
@@ -106,8 +121,8 @@ function SaveAsTemplateButton({ row }: { row: RowDoc }) {
         (p) =>
           p.type === "relation" &&
           p.relation?.databaseId === row.databaseId &&
-          p.relation?.syncedPropId
-      )
+          p.relation?.syncedPropId,
+      ),
   );
   if (!isProject) return null;
   return (
@@ -143,8 +158,13 @@ function TitleInput({ row }: { row: RowDoc }) {
 
   const saver = useRef(
     debounce((rowId: Id<"rows">, value: string) => {
-      void update({ rowId, propId: "title", value, tzOffsetMin: tzOffsetMin() });
-    }, 350)
+      void update({
+        rowId,
+        propId: "title",
+        value,
+        tzOffsetMin: tzOffsetMin(),
+      });
+    }, 350),
   );
   useEffect(() => {
     const s = saver.current;
@@ -160,7 +180,9 @@ function TitleInput({ row }: { row: RowDoc }) {
         setTitle(e.target.value);
         saver.current(row._id, e.target.value);
       }}
-      onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+      onKeyDown={(e) =>
+        e.key === "Enter" && (e.target as HTMLInputElement).blur()
+      }
       className="w-full bg-transparent text-[26px] font-extrabold tracking-tight outline-none placeholder:text-ink-3"
     />
   );

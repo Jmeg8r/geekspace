@@ -41,7 +41,7 @@ export default defineSchema({
         blockedByPropId: v.optional(v.string()),
         sprintPropId: v.optional(v.string()),
         parentPropId: v.optional(v.string()),
-      })
+      }),
     ),
     // Marks a database as the sprint container for `completeSprint` automation.
     sprintConfig: v.optional(
@@ -49,7 +49,7 @@ export default defineSchema({
         statusPropId: v.string(), // select: Upcoming / Current / Completed
         datePropId: v.string(), // date range of the sprint
         tasksPropId: v.string(), // relation to the tasks database
-      })
+      }),
     ),
   }),
 
@@ -164,6 +164,7 @@ export default defineSchema({
     audioStorageId: v.optional(v.id("_storage")),
     transcript: v.optional(v.string()),
     summary: v.optional(v.string()),
+    generatedContent: v.optional(v.string()), // compare before replacing a generated page
     keyPoints: v.optional(v.array(v.string())),
     decisions: v.optional(v.array(v.string())),
     actionItems: v.optional(v.array(v.string())),

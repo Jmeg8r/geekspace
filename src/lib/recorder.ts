@@ -51,6 +51,9 @@ let state: RecorderState = { ...idleState };
 const listeners = new Set<() => void>();
 
 let mediaRecorder: MediaRecorder | null = null;
+let starting = false;
+let startGeneration = 0;
+let stopping = false;
 let stream: MediaStream | null = null;
 let chunks: Blob[] = [];
 let audioCtx: AudioContext | null = null;
@@ -71,7 +74,9 @@ let lastSignalAt = 0;
  */
 export async function listMicrophones(): Promise<MicDevice[]> {
   const read = async () =>
-    (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+    (await navigator.mediaDevices.enumerateDevices()).filter(
+      (d) => d.kind === "audioinput",
+    );
   let devices = await read();
   if (devices.length > 0 && devices.every((d) => !d.label)) {
     const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -113,7 +118,8 @@ export async function openStream(deviceId?: string): Promise<MediaStream> {
       });
     } catch (err) {
       const name = (err as Error)?.name;
-      if (name !== "OverconstrainedError" && name !== "NotFoundError") throw err;
+      if (name !== "OverconstrainedError" && name !== "NotFoundError")
+        throw err;
     }
   }
   return navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
@@ -134,7 +140,9 @@ function cleanupHardware() {
   levelTimer = null;
   tickTimer = null;
   lastSignalAt = 0;
-  void audioCtx?.close().catch(() => {});
+  void audioCtx
+    ?.close()
+    .catch((error) => console.warn("Could not close audio context", error));
   audioCtx = null;
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
@@ -142,7 +150,8 @@ function cleanupHardware() {
 }
 
 function currentElapsed(): number {
-  const active = state.status === "recording" ? (Date.now() - segmentStart) / 1000 : 0;
+  const active =
+    state.status === "recording" ? (Date.now() - segmentStart) / 1000 : 0;
   return Math.floor(accumulatedSec + active);
 }
 
@@ -159,57 +168,87 @@ export const recorder = {
     meetingType: string;
     deviceId?: string;
   }) {
-    if (state.status !== "idle") throw new Error("Already recording");
-    stream = await openStream(opts.deviceId);
-    chunks = [];
-    accumulatedSec = 0;
-    segmentStart = Date.now();
-    lastSignalAt = Date.now();
-    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : "audio/webm";
-    mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    mediaRecorder.start(1000);
-
-    // Level meter
-    audioCtx = new AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser);
-    const buf = new Uint8Array(analyser.fftSize);
-    levelTimer = setInterval(() => {
-      if (state.status !== "recording") return;
-      analyser.getByteTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const x = (buf[i] - 128) / 128;
-        sum += x * x;
+    if (state.status !== "idle" || starting)
+      throw new Error("Already recording");
+    starting = true;
+    const generation = ++startGeneration;
+    try {
+      const opened = await openStream(opts.deviceId);
+      if (generation !== startGeneration) {
+        opened.getTracks().forEach((track) => track.stop());
+        throw new Error("Recording start cancelled");
       }
-      const rms = Math.sqrt(sum / buf.length);
-      const level = Math.min(1, rms * 3.5);
-      // WHY track this: the level was already computed for the meter and then
-      // discarded — it is the only in-flight evidence that the chosen input is
-      // dead, and surfacing it turns a lost meeting into a 25-second warning.
-      if (level > SILENCE_LEVEL) lastSignalAt = Date.now();
-      set({ level, silentSec: Math.floor((Date.now() - lastSignalAt) / 1000) });
-    }, LEVEL_INTERVAL_MS);
-    tickTimer = setInterval(() => set({ elapsedSec: currentElapsed() }), 1000);
+      stream = opened;
+      chunks = [];
+      accumulatedSec = 0;
+      segmentStart = Date.now();
+      lastSignalAt = Date.now();
+      const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm";
+      mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      mediaRecorder.start(1000);
 
-    set({
-      status: "recording",
-      meetingId: opts.meetingId,
-      title: opts.title,
-      meetingType: opts.meetingType,
-      startedAt: Date.now(),
-      elapsedSec: 0,
-      level: 0,
-      deviceLabel: stream.getAudioTracks()[0]?.label || "System default",
-      silentSec: 0,
-    });
+      // Level meter
+      audioCtx = new AudioContext();
+      const source = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      levelTimer = setInterval(() => {
+        if (state.status !== "recording") return;
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const x = (buf[i] - 128) / 128;
+          sum += x * x;
+        }
+        const rms = Math.sqrt(sum / buf.length);
+        const level = Math.min(1, rms * 3.5);
+        // WHY track this: the level was already computed for the meter and then
+        // discarded — it is the only in-flight evidence that the chosen input is
+        // dead, and surfacing it turns a lost meeting into a 25-second warning.
+        if (level > SILENCE_LEVEL) lastSignalAt = Date.now();
+        set({
+          level,
+          silentSec: Math.floor((Date.now() - lastSignalAt) / 1000),
+        });
+      }, LEVEL_INTERVAL_MS);
+      tickTimer = setInterval(
+        () => set({ elapsedSec: currentElapsed() }),
+        1000,
+      );
+
+      set({
+        status: "recording",
+        meetingId: opts.meetingId,
+        title: opts.title,
+        meetingType: opts.meetingType,
+        startedAt: Date.now(),
+        elapsedSec: 0,
+        level: 0,
+        deviceLabel: stream.getAudioTracks()[0]?.label || "System default",
+        silentSec: 0,
+      });
+    } catch (error) {
+      if (generation === startGeneration) {
+        try {
+          mediaRecorder?.stop();
+        } catch {
+          /* setup may fail before start */
+        }
+        cleanupHardware();
+        chunks = [];
+        set({ ...idleState });
+      }
+      throw error;
+    } finally {
+      if (generation === startGeneration) starting = false;
+    }
   },
 
   pause() {
@@ -231,18 +270,31 @@ export const recorder = {
   },
 
   /** Stop and return the assembled audio + duration. */
-  async stop(): Promise<{ blob: Blob; durationSec: number; meetingId: string; meetingType: string }> {
+  async stop(): Promise<{
+    blob: Blob;
+    durationSec: number;
+    meetingId: string;
+    meetingType: string;
+  }> {
     const rec = mediaRecorder;
-    if (!rec || state.status === "idle" || !state.meetingId) {
+    if (stopping || !rec || state.status === "idle" || !state.meetingId) {
       throw new Error("Not recording");
     }
     const durationSec = currentElapsed();
     const meetingId = state.meetingId;
     const meetingType = state.meetingType;
-    await new Promise<void>((resolve) => {
-      rec.onstop = () => resolve();
-      rec.stop();
-    });
+    stopping = true;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        rec.onstop = () => resolve();
+        rec.onerror = () => reject(new Error("Recording stopped unexpectedly"));
+        rec.stop();
+      });
+    } finally {
+      stopping = false;
+      cleanupHardware();
+      set({ ...idleState });
+    }
     const blob = new Blob(chunks, { type: rec.mimeType || "audio/webm" });
     chunks = [];
     cleanupHardware();
@@ -253,6 +305,8 @@ export const recorder = {
   /** Discard the recording entirely. */
   cancel(): string | null {
     const meetingId = state.meetingId;
+    startGeneration++;
+    starting = false;
     try {
       mediaRecorder?.stop();
     } catch {

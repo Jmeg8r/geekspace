@@ -44,7 +44,7 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - **Two lanes, one toolset** (toggle in the panel header):
   - **Local (default)** — a local Ollama model (prefers `qwen3-coder`; override with `GEEKSPACE_LOCAL_MODEL` in `.env.local`) drives the same workspace tools for free. Right for routine asks: what's overdue, add a task, create a page.
   - **Claude** — the Claude Agent SDK lane for complex design work (multi-database structures, reorganizations). From 2026-06-15, SDK calls bill a separate per-user credit pool at API rates, so spend it where frontier judgment matters.
-- The Claude lane runs **entirely on this Mac** via the Agent SDK in the Electron main process, using your Claude Code sign-in (`~/.claude/.credentials.json`) — **no API key, no external service**
+- The optional Claude lane runs its SDK host on this Mac and sends conversation and workspace tool results to Anthropic. Select it explicitly in the lane toggle; it uses your Claude Code credentials and can incur usage charges. Built-in shell/file tools, external MCP configs and skills are disabled; only the 14 Geekspace workspace tools are allowed.
 - Powered by **`geekspace-mcp`** (`mcp/index.mjs`): a standard MCP server exposing the workspace (name-keyed properties, option validation, schedule awareness, template instantiation). Because it's a standard server, **any** MCP client can drive your workspace too — `claude mcp add geekspace --env CONVEX_URL=http://127.0.0.1:3210 -- node mcp/index.mjs`
 - Create/edit only — no delete tools by design
 
@@ -101,8 +101,8 @@ flowchart TD
 |---|---|
 | Convex **anonymous local** deployment | No account, no auth, data stays on this machine, still fully reactive (dev: repo `.convex/`; packaged: `~/Library/Application Support/Geekspace/` on macOS, `%APPDATA%\Geekspace\` on Windows) |
 | Electron owns the backend lifecycle (packaged) | The app spawns the bundled `convex-local-backend` on launch and stops it on quit — self-contained, no terminal |
-| Pure scheduler module shared by server + tests | Deterministic, 21 unit tests, no UI coupling |
-| Reflow inside the schedule-affecting mutations | The cascade can never be forgotten; UI updates reactively for free. **Not every** mutation that touches those tables reflows — `setMicDevice` deliberately does not (picking a microphone has nothing to do with the schedule, and reflow is unconditional), and `removeProperty`, `updateProperty` and `completeSprint` currently do not either |
+| Pure scheduler module shared by server + tests | Deterministic and tested without UI coupling |
+| Reflow inside the schedule-affecting mutations | The cascade can never be forgotten; UI updates reactively for free. Property edits/removal and sprint completion reflow immediately. `setMicDevice` deliberately does not: choosing a microphone does not change the schedule. |
 | Drag = lock | Matches Motion/Reclaim mental model: a manual placement is a promise the engine must respect |
 | Date-only values stored as UTC-midnight calendar dates | Timezone-proof dates (like Notion); timed values are real epochs |
 | Fixed tz-offset scheduling with constant reflow | Near-term blocks always correct; DST drift self-heals on every reflow |
@@ -159,7 +159,7 @@ Other scripts:
 |---|---|
 | `npm run dev:web` | backend + browser dev (no Electron) |
 | `npm run test` | scheduler engine test suite (vitest) |
-| `npm run verify` | typecheck + tests |
+| `npm run verify` | lint + typecheck + tests |
 | `npm run package` | build self-contained `Geekspace.app` + `.dmg` into `release/` |
 | `npm run package:win` | build self-contained `Geekspace Setup 0.1.0.exe` (NSIS) into `release/` |
 | `npm run migrate:local-data` | copy your dev `.convex` workspace into the packaged app |
@@ -183,7 +183,7 @@ src/
   state/            # zustand UI state, theme provider
 electron/           # main.mjs, preload.cjs, convexBackend.mjs (backend lifecycle) — no build step
 scripts/            # prebake-seed, migrate-local-data, deploy-local, afterPack
-tests/              # scheduler test suite
+tests/              # scheduler, mutation, desktop, recorder, save and MCP regressions
 ```
 
 ## Known limits (v1.1)
@@ -194,7 +194,7 @@ tests/              # scheduler test suite
 - macOS Calendar/Mail integrations are mac-only — the Windows build hides both surfaces entirely (a Windows provider isn't built yet)
 - On Windows the app stops its backend with `TerminateProcess` (ungraceful but safe — WAL-mode SQLite recovers on next start); quit the app before copying the data directory
 - Far-future blocks across a DST switch can sit an hour off until any reflow corrects them
-- Deleting a row leaves dangling relation ids on the other side; cells skip them gracefully
+- Row creation, edits and deletion maintain relation values transactionally, including self-relations. Existing malformed data is not migrated automatically.
 
 ## License
 
@@ -214,3 +214,15 @@ Interactive: [`docs/diagrams/geekspace.architecture.html`](docs/diagrams/geekspa
 [`geekspace.architecture.json`](docs/diagrams/geekspace.architecture.json); edit that, never the
 HTML.
 <!-- archify:end -->
+
+## Recovery and verification
+
+Unsaved editor edits are retained per document in local storage before the debounced save. Reopening a document with a pending draft offers recovery or keeping the server version. Failed saves remain visible while the document is open; closing a window with an active save is guarded. Recovery is local to that browser/profile and depends on available storage. Invalid stored document JSON is displayed for recovery instead of replaced with an empty document.
+
+Meeting AI reprocessing preserves manually edited notes by creating a new generated page. Recordings remain in memory until the initial storage upload succeeds; a crash before that upload can still lose audio. Actual microphone/device-loss and macOS/Windows packaged behavior require native acceptance testing.
+
+Migration refuses a running backend on the standard local port, stages a complete copy and preserves uniquely named backups. Stop both app and dev backends before copying; never run an alternate-port backend against the source or destination during migration. Existing partial/corrupt data and interrupted-migration backups block factory seeding. Keep backup copies until you have verified the migrated workspace.
+
+The native document viewer accepts only the exact local storage origin/path, limits downloads to 64 MiB, rejects redirects and active executable file types, and surfaces errors. Whisper model downloads are checked against the publisher's exact size and SHA-256 before publication. Calendar sync aborts on incomplete reads, preserving the previous mirror.
+
+The dependency lock pins Convex 1.41.0 to preserve the existing backend-binary contract, overrides its compatible `ws` dependency, and aligns Tiptap packages at 3.31.3 for security fixes. Re-evaluate these overrides when upgrading BlockNote or the bundled Convex backend. See [the coding assessment](docs/coding-principles-assessment-2026-09-12.md) for evidence and remaining acceptance limits.

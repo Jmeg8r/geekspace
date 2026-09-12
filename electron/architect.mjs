@@ -65,7 +65,9 @@ export function resetArchitect() {
 /** True if Claude Code credentials are present (the SDK needs them). */
 export function architectAuthOk() {
   try {
-    const stat = fs.statSync(path.join(os.homedir(), ".claude", ".credentials.json"));
+    const stat = fs.statSync(
+      path.join(os.homedir(), ".claude", ".credentials.json"),
+    );
     return stat.size > 0;
   } catch {
     return false;
@@ -94,10 +96,20 @@ export async function runArchitect(message, onEvent) {
           },
         },
       },
+      tools: [], // Disable SDK built-ins; allowedTools only auto-approves calls.
       allowedTools: ALLOWED_TOOLS,
+      settingSources: [],
+      skills: [],
+      strictMcpConfig: true,
+      canUseTool: async (name, input) =>
+        ALLOWED_TOOLS.includes(name)
+          ? { behavior: "allow", updatedInput: input }
+          : {
+              behavior: "deny",
+              message: "Only Geekspace workspace tools are available",
+            },
       // Single-user, local, create/edit-only tools — run them without prompting.
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
+      permissionMode: "default",
       includePartialMessages: true,
       maxTurns: 24,
       ...(sessionId ? { resume: sessionId } : {}),
@@ -110,7 +122,10 @@ export async function runArchitect(message, onEvent) {
     if (msg.type === "stream_event") {
       // Live text deltas for a responsive feel.
       const ev = msg.event;
-      if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
+      if (
+        ev?.type === "content_block_delta" &&
+        ev.delta?.type === "text_delta"
+      ) {
         onEvent({ type: "token", text: ev.delta.text });
       }
     } else if (msg.type === "assistant") {

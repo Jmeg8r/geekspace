@@ -1,4 +1,9 @@
-import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
+import {
+  mutation,
+  query,
+  type MutationCtx,
+  type QueryCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { DateValue, PropertyDef, TemplatePayload } from "./lib/types";
@@ -29,9 +34,10 @@ async function resolvePmWiring(ctx: QueryCtx | MutationCtx): Promise<PmWiring> {
       p.type === "relation" &&
       p.relation?.syncedPropId &&
       p.relation.databaseId !== tasksDb._id &&
-      !dbs.find((d) => d._id === p.relation!.databaseId)?.sprintConfig
+      !dbs.find((d) => d._id === p.relation!.databaseId)?.sprintConfig,
   );
-  if (!projectRel?.relation) throw new Error("Tasks database has no project relation");
+  if (!projectRel?.relation)
+    throw new Error("Tasks database has no project relation");
   const projectsDb = dbs.find((d) => d._id === projectRel.relation!.databaseId);
   if (!projectsDb) throw new Error("Projects database not found");
   return {
@@ -87,7 +93,7 @@ export const saveFromProject = mutation({
     const taskProps = wiring.tasksDb.properties as PropertyDef[];
     const priorityProp = taskProps.find((p) => p.id === tc.priorityPropId);
     const projDateProp = (wiring.projectsDb.properties as PropertyDef[]).find(
-      (p) => p.type === "date"
+      (p) => p.type === "date",
     );
 
     const offsetOf = (dv: DateValue | undefined) =>
@@ -95,7 +101,8 @@ export const saveFromProject = mutation({
         ? Math.round(((dv.end ?? dv.start) - today) / DAY_MS)
         : undefined;
 
-    const taskIds = ((project.properties?.[wiring.projectTasksPropId] ?? []) as string[]);
+    const taskIds = (project.properties?.[wiring.projectTasksPropId] ??
+      []) as string[];
     const titleOf = new Map<string, string>();
     const taskDocs: Doc<"rows">[] = [];
     for (const id of taskIds) {
@@ -106,9 +113,15 @@ export const saveFromProject = mutation({
       }
     }
 
+    if (new Set(taskDocs.map((task) => task.title)).size !== taskDocs.length)
+      throw new Error(
+        "Rename duplicate task titles before saving this template; dependencies use task titles",
+      );
     const payload: TemplatePayload = {
       targetOffsetDays: projDateProp
-        ? offsetOf(project.properties?.[projDateProp.id] as DateValue | undefined)
+        ? offsetOf(
+            project.properties?.[projDateProp.id] as DateValue | undefined,
+          )
         : undefined,
       projectContent: project.content,
       tasks: taskDocs.map((t) => {
@@ -120,8 +133,12 @@ export const saveFromProject = mutation({
           : [];
         return {
           title: t.title,
-          priorityName: priorityProp?.options?.find((o) => o.id === p[tc.priorityPropId])?.name,
-          estimateMin: isNumber(p[tc.estimatePropId]) ? p[tc.estimatePropId] : undefined,
+          priorityName: priorityProp?.options?.find(
+            (o) => o.id === p[tc.priorityPropId],
+          )?.name,
+          estimateMin: isNumber(p[tc.estimatePropId])
+            ? p[tc.estimatePropId]
+            : undefined,
           dueOffsetDays: offsetOf(p[tc.datePropId] as DateValue | undefined),
           blockedByTitles: blockedBy.length ? blockedBy : undefined,
           content: t.content,
@@ -148,9 +165,20 @@ export const instantiate = mutation({
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    if (
+      !Number.isFinite(args.startDay) ||
+      Math.abs(args.startDay) > 8.64e15 ||
+      args.startDay % DAY_MS !== 0
+    )
+      throw new Error("Choose a valid calendar start date");
     const template = await ctx.db.get(args.templateId);
     if (!template || template.trashed) throw new Error("Template not found");
     const payload = template.payload as TemplatePayload;
+    if (
+      new Set(payload.tasks.map((task) => task.title)).size !==
+      payload.tasks.length
+    )
+      throw new Error("Template has ambiguous duplicate task titles");
     const wiring = await resolvePmWiring(ctx);
     const tc = wiring.tasksDb.taskConfig!;
     const taskProps = wiring.tasksDb.properties as PropertyDef[];
@@ -165,7 +193,8 @@ export const instantiate = mutation({
     const projectProperties: Record<string, unknown> = {};
     projectProperties.title = args.title;
     const projTodo = projStatusProp?.options?.find((o) => o.group === "todo");
-    if (projStatusProp && projTodo) projectProperties[projStatusProp.id] = projTodo.id;
+    if (projStatusProp && projTodo)
+      projectProperties[projStatusProp.id] = projTodo.id;
     if (projDateProp && payload.targetOffsetDays !== undefined) {
       projectProperties[projDateProp.id] = {
         start: args.startDay + payload.targetOffsetDays * DAY_MS,
@@ -189,13 +218,16 @@ export const instantiate = mutation({
       properties.title = t.title;
       properties[wiring.taskProjectPropId] = [projectRowId];
       if (taskTodo) properties[tc.statusPropId] = taskTodo.id;
-      if (t.estimateMin !== undefined) properties[tc.estimatePropId] = t.estimateMin;
+      if (t.estimateMin !== undefined)
+        properties[tc.estimatePropId] = t.estimateMin;
       if (t.dueOffsetDays !== undefined) {
-        properties[tc.datePropId] = { start: args.startDay + t.dueOffsetDays * DAY_MS };
+        properties[tc.datePropId] = {
+          start: args.startDay + t.dueOffsetDays * DAY_MS,
+        };
       }
       if (t.priorityName && priorityProp) {
         const opt = priorityProp.options?.find(
-          (o) => o.name.toLowerCase() === t.priorityName!.toLowerCase()
+          (o) => o.name.toLowerCase() === t.priorityName!.toLowerCase(),
         );
         if (opt) properties[tc.priorityPropId] = opt.id;
       }
@@ -227,7 +259,10 @@ export const instantiate = mutation({
         if (blockerIds.length === 0) continue;
         const row = await ctx.db.get(rowId);
         await ctx.db.patch(rowId, {
-          properties: { ...(row!.properties ?? {}), [blockedByPropId]: blockerIds },
+          properties: {
+            ...(row!.properties ?? {}),
+            [blockedByPropId]: blockerIds,
+          },
         });
         for (const b of blockerIds) {
           blockingOf.set(b, [...(blockingOf.get(b) ?? []), rowId]);
@@ -236,7 +271,10 @@ export const instantiate = mutation({
       for (const [blockerId, blockedIds] of blockingOf) {
         const blocker = await ctx.db.get(blockerId);
         await ctx.db.patch(blockerId, {
-          properties: { ...(blocker!.properties ?? {}), [blockingPropId]: blockedIds },
+          properties: {
+            ...(blocker!.properties ?? {}),
+            [blockingPropId]: blockedIds,
+          },
         });
       }
     }
@@ -244,7 +282,10 @@ export const instantiate = mutation({
     // Reverse relation on the project.
     const project = await ctx.db.get(projectRowId);
     await ctx.db.patch(projectRowId, {
-      properties: { ...(project!.properties ?? {}), [wiring.projectTasksPropId]: taskIds },
+      properties: {
+        ...(project!.properties ?? {}),
+        [wiring.projectTasksPropId]: taskIds,
+      },
     });
 
     await runReflow(ctx, args.tzOffsetMin);
@@ -274,7 +315,8 @@ const STARTERS: Array<{
 }> = [
   {
     name: "ASTGL Article",
-    description: "Research → draft → review → publish, chained so each step waits for the last.",
+    description:
+      "Research → draft → review → publish, chained so each step waits for the last.",
     icon: "✍️",
     category: "content",
     payload: {
@@ -282,30 +324,86 @@ const STARTERS: Array<{
       projectContent: JSON.stringify([
         { type: "heading", props: { level: 2 }, content: "Article brief" },
         { type: "bulletListItem", content: "Working title:" },
-        { type: "bulletListItem", content: "The one thing the reader should take away:" },
+        {
+          type: "bulletListItem",
+          content: "The one thing the reader should take away:",
+        },
         { type: "bulletListItem", content: "Receipts/screenshots to capture:" },
       ]),
       tasks: [
-        { title: "Research + outline", priorityName: "High", estimateMin: 60, dueOffsetDays: 2 },
-        { title: "Write first draft", priorityName: "High", estimateMin: 180, dueOffsetDays: 5, blockedByTitles: ["Research + outline"] },
-        { title: "Edit + graphics", priorityName: "Medium", estimateMin: 60, dueOffsetDays: 7, blockedByTitles: ["Write first draft"] },
-        { title: "Publish + notes campaign", priorityName: "High", estimateMin: 45, dueOffsetDays: 8, blockedByTitles: ["Edit + graphics"] },
+        {
+          title: "Research + outline",
+          priorityName: "High",
+          estimateMin: 60,
+          dueOffsetDays: 2,
+        },
+        {
+          title: "Write first draft",
+          priorityName: "High",
+          estimateMin: 180,
+          dueOffsetDays: 5,
+          blockedByTitles: ["Research + outline"],
+        },
+        {
+          title: "Edit + graphics",
+          priorityName: "Medium",
+          estimateMin: 60,
+          dueOffsetDays: 7,
+          blockedByTitles: ["Write first draft"],
+        },
+        {
+          title: "Publish + notes campaign",
+          priorityName: "High",
+          estimateMin: 45,
+          dueOffsetDays: 8,
+          blockedByTitles: ["Edit + graphics"],
+        },
       ],
     },
   },
   {
     name: "Podcast Episode",
-    description: "Outline, record, edit, show notes, publish — a full episode cycle.",
+    description:
+      "Outline, record, edit, show notes, publish — a full episode cycle.",
     icon: "🎙️",
     category: "content",
     payload: {
       targetOffsetDays: 9,
       tasks: [
-        { title: "Outline episode", priorityName: "Medium", estimateMin: 45, dueOffsetDays: 2 },
-        { title: "Record", priorityName: "High", estimateMin: 90, dueOffsetDays: 4, blockedByTitles: ["Outline episode"] },
-        { title: "Edit audio", priorityName: "Medium", estimateMin: 120, dueOffsetDays: 7, blockedByTitles: ["Record"] },
-        { title: "Write show notes", priorityName: "Low", estimateMin: 30, dueOffsetDays: 8, blockedByTitles: ["Record"] },
-        { title: "Publish episode", priorityName: "High", estimateMin: 30, dueOffsetDays: 9, blockedByTitles: ["Edit audio", "Write show notes"] },
+        {
+          title: "Outline episode",
+          priorityName: "Medium",
+          estimateMin: 45,
+          dueOffsetDays: 2,
+        },
+        {
+          title: "Record",
+          priorityName: "High",
+          estimateMin: 90,
+          dueOffsetDays: 4,
+          blockedByTitles: ["Outline episode"],
+        },
+        {
+          title: "Edit audio",
+          priorityName: "Medium",
+          estimateMin: 120,
+          dueOffsetDays: 7,
+          blockedByTitles: ["Record"],
+        },
+        {
+          title: "Write show notes",
+          priorityName: "Low",
+          estimateMin: 30,
+          dueOffsetDays: 8,
+          blockedByTitles: ["Record"],
+        },
+        {
+          title: "Publish episode",
+          priorityName: "High",
+          estimateMin: 30,
+          dueOffsetDays: 9,
+          blockedByTitles: ["Edit audio", "Write show notes"],
+        },
       ],
     },
   },
@@ -328,35 +426,151 @@ const STARTERS: Array<{
         { type: "bulletListItem", content: "Rollback decision point:" },
       ]),
       tasks: [
-        { title: "Scope & requirements doc", priorityName: "High", estimateMin: 120, dueOffsetDays: 3 },
-        { title: "Stakeholder identification & notification", priorityName: "Medium", estimateMin: 60, dueOffsetDays: 3 },
-        { title: "Risk assessment", priorityName: "High", estimateMin: 90, dueOffsetDays: 3 },
-        { title: "Change request / CAB submission", priorityName: "Urgent", estimateMin: 60, dueOffsetDays: 5, blockedByTitles: ["Scope & requirements doc", "Stakeholder identification & notification", "Risk assessment"] },
-        { title: "Rollback plan / runbook", priorityName: "High", estimateMin: 120, dueOffsetDays: 10, blockedByTitles: ["Change request / CAB submission"] },
-        { title: "Resource & schedule planning", priorityName: "Medium", estimateMin: 60, dueOffsetDays: 10, blockedByTitles: ["Change request / CAB submission"] },
-        { title: "Vendor coordination (licensing / delivery)", priorityName: "Medium", estimateMin: 45, dueOffsetDays: 10, blockedByTitles: ["Change request / CAB submission"] },
-        { title: "Backup verification", priorityName: "Urgent", estimateMin: 60, dueOffsetDays: 11, blockedByTitles: ["Change request / CAB submission"] },
-        { title: "Staging / test environment validation", priorityName: "High", estimateMin: 180, dueOffsetDays: 11, blockedByTitles: ["Change request / CAB submission"] },
-        { title: "Execute upgrade (maintenance window)", priorityName: "Urgent", estimateMin: 240, dueOffsetDays: 14, blockedByTitles: ["Backup verification", "Staging / test environment validation", "Vendor coordination (licensing / delivery)"] },
-        { title: "Smoke testing / validation", priorityName: "Urgent", estimateMin: 90, dueOffsetDays: 15, blockedByTitles: ["Execute upgrade (maintenance window)"] },
-        { title: "24–48hr post-upgrade monitoring", priorityName: "High", estimateMin: 60, dueOffsetDays: 17, blockedByTitles: ["Execute upgrade (maintenance window)", "Smoke testing / validation"] },
-        { title: "Documentation update", priorityName: "Medium", estimateMin: 90, dueOffsetDays: 19, blockedByTitles: ["24–48hr post-upgrade monitoring"] },
-        { title: "Lessons learned / ticket closure", priorityName: "Low", estimateMin: 45, dueOffsetDays: 21, blockedByTitles: ["24–48hr post-upgrade monitoring"] },
+        {
+          title: "Scope & requirements doc",
+          priorityName: "High",
+          estimateMin: 120,
+          dueOffsetDays: 3,
+        },
+        {
+          title: "Stakeholder identification & notification",
+          priorityName: "Medium",
+          estimateMin: 60,
+          dueOffsetDays: 3,
+        },
+        {
+          title: "Risk assessment",
+          priorityName: "High",
+          estimateMin: 90,
+          dueOffsetDays: 3,
+        },
+        {
+          title: "Change request / CAB submission",
+          priorityName: "Urgent",
+          estimateMin: 60,
+          dueOffsetDays: 5,
+          blockedByTitles: [
+            "Scope & requirements doc",
+            "Stakeholder identification & notification",
+            "Risk assessment",
+          ],
+        },
+        {
+          title: "Rollback plan / runbook",
+          priorityName: "High",
+          estimateMin: 120,
+          dueOffsetDays: 10,
+          blockedByTitles: ["Change request / CAB submission"],
+        },
+        {
+          title: "Resource & schedule planning",
+          priorityName: "Medium",
+          estimateMin: 60,
+          dueOffsetDays: 10,
+          blockedByTitles: ["Change request / CAB submission"],
+        },
+        {
+          title: "Vendor coordination (licensing / delivery)",
+          priorityName: "Medium",
+          estimateMin: 45,
+          dueOffsetDays: 10,
+          blockedByTitles: ["Change request / CAB submission"],
+        },
+        {
+          title: "Backup verification",
+          priorityName: "Urgent",
+          estimateMin: 60,
+          dueOffsetDays: 11,
+          blockedByTitles: ["Change request / CAB submission"],
+        },
+        {
+          title: "Staging / test environment validation",
+          priorityName: "High",
+          estimateMin: 180,
+          dueOffsetDays: 11,
+          blockedByTitles: ["Change request / CAB submission"],
+        },
+        {
+          title: "Execute upgrade (maintenance window)",
+          priorityName: "Urgent",
+          estimateMin: 240,
+          dueOffsetDays: 14,
+          blockedByTitles: [
+            "Backup verification",
+            "Staging / test environment validation",
+            "Vendor coordination (licensing / delivery)",
+          ],
+        },
+        {
+          title: "Smoke testing / validation",
+          priorityName: "Urgent",
+          estimateMin: 90,
+          dueOffsetDays: 15,
+          blockedByTitles: ["Execute upgrade (maintenance window)"],
+        },
+        {
+          title: "24–48hr post-upgrade monitoring",
+          priorityName: "High",
+          estimateMin: 60,
+          dueOffsetDays: 17,
+          blockedByTitles: [
+            "Execute upgrade (maintenance window)",
+            "Smoke testing / validation",
+          ],
+        },
+        {
+          title: "Documentation update",
+          priorityName: "Medium",
+          estimateMin: 90,
+          dueOffsetDays: 19,
+          blockedByTitles: ["24–48hr post-upgrade monitoring"],
+        },
+        {
+          title: "Lessons learned / ticket closure",
+          priorityName: "Low",
+          estimateMin: 45,
+          dueOffsetDays: 21,
+          blockedByTitles: ["24–48hr post-upgrade monitoring"],
+        },
       ],
     },
   },
   {
     name: "Home-Lab Project",
-    description: "Design, provision, configure, document — the responsible-sysadmin loop.",
+    description:
+      "Design, provision, configure, document — the responsible-sysadmin loop.",
     icon: "🖥️",
     category: "homelab",
     payload: {
       targetOffsetDays: 14,
       tasks: [
-        { title: "Design + research", priorityName: "Medium", estimateMin: 120, dueOffsetDays: 4 },
-        { title: "Provision hardware/VMs", priorityName: "Medium", estimateMin: 90, dueOffsetDays: 7, blockedByTitles: ["Design + research"] },
-        { title: "Configure + harden", priorityName: "High", estimateMin: 150, dueOffsetDays: 11, blockedByTitles: ["Provision hardware/VMs"] },
-        { title: "Document the build", priorityName: "Low", estimateMin: 60, dueOffsetDays: 14, blockedByTitles: ["Configure + harden"] },
+        {
+          title: "Design + research",
+          priorityName: "Medium",
+          estimateMin: 120,
+          dueOffsetDays: 4,
+        },
+        {
+          title: "Provision hardware/VMs",
+          priorityName: "Medium",
+          estimateMin: 90,
+          dueOffsetDays: 7,
+          blockedByTitles: ["Design + research"],
+        },
+        {
+          title: "Configure + harden",
+          priorityName: "High",
+          estimateMin: 150,
+          dueOffsetDays: 11,
+          blockedByTitles: ["Provision hardware/VMs"],
+        },
+        {
+          title: "Document the build",
+          priorityName: "Low",
+          estimateMin: 60,
+          dueOffsetDays: 14,
+          blockedByTitles: ["Configure + harden"],
+        },
       ],
     },
   },

@@ -17,38 +17,142 @@ const SPRINT_LENGTH_DAYS = 14;
 // Compact in-app guide — the full version lives in docs/USER-GUIDE.md.
 const USER_GUIDE_BLOCKS = [
   { type: "heading", props: { level: 1 }, content: "Geekspace User Guide 📖" },
-  { type: "paragraph", content: "The essentials. Full guide: docs/USER-GUIDE.md in the repo." },
+  {
+    type: "paragraph",
+    content: "The essentials. Full guide: docs/USER-GUIDE.md in the repo.",
+  },
   { type: "heading", props: { level: 2 }, content: "Pages & writing" },
-  { type: "bulletListItem", content: "Type / in any page for the block menu — headings, lists, to-dos, tables, images, code." },
-  { type: "bulletListItem", content: "Markdown shortcuts work: # heading, - list, [] to-do, > quote." },
-  { type: "bulletListItem", content: "Hover a page in the sidebar for ⋯ (favorite/trash) and + (add a page inside)." },
+  {
+    type: "bulletListItem",
+    content:
+      "Type / in any page for the block menu — headings, lists, to-dos, tables, images, code.",
+  },
+  {
+    type: "bulletListItem",
+    content: "Markdown shortcuts work: # heading, - list, [] to-do, > quote.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Hover a page in the sidebar for ⋯ (favorite/trash) and + (add a page inside).",
+  },
   { type: "heading", props: { level: 2 }, content: "Databases & projects" },
-  { type: "bulletListItem", content: "Every row opens as a full page (hover → Open, or click a board card)." },
-  { type: "bulletListItem", content: "Views are lenses: Table, Board, List, Calendar, Timeline — each with its own filters and sorts." },
-  { type: "bulletListItem", content: "Projects ⇄ Tasks are linked; Progress on a project is the % of its tasks done." },
-  { type: "bulletListItem", content: "Sub-tasks: set a Parent task. Dependencies: set Blocked by — blocked work is auto-scheduled after its blockers." },
-  { type: "bulletListItem", content: "Sprints: tasks carry a Sprint; the Sprint Board shows the current one. Complete sprint closes it and rolls open tasks forward." },
-  { type: "heading", props: { level: 2 }, content: "The self-scheduling calendar" },
-  { type: "bulletListItem", content: "A task needs an estimate + due date to get time blocks. Solid = appointments, translucent ⚡ = auto-scheduled, lock = pinned." },
-  { type: "bulletListItem", content: "Drag a block to pin it; right-click to lock/unlock, mark done, or open the task." },
-  { type: "bulletListItem", content: "Everything reflows automatically when events, tasks, or settings change. Red stripes = past due; check the needs-attention badge." },
-  { type: "bulletListItem", content: "Keys: T today · J/K next/prev · W/M week/month view." },
-  { type: "heading", props: { level: 2 }, content: "Agent, Knowledge, Docs & Templates" },
-  { type: "bulletListItem", content: "Agent (sidebar): chat with ARCHITECT — it builds databases, projects, and pages for you. Runs locally via your Claude Code sign-in (no API key). If it says 'Claude sign-in needed', run `claude` once in a terminal." },
-  { type: "bulletListItem", content: "Knowledge (sidebar): semantic search over your ASTGL knowledge base; Answer button for a single sourced answer. Also inline in ⌘K." },
-  { type: "bulletListItem", content: "Docs (sidebar): drag files in — PDF/images/AV/markdown/code preview in-app; link files to projects; ⌘K finds them." },
-  { type: "bulletListItem", content: "Templates: Projects page → From template (or ⌘K). Tasks land with offset dues + dependency chains and auto-schedule instantly. Save your own from a project's peek." },
+  {
+    type: "bulletListItem",
+    content:
+      "Every row opens as a full page (hover → Open, or click a board card).",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Views are lenses: Table, Board, List, Calendar, Timeline — each with its own filters and sorts.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Projects ⇄ Tasks are linked; Progress on a project is the % of its tasks done.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Sub-tasks: set a Parent task. Dependencies: set Blocked by — blocked work is auto-scheduled after its blockers.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Sprints: tasks carry a Sprint; the Sprint Board shows the current one. Complete sprint closes it and rolls open tasks forward.",
+  },
+  {
+    type: "heading",
+    props: { level: 2 },
+    content: "The self-scheduling calendar",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "A task needs an estimate + due date to get time blocks. Solid = appointments, translucent ⚡ = auto-scheduled, lock = pinned.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Drag a block to pin it; right-click to lock/unlock, mark done, or open the task.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Everything reflows automatically when events, tasks, or settings change. Red stripes = past due; check the needs-attention badge.",
+  },
+  {
+    type: "bulletListItem",
+    content: "Keys: T today · J/K next/prev · W/M week/month view.",
+  },
+  {
+    type: "heading",
+    props: { level: 2 },
+    content: "Agent, Knowledge, Docs & Templates",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Agent (sidebar): chat with ARCHITECT — it builds databases, projects, and pages for you. Uses local Ollama by default. The optional Claude lane sends conversation and tool results to Anthropic and may incur usage charges.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Knowledge (sidebar): semantic search over your ASTGL knowledge base; Answer button for a single sourced answer. Also inline in ⌘K.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Docs (sidebar): drag files in — PDF/images/AV/markdown/code preview in-app; link files to projects; ⌘K finds them.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Templates: Projects page → From template (or ⌘K). Tasks land with offset dues + dependency chains and auto-schedule instantly. Save your own from a project's peek.",
+  },
   { type: "heading", props: { level: 2 }, content: "AI meeting notes" },
-  { type: "bulletListItem", content: "Meetings (sidebar, ⌘3) → Record. Pick a meeting type — the summary is tailored to it (standup, 1:1, client, interview, brainstorm)." },
-  { type: "bulletListItem", content: "Stop → whisper.cpp transcribes and your local Ollama writes the summary, key points, decisions, and action items. Nothing leaves this Mac." },
-  { type: "bulletListItem", content: "A notes page lands under 🎙️ Meeting Notes; action items become tasks with one click. Audio replay + full transcript live on the meeting." },
-  { type: "bulletListItem", content: "First recording asks for Microphone permission. Tools status lives in Settings → AI meeting notes." },
+  {
+    type: "bulletListItem",
+    content:
+      "Meetings (sidebar, ⌘3) → Record. Pick a meeting type — the summary is tailored to it (standup, 1:1, client, interview, brainstorm).",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Stop → whisper.cpp transcribes and your local Ollama writes the summary, key points, decisions, and action items. Nothing leaves this Mac.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "A notes page lands under 🎙️ Meeting Notes; action items become tasks with one click. Audio replay + full transcript live on the meeting.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "First recording asks for Microphone permission. Tools status lives in Settings → AI meeting notes.",
+  },
   { type: "heading", props: { level: 2 }, content: "macOS Calendar & Mail" },
-  { type: "bulletListItem", content: "Settings → macOS integrations. First sync asks for Automation permission — click OK." },
-  { type: "bulletListItem", content: "Synced events are read-only (dotted edge) and the scheduler plans around them. Edit them in Calendar." },
-  { type: "bulletListItem", content: "The Home inbox reads Mail.app: open a message in Mail, or + to turn it into a task with a link back." },
+  {
+    type: "bulletListItem",
+    content:
+      "Settings → macOS integrations. First sync asks for Automation permission — click OK.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "Synced events are read-only (dotted edge) and the scheduler plans around them. Edit them in Calendar.",
+  },
+  {
+    type: "bulletListItem",
+    content:
+      "The Home inbox reads Mail.app: open a message in Mail, or + to turn it into a task with a link back.",
+  },
   { type: "heading", props: { level: 2 }, content: "Shortcuts" },
-  { type: "bulletListItem", content: "⌘K search · ⌘N new page · ⌘1 Home · ⌘2 Calendar." },
+  {
+    type: "bulletListItem",
+    content: "⌘K search · ⌘N new page · ⌘1 Home · ⌘2 Calendar.",
+  },
   { type: "quote", content: "If I do something more than twice, automate it." },
 ];
 
@@ -134,7 +238,12 @@ export const applyPmUpgrade = mutation({
 
       const sprintsProps: PropertyDef[] = [
         { id: "title", name: "Name", type: "title" },
-        { id: sStatusId, name: "Status", type: "select", options: sprintStatusOptions },
+        {
+          id: sStatusId,
+          name: "Status",
+          type: "select",
+          options: sprintStatusOptions,
+        },
         { id: sDatesId, name: "Dates", type: "date" },
         {
           id: sTasksId,
@@ -175,7 +284,12 @@ export const applyPmUpgrade = mutation({
         updatedAt: now,
       });
       await ctx.db.patch(sprintsDbId, { pageId: sprintsPageId });
-      await ctx.db.insert("views", { databaseId: sprintsDbId, name: "Table", type: "table", order: 1 });
+      await ctx.db.insert("views", {
+        databaseId: sprintsDbId,
+        name: "Table",
+        type: "table",
+        order: 1,
+      });
       await ctx.db.insert("views", {
         databaseId: sprintsDbId,
         name: "Board",
@@ -215,7 +329,10 @@ export const applyPmUpgrade = mutation({
         properties: {
           title: "Sprint 2",
           [sStatusId]: sprintStatusOptions[0].id, // Upcoming
-          [sDatesId]: { start: s1End + DAY_MS, end: s1End + SPRINT_LENGTH_DAYS * DAY_MS },
+          [sDatesId]: {
+            start: s1End + DAY_MS,
+            end: s1End + SPRINT_LENGTH_DAYS * DAY_MS,
+          },
         },
         order: now + 1,
         updatedAt: now,
@@ -227,7 +344,9 @@ export const applyPmUpgrade = mutation({
         .withIndex("by_database", (q) => q.eq("databaseId", tasksDb._id))
         .collect();
       const completeIds = new Set(
-        (statusProp?.options ?? []).filter((o) => o.group === "complete").map((o) => o.id)
+        (statusProp?.options ?? [])
+          .filter((o) => o.group === "complete")
+          .map((o) => o.id),
       );
       const inSprint: Id<"rows">[] = [];
       for (const row of taskRows) {
@@ -239,7 +358,10 @@ export const applyPmUpgrade = mutation({
         if (!due || (due.end ?? due.start) > s1End) continue;
         inSprint.push(row._id);
         await ctx.db.patch(row._id, {
-          properties: { ...(row.properties ?? {}), [tSprintId]: [currentSprintId] },
+          properties: {
+            ...(row.properties ?? {}),
+            [tSprintId]: [currentSprintId],
+          },
         });
       }
       const sprint1 = await ctx.db.get(currentSprintId);
@@ -260,7 +382,11 @@ export const applyPmUpgrade = mutation({
       .withIndex("by_database", (q) => q.eq("databaseId", tasksDb._id))
       .collect();
     const sprintPropId = taskConfig.sprintPropId;
-    if (sprintPropId && currentSprintId && !taskViews.some((vw) => vw.name === "Sprint Board")) {
+    if (
+      sprintPropId &&
+      currentSprintId &&
+      !taskViews.some((vw) => vw.name === "Sprint Board")
+    ) {
       await ctx.db.insert("views", {
         databaseId: tasksDb._id,
         name: "Sprint Board",
@@ -268,14 +394,18 @@ export const applyPmUpgrade = mutation({
         groupByPropId: taskConfig.statusPropId,
         filters: {
           conjunction: "and",
-          rules: [{ propId: sprintPropId, op: "contains", value: currentSprintId }],
+          rules: [
+            { propId: sprintPropId, op: "contains", value: currentSprintId },
+          ],
         },
         order: now + 10,
       } as never);
       did.push("sprint-board-view");
     }
     if (sprintPropId && !taskViews.some((vw) => vw.name === "Backlog")) {
-      const completeOption = statusProp?.options?.find((o) => o.group === "complete");
+      const completeOption = statusProp?.options?.find(
+        (o) => o.group === "complete",
+      );
       await ctx.db.insert("views", {
         databaseId: tasksDb._id,
         name: "Backlog",
@@ -285,7 +415,13 @@ export const applyPmUpgrade = mutation({
           rules: [
             { propId: sprintPropId, op: "isEmpty" },
             ...(completeOption
-              ? [{ propId: taskConfig.statusPropId, op: "isNot", value: completeOption.id }]
+              ? [
+                  {
+                    propId: taskConfig.statusPropId,
+                    op: "isNot",
+                    value: completeOption.id,
+                  },
+                ]
               : []),
           ],
         },
@@ -337,10 +473,15 @@ export const applyPmUpgrade = mutation({
     if (settingsDoc) {
       await ctx.db.patch(settingsDoc._id, { pmUpgraded: true });
     } else {
-      await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, pmUpgraded: true });
+      await ctx.db.insert("settings", {
+        ...DEFAULT_SETTINGS,
+        pmUpgraded: true,
+      });
     }
     await runReflow(ctx, args.tzOffsetMin);
-    return did.length > 0 ? `upgraded: ${did.join(", ")}` : "already-up-to-date";
+    return did.length > 0
+      ? `upgraded: ${did.join(", ")}`
+      : "already-up-to-date";
   },
 });
 
@@ -383,7 +524,9 @@ export const completeSprint = mutation({
       .query("rows")
       .withIndex("by_database", (q) => q.eq("databaseId", args.sprintsDbId))
       .collect();
-    const current = sprints.find((s) => s.properties?.[cfg.statusPropId] === currentOpt);
+    const current = sprints.find(
+      (s) => s.properties?.[cfg.statusPropId] === currentOpt,
+    );
     if (!current) return "no-current-sprint";
     const currentDates = current.properties?.[cfg.datePropId] as
       | { start: number; end?: number }
@@ -391,7 +534,10 @@ export const completeSprint = mutation({
 
     // Close it.
     await ctx.db.patch(current._id, {
-      properties: { ...(current.properties ?? {}), [cfg.statusPropId]: completedOpt },
+      properties: {
+        ...(current.properties ?? {}),
+        [cfg.statusPropId]: completedOpt,
+      },
       updatedAt: Date.now(),
     });
 
@@ -404,25 +550,32 @@ export const completeSprint = mutation({
       .filter(
         (s) =>
           s._id !== current._id &&
-          (upcomingOpt === undefined || s.properties?.[cfg.statusPropId] === upcomingOpt)
+          (upcomingOpt === undefined ||
+            s.properties?.[cfg.statusPropId] === upcomingOpt),
       )
       .sort(
         (a, b) =>
-          ((a.properties?.[cfg.datePropId] as { start?: number } | undefined)?.start ?? 0) -
-          ((b.properties?.[cfg.datePropId] as { start?: number } | undefined)?.start ?? 0)
+          ((a.properties?.[cfg.datePropId] as { start?: number } | undefined)
+            ?.start ?? 0) -
+          ((b.properties?.[cfg.datePropId] as { start?: number } | undefined)
+            ?.start ?? 0),
       )[0];
 
     let nextId: Id<"rows">;
     if (next) {
       nextId = next._id;
       await ctx.db.patch(next._id, {
-        properties: { ...(next.properties ?? {}), [cfg.statusPropId]: currentOpt },
+        properties: {
+          ...(next.properties ?? {}),
+          [cfg.statusPropId]: currentOpt,
+        },
         updatedAt: Date.now(),
       });
     } else {
       const m = /(\d+)\s*$/.exec(current.title);
       const title = m ? `Sprint ${Number(m[1]) + 1}` : `${current.title} →`;
-      const start = (currentDates?.end ?? currentDates?.start ?? Date.now()) + DAY_MS;
+      const start =
+        (currentDates?.end ?? currentDates?.start ?? Date.now()) + DAY_MS;
       nextId = await ctx.db.insert("rows", {
         databaseId: args.sprintsDbId,
         title,
@@ -440,20 +593,25 @@ export const completeSprint = mutation({
     // Roll incomplete tasks forward (maintaining both relation sides).
     const tasksDb = await ctx.db.get(
       (props.find((p) => p.id === cfg.tasksPropId)?.relation?.databaseId ??
-        "") as Id<"databases">
+        "") as Id<"databases">,
     );
     let moved = 0;
     if (tasksDb?.taskConfig) {
       const tStatusProp = (tasksDb.properties as PropertyDef[]).find(
-        (p) => p.id === tasksDb.taskConfig!.statusPropId
+        (p) => p.id === tasksDb.taskConfig!.statusPropId,
       );
       const completeIds = new Set(
-        (tStatusProp?.options ?? []).filter((o) => o.group === "complete").map((o) => o.id)
+        (tStatusProp?.options ?? [])
+          .filter((o) => o.group === "complete")
+          .map((o) => o.id),
       );
-      const sprintPropId =
-        (props.find((p) => p.id === cfg.tasksPropId)?.relation?.syncedPropId ??
-          tasksDb.taskConfig.sprintPropId) as string | undefined;
-      const taskIds = ((current.properties?.[cfg.tasksPropId] ?? []) as string[]).slice();
+      const sprintPropId = (props.find((p) => p.id === cfg.tasksPropId)
+        ?.relation?.syncedPropId ?? tasksDb.taskConfig.sprintPropId) as
+        | string
+        | undefined;
+      const taskIds = (
+        (current.properties?.[cfg.tasksPropId] ?? []) as string[]
+      ).slice();
       const stay: string[] = [];
       const movedIds: string[] = [];
       for (const id of taskIds) {
@@ -471,7 +629,7 @@ export const completeSprint = mutation({
             ...(task.properties ?? {}),
             [sprintPropId]: [
               ...((task.properties?.[sprintPropId] ?? []) as string[]).filter(
-                (x) => x !== current._id
+                (x) => x !== current._id,
               ),
               nextId,
             ],
@@ -489,11 +647,15 @@ export const completeSprint = mutation({
       }
       const next2 = await ctx.db.get(nextId);
       if (next2) {
-        const existing = (next2.properties?.[cfg.tasksPropId] ?? []) as string[];
+        const existing = (next2.properties?.[cfg.tasksPropId] ??
+          []) as string[];
         await ctx.db.patch(nextId, {
           properties: {
             ...(next2.properties ?? {}),
-            [cfg.tasksPropId]: [...existing, ...movedIds.filter((x) => !existing.includes(x))],
+            [cfg.tasksPropId]: [
+              ...existing,
+              ...movedIds.filter((x) => !existing.includes(x)),
+            ],
           },
         });
       }
@@ -505,20 +667,24 @@ export const completeSprint = mutation({
         .collect();
       for (const view of views) {
         const filters = view.filters as
-          | { conjunction: string; rules: Array<{ propId: string; op: string; value?: unknown }> }
+          | {
+              conjunction: string;
+              rules: Array<{ propId: string; op: string; value?: unknown }>;
+            }
           | undefined;
         if (!filters?.rules?.some((r) => r.value === current._id)) continue;
         await ctx.db.patch(view._id, {
           filters: {
             ...filters,
             rules: filters.rules.map((r) =>
-              r.value === current._id ? { ...r, value: nextId } : r
+              r.value === current._id ? { ...r, value: nextId } : r,
             ),
           },
         });
       }
     }
 
+    await runReflow(ctx);
     return `completed "${current.title}" → "${next.title}" (${moved} open task${moved === 1 ? "" : "s"} rolled forward)`;
   },
 });

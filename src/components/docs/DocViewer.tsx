@@ -9,7 +9,10 @@ import { cn } from "../../lib/utils";
 export type DocItem = Doc<"docs"> & { url: string | null };
 
 interface QuickLookBridge {
-  quickLook(url: string, name: string): Promise<{ ok: boolean; error?: string }>;
+  quickLook(
+    url: string,
+    name: string,
+  ): Promise<{ ok: boolean; error?: string }>;
 }
 const quickLookBridge = () =>
   (window as { geekspace?: { docs?: QuickLookBridge } }).geekspace?.docs;
@@ -27,6 +30,7 @@ export function DocViewer({
 }) {
   const removeDoc = useMutation(api.docs.remove);
   const setProject = useMutation(api.docs.setProject);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -36,10 +40,14 @@ export function DocViewer({
 
   const m = doc.mime;
   const isText =
-    m.startsWith("text/") || /json|yaml|xml|javascript|typescript|x-sh|x-python|csv/.test(m);
+    m.startsWith("text/") ||
+    /json|yaml|xml|javascript|typescript|x-sh|x-python|csv/.test(m);
 
   return (
-    <div className="fixed inset-0 z-[60] flex justify-end bg-black/40" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div
+      className="fixed inset-0 z-[60] flex justify-end bg-black/40"
+      onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+    >
       <div
         className="fade-in flex h-full w-[min(720px,92vw)] flex-col border-l border-border bg-surface"
         style={{ boxShadow: "var(--shadow-lg)" }}
@@ -54,7 +62,9 @@ export function DocViewer({
             onChange={(e) =>
               void setProject({
                 docId: doc._id,
-                projectRowId: e.target.value ? (e.target.value as Id<"rows">) : undefined,
+                projectRowId: e.target.value
+                  ? (e.target.value as Id<"rows">)
+                  : undefined,
               })
             }
             className="max-w-44 rounded-md border border-border bg-surface px-1.5 py-1 text-[12px] outline-none"
@@ -70,7 +80,19 @@ export function DocViewer({
           {quickLookBridge() && doc.url && (
             <button
               title="Open with the default app"
-              onClick={() => void quickLookBridge()!.quickLook(doc.url!, doc.name)}
+              onClick={async () => {
+                setOpenError(null);
+                try {
+                  const result = await quickLookBridge()!.quickLook(
+                    doc.url!,
+                    doc.name,
+                  );
+                  if (!result.ok)
+                    setOpenError(result.error ?? "Could not open file");
+                } catch (error) {
+                  setOpenError(String(error));
+                }
+              }}
               className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-ink-2 hover:bg-hov hover:text-ink"
             >
               <Eye size={13} /> Open
@@ -79,7 +101,11 @@ export function DocViewer({
           <button
             title="Delete file"
             onClick={() => {
-              if (confirm(`Delete "${doc.name}"? The file is removed from storage.`)) {
+              if (
+                confirm(
+                  `Delete "${doc.name}"? The file is removed from storage.`,
+                )
+              ) {
                 onClose();
                 void removeDoc({ docId: doc._id });
               }
@@ -88,23 +114,43 @@ export function DocViewer({
           >
             <Trash2 size={14} />
           </button>
-          <button onClick={onClose} className="rounded-md p-1.5 text-ink-3 hover:bg-hov hover:text-ink">
+          <button
+            onClick={onClose}
+            className="rounded-md p-1.5 text-ink-3 hover:bg-hov hover:text-ink"
+          >
             <X size={15} />
           </button>
         </header>
 
+        {openError && (
+          <p role="alert" className="p-3 text-[var(--pal-red)]">
+            {openError}
+          </p>
+        )}
         <div className="min-h-0 flex-1 overflow-auto bg-bg">
           {!doc.url ? (
             <Empty>File URL unavailable</Empty>
           ) : m.startsWith("image/") ? (
             <div className="flex min-h-full items-center justify-center p-6">
-              <img src={doc.url} alt={doc.name} className="max-h-full max-w-full rounded-lg" />
+              <img
+                src={doc.url}
+                alt={doc.name}
+                className="max-h-full max-w-full rounded-lg"
+              />
             </div>
           ) : m === "application/pdf" ? (
-            <embed src={doc.url} type="application/pdf" className="h-full w-full" />
+            <embed
+              src={doc.url}
+              type="application/pdf"
+              className="h-full w-full"
+            />
           ) : m.startsWith("video/") ? (
             <div className="flex min-h-full items-center justify-center p-6">
-              <video src={doc.url} controls className="max-h-full max-w-full rounded-lg" />
+              <video
+                src={doc.url}
+                controls
+                className="max-h-full max-w-full rounded-lg"
+              />
             </div>
           ) : m.startsWith("audio/") ? (
             <div className="flex min-h-full items-center justify-center p-6">
@@ -114,7 +160,8 @@ export function DocViewer({
             <TextPreview url={doc.url} markdown={m === "text/markdown"} />
           ) : (
             <Empty>
-              No in-app preview for this type — use <b>Open</b> to view it in its native app.
+              No in-app preview for this type — use <b>Open</b> to view it in
+              its native app.
             </Empty>
           )}
         </div>
@@ -136,12 +183,32 @@ function TextPreview({ url, markdown }: { url: string; markdown: boolean }) {
   const [error, setError] = useState(false);
   useEffect(() => {
     let cancelled = false;
-    fetch(url)
-      .then((r) => r.text())
+    const controller = new AbortController();
+    setText(null);
+    setError(false);
+    fetch(url, { signal: controller.signal })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Download failed (${r.status})`);
+        if (!r.body) throw new Error("No file contents");
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let preview = "";
+        try {
+          while (preview.length < 200_000) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            preview += decoder.decode(value, { stream: true });
+          }
+          return preview.slice(0, 200_000);
+        } finally {
+          await reader.cancel();
+        }
+      })
       .then((t) => !cancelled && setText(t.slice(0, 200_000)))
       .catch(() => !cancelled && setError(true));
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [url]);
 
@@ -171,9 +238,12 @@ function MdLite({ text }: { text: string }) {
     if (line.trimStart().startsWith("```")) {
       if (inCode) {
         out.push(
-          <pre key={`c${i}`} className="my-2 overflow-x-auto rounded-md bg-hov p-3 font-mono text-[12px]">
+          <pre
+            key={`c${i}`}
+            className="my-2 overflow-x-auto rounded-md bg-hov p-3 font-mono text-[12px]"
+          >
             {codeBuf.join("\n")}
-          </pre>
+          </pre>,
         );
         codeBuf = [];
       }
@@ -185,7 +255,8 @@ function MdLite({ text }: { text: string }) {
       return;
     }
     const h = line.match(/^(#{1,4})\s+(.*)$/);
-    const strip = (s: string) => s.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
+    const strip = (s: string) =>
+      s.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/`([^`]+)`/g, "$1");
     if (h) {
       const level = h[1].length;
       out.push(
@@ -193,18 +264,22 @@ function MdLite({ text }: { text: string }) {
           key={i}
           className={cn(
             "font-bold",
-            level === 1 ? "pt-4 text-[22px]" : level === 2 ? "pt-3 text-[17px]" : "pt-2 text-[14.5px]"
+            level === 1
+              ? "pt-4 text-[22px]"
+              : level === 2
+                ? "pt-3 text-[17px]"
+                : "pt-2 text-[14.5px]",
           )}
         >
           {strip(h[2])}
-        </div>
+        </div>,
       );
     } else if (/^\s*[-*]\s+/.test(line)) {
       out.push(
         <div key={i} className="flex gap-2 pl-2 text-[13.5px] leading-relaxed">
           <span className="text-ink-3">•</span>
           <span>{strip(line.replace(/^\s*[-*]\s+/, ""))}</span>
-        </div>
+        </div>,
       );
     } else if (line.trim() === "") {
       out.push(<div key={i} className="h-2" />);
@@ -212,7 +287,7 @@ function MdLite({ text }: { text: string }) {
       out.push(
         <p key={i} className="text-[13.5px] leading-relaxed">
           {strip(line)}
-        </p>
+        </p>,
       );
     }
   });

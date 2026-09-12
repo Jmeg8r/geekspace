@@ -10,7 +10,7 @@
 // — the parameter type here matches that real, already-declared contract.
 
 export function isNumber(value: any): value is number {
-  return typeof value === "number";
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 export function isString(value: any): value is string {

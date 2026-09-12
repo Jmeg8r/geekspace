@@ -14,11 +14,17 @@ exports.default = async function afterPack(context) {
   if (context.electronPlatformName === "darwin") {
     const appName = context.packager.appInfo.productFilename; // "Geekspace"
     const appPath = path.join(context.appOutDir, `${appName}.app`);
-    const binary = path.join(appPath, "Contents", "Resources", "convex-local-backend");
+    const binary = path.join(
+      appPath,
+      "Contents",
+      "Resources",
+      "convex-local-backend",
+    );
 
     if (!fs.existsSync(binary)) {
-      console.warn(`afterPack: WARNING — backend binary not found at ${binary}`);
-      return;
+      throw new Error(
+        `afterPack: required backend binary missing at ${binary}`,
+      );
     }
 
     fs.chmodSync(binary, 0o755);
@@ -31,15 +37,24 @@ exports.default = async function afterPack(context) {
       /* nothing to strip — fine */
     }
 
-    console.log("afterPack: backend binary made executable (+ de-quarantined).");
+    console.log(
+      "afterPack: backend binary made executable (+ de-quarantined).",
+    );
   } else if (context.electronPlatformName === "win32") {
-    const binary = path.join(context.appOutDir, "resources", "convex-local-backend.exe");
+    const binary = path.join(
+      context.appOutDir,
+      "resources",
+      "convex-local-backend.exe",
+    );
 
     if (!fs.existsSync(binary)) {
-      console.warn(`afterPack: WARNING — backend binary not found at ${binary}`);
-      return;
+      throw new Error(
+        `afterPack: required backend binary missing at ${binary}`,
+      );
     }
 
-    console.log("afterPack: backend binary present (no chmod/xattr needed on Windows).");
+    console.log(
+      "afterPack: backend binary present (no chmod/xattr needed on Windows).",
+    );
   }
 };

@@ -1,3 +1,4 @@
+import { validateSchedulerConfig } from "./validation";
 // WHAT: The auto-scheduling engine. Pure, deterministic, dependency-free.
 // WHY: pure functions are unit-testable and run identically inside Convex
 // mutations and (if ever needed) the renderer. All the "Motion/Reclaim-style"
@@ -89,7 +90,7 @@ export function localWeekday(ms: number, tzOffsetMin: number): number {
 export function calendarDateToLocalMs(
   dateOnlyUtcMidnight: number,
   tzOffsetMin: number,
-  minOfDay: number
+  minOfDay: number,
 ): number {
   return dateOnlyUtcMidnight + tzOffsetMin * MIN_MS + minOfDay * MIN_MS;
 }
@@ -97,7 +98,11 @@ export function calendarDateToLocalMs(
 /** Epoch ms → calendar date (UTC midnight) in the given offset's local frame. */
 export function localMsToCalendarDate(ms: number, tzOffsetMin: number): number {
   const local = new Date(ms - tzOffsetMin * MIN_MS);
-  return Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+  return Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate(),
+  );
 }
 
 function mergeIntervals(intervals: Interval[]): Interval[] {
@@ -122,7 +127,8 @@ function subtract(window: Interval, busy: Interval[]): Interval[] {
   for (const b of busy) {
     if (b.end <= cursor) continue;
     if (b.start >= window.end) break;
-    if (b.start > cursor) out.push({ start: cursor, end: Math.min(b.start, window.end) });
+    if (b.start > cursor)
+      out.push({ start: cursor, end: Math.min(b.start, window.end) });
     cursor = Math.max(cursor, b.end);
     if (cursor >= window.end) break;
   }
@@ -131,7 +137,10 @@ function subtract(window: Interval, busy: Interval[]): Interval[] {
 }
 
 /** Working-hour windows over the horizon, clipped to start no earlier than nowSnap. */
-export function buildDayWindows(nowMs: number, cfg: SchedulerConfig): Interval[] {
+export function buildDayWindows(
+  nowMs: number,
+  cfg: SchedulerConfig,
+): Interval[] {
   const nowSnap = ceilTo(nowMs, cfg.granularityMin);
   const firstDay = localDayStartUtc(nowMs, cfg.tzOffsetMin);
   const windows: Interval[] = [];
@@ -142,7 +151,8 @@ export function buildDayWindows(nowMs: number, cfg: SchedulerConfig): Interval[]
     if (!cfg.workDays.includes(weekday)) continue;
     const start = Math.max(dayStart + cfg.dayStartMin * MIN_MS, nowSnap);
     const end = dayStart + cfg.dayEndMin * MIN_MS;
-    if (end - start >= MIN_BLOCK_FLOOR_MIN * MIN_MS) windows.push({ start, end });
+    if (end - start >= MIN_BLOCK_FLOOR_MIN * MIN_MS)
+      windows.push({ start, end });
   }
   return windows;
 }
@@ -168,14 +178,15 @@ export function computeSchedule(
   nowMs: number,
   tasks: SchedulerTask[],
   busy: Interval[],
-  cfg: SchedulerConfig
+  cfg: SchedulerConfig,
 ): ScheduleResult {
+  validateSchedulerConfig(cfg);
   const windows = buildDayWindows(nowMs, cfg);
   const busyExpanded = mergeIntervals(
     busy.map((b) => ({
       start: b.start - cfg.bufferMin * MIN_MS,
       end: b.end + cfg.bufferMin * MIN_MS,
-    }))
+    })),
   );
 
   let free: Interval[] = [];
@@ -200,7 +211,7 @@ export function computeSchedule(
 
   while (pending.length > 0) {
     let idx = pending.findIndex((t) =>
-      (t.blockedBy ?? []).every((b) => !inSet.has(b) || finishedAt.has(b))
+      (t.blockedBy ?? []).every((b) => !inSet.has(b) || finishedAt.has(b)),
     );
     const inCycle = idx === -1;
     if (inCycle) idx = 0;
@@ -222,7 +233,7 @@ export function computeSchedule(
     let rem = Math.max(task.remainingMin, MIN_BLOCK_FLOOR_MIN);
     const earliest = ceilTo(
       Math.max(task.earliestMs ?? 0, depEarliestMs),
-      cfg.granularityMin
+      cfg.granularityMin,
     );
     let placedPastDue = false;
     let lastEnd = earliest;
@@ -233,7 +244,10 @@ export function computeSchedule(
       const start = Math.max(slot.start, earliest);
       const startSnapped = ceilTo(start, cfg.granularityMin);
       const availMin = Math.floor((slot.end - startSnapped) / MIN_MS);
-      const minNeeded = Math.min(rem, Math.max(cfg.minChunkMin, MIN_BLOCK_FLOOR_MIN));
+      const minNeeded = Math.min(
+        rem,
+        Math.max(cfg.minChunkMin, MIN_BLOCK_FLOOR_MIN),
+      );
 
       if (availMin < minNeeded || (task.noSplit && availMin < rem)) {
         i++;
@@ -255,7 +269,10 @@ export function computeSchedule(
       if (startSnapped - slot.start >= MIN_BLOCK_FLOOR_MIN * MIN_MS) {
         replacements.push({ start: slot.start, end: startSnapped });
       }
-      const rightStart = ceilTo(end + cfg.bufferMin * MIN_MS, cfg.granularityMin);
+      const rightStart = ceilTo(
+        end + cfg.bufferMin * MIN_MS,
+        cfg.granularityMin,
+      );
       if (slot.end - rightStart >= MIN_BLOCK_FLOOR_MIN * MIN_MS) {
         replacements.push({ start: rightStart, end: slot.end });
       }
@@ -281,7 +298,8 @@ export function computeSchedule(
         reason: "past_due",
       });
     }
-    finishedAt.set(task.id, lastEnd);
+    // Unplaced work is still a blocker; a partial allocation is not completion.
+    finishedAt.set(task.id, rem > 0 ? Infinity : lastEnd);
   }
 
   blocks.sort((a, b) => a.start - b.start);

@@ -18,7 +18,11 @@ export function PageView({ pageId }: { pageId: Id<"pages"> }) {
   const setContent = useMutation(api.pages.setContent);
 
   if (page === undefined) {
-    return <div className="flex h-full items-center justify-center text-ink-3">Loading…</div>;
+    return (
+      <div className="flex h-full items-center justify-center text-ink-3">
+        Loading…
+      </div>
+    );
   }
   if (page === null || page.trashed) {
     return (
@@ -31,13 +35,16 @@ export function PageView({ pageId }: { pageId: Id<"pages"> }) {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <PageHeader page={page} />
+      <PageHeader key={page._id} page={page} />
       {page.kind === "doc" ? (
         <div className="mx-auto w-full max-w-3xl flex-1 px-14 pb-40">
           <Editor
             key={page._id}
+            documentId={page._id}
             initialJson={page.content}
-            onSave={(json) => void setContent({ pageId: page._id, content: json })}
+            onSave={async (json) => {
+              await setContent({ pageId: page._id, content: json });
+            }}
           />
         </div>
       ) : page.databaseId ? (
@@ -65,7 +72,7 @@ function PageHeader({ page }: { page: Doc<"pages"> }) {
   const saveTitle = useRef(
     debounce((pageId: Id<"pages">, value: string) => {
       void update({ pageId, title: value });
-    }, 400)
+    }, 400),
   );
   useEffect(() => {
     const saver = saveTitle.current;
@@ -81,7 +88,7 @@ function PageHeader({ page }: { page: Doc<"pages"> }) {
           onClick={() => void toggleFavorite({ pageId: page._id })}
           className={cn(
             "rounded-md p-1.5 hover:bg-hov",
-            page.favorite ? "text-[var(--pal-yellow)]" : "text-ink-3"
+            page.favorite ? "text-[var(--pal-yellow)]" : "text-ink-3",
           )}
         >
           <Star size={16} fill={page.favorite ? "currentColor" : "none"} />
@@ -89,7 +96,10 @@ function PageHeader({ page }: { page: Doc<"pages"> }) {
         <Popover
           placement="bottom-end"
           trigger={(props) => (
-            <button {...props} className="rounded-md p-1.5 text-ink-3 hover:bg-hov">
+            <button
+              {...props}
+              className="rounded-md p-1.5 text-ink-3 hover:bg-hov"
+            >
               <MoreHorizontal size={16} />
             </button>
           )}
@@ -118,7 +128,11 @@ function PageHeader({ page }: { page: Doc<"pages"> }) {
             className="-ml-1 mb-1 rounded-lg p-1 text-[42px] leading-none hover:bg-hov"
             title="Change icon"
           >
-            {page.icon ?? <span className="text-[36px] text-ink-3">{page.kind === "database" ? "🗄️" : "📄"}</span>}
+            {page.icon ?? (
+              <span className="text-[36px] text-ink-3">
+                {page.kind === "database" ? "🗄️" : "📄"}
+              </span>
+            )}
           </button>
         )}
       >
@@ -204,7 +218,13 @@ function PageProjects({ page }: { page: Doc<"pages"> }) {
           </button>
         )}
       >
-        {() => <ProjectPicker projects={projects} selected={linked} onToggle={toggle} />}
+        {() => (
+          <ProjectPicker
+            projects={projects}
+            selected={linked}
+            onToggle={toggle}
+          />
+        )}
       </Popover>
     </div>
   );
@@ -220,7 +240,9 @@ function ProjectPicker({
   onToggle: (rowId: Id<"rows">) => void;
 }) {
   const [q, setQ] = useState("");
-  const filtered = projects.filter((p) => p.title.toLowerCase().includes(q.toLowerCase()));
+  const filtered = projects.filter((p) =>
+    p.title.toLowerCase().includes(q.toLowerCase()),
+  );
   return (
     <div className="w-60 p-1.5">
       <input
@@ -238,11 +260,15 @@ function ProjectPicker({
             className="flex w-full items-center justify-between gap-2 rounded-md px-1.5 py-1 text-left hover:bg-hov"
           >
             <Chip color={hashColor(p.rowId)} name={p.title} />
-            {selected.includes(p.rowId) && <Check size={14} className="shrink-0 text-accent" />}
+            {selected.includes(p.rowId) && (
+              <Check size={14} className="shrink-0 text-accent" />
+            )}
           </button>
         ))}
         {filtered.length === 0 && (
-          <div className="px-2 py-2 text-[12px] text-ink-3">No projects found</div>
+          <div className="px-2 py-2 text-[12px] text-ink-3">
+            No projects found
+          </div>
         )}
       </div>
     </div>

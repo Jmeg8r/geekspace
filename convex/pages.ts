@@ -1,3 +1,5 @@
+import { deleteRowAndReferences } from "./lib/rowProperties";
+import { runReflow } from "./scheduling";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -44,8 +46,18 @@ export function defaultDatabaseProperties(): PropertyDef[] {
 
 export async function createPageHelper(
   ctx: MutationCtx,
-  args: { title?: string; kind: "doc" | "database"; parentId?: Id<"pages">; icon?: string }
+  args: {
+    title?: string;
+    kind: "doc" | "database";
+    parentId?: Id<"pages">;
+    icon?: string;
+  },
 ) {
+  if (args.parentId) {
+    const parent = await ctx.db.get(args.parentId);
+    if (!parent || parent.trashed)
+      throw new Error("Parent page is unavailable");
+  }
   const now = Date.now();
   let databaseId: Id<"databases"> | undefined;
   if (args.kind === "database") {
@@ -96,7 +108,8 @@ export const update = mutation({
     if (!page) return;
     const patch: Partial<Doc<"pages">> = { updatedAt: Date.now() };
     if (args.title !== undefined) patch.title = args.title;
-    if (args.icon !== undefined) patch.icon = args.icon === "" ? undefined : args.icon;
+    if (args.icon !== undefined)
+      patch.icon = args.icon === "" ? undefined : args.icon;
     await ctx.db.patch(args.pageId, patch);
     // WHY: a database page's title doubles as the database name (relation labels).
     if (args.title !== undefined && page.databaseId) {
@@ -108,7 +121,10 @@ export const update = mutation({
 export const setContent = mutation({
   args: { pageId: v.id("pages"), content: v.string() },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.pageId, { content: args.content, updatedAt: Date.now() });
+    await ctx.db.patch(args.pageId, {
+      content: args.content,
+      updatedAt: Date.now(),
+    });
   },
 });
 
@@ -120,7 +136,8 @@ export const setProjects = mutation({
     if (!page) return;
     await ctx.db.patch(args.pageId, {
       // Store undefined rather than an empty array when nothing is tagged.
-      projectRowIds: args.projectRowIds.length > 0 ? args.projectRowIds : undefined,
+      projectRowIds:
+        args.projectRowIds.length > 0 ? args.projectRowIds : undefined,
       updatedAt: Date.now(),
     });
   },
@@ -177,17 +194,25 @@ export const move = mutation({
     // that would orphan a subtree into an unreachable cycle.
     if (newParentId) {
       let cursor: Id<"pages"> | undefined = newParentId;
+      const visited = new Set<string>();
       while (cursor) {
+        if (visited.has(cursor)) throw new Error("Existing page cycle");
+        visited.add(cursor);
         if (cursor === args.pageId) return "cycle";
         const node: Doc<"pages"> | null = await ctx.db.get(cursor);
-        cursor = node?.parentId;
+        if (!node || node.trashed)
+          throw new Error("Destination page is unavailable");
+        cursor = node.parentId;
       }
     }
 
     // Destination siblings: same parent, non-trashed, excluding the moved page.
     const all = await ctx.db.query("pages").collect();
     const siblings = all
-      .filter((p) => !p.trashed && p._id !== args.pageId && p.parentId === newParentId)
+      .filter(
+        (p) =>
+          !p.trashed && p._id !== args.pageId && p.parentId === newParentId,
+      )
       .sort((a, b) => a.order - b.order);
 
     const idx = Math.max(0, Math.min(args.index, siblings.length));
@@ -197,11 +222,17 @@ export const move = mutation({
     await Promise.all(
       siblings.map((p, i) => {
         if (p._id === args.pageId) {
-          return ctx.db.patch(p._id, { parentId: newParentId, order: i, updatedAt: now });
+          return ctx.db.patch(p._id, {
+            parentId: newParentId,
+            order: i,
+            updatedAt: now,
+          });
         }
         // Skip no-op writes to keep the mutation cheap.
-        return p.order === i ? Promise.resolve() : ctx.db.patch(p._id, { order: i });
-      })
+        return p.order === i
+          ? Promise.resolve()
+          : ctx.db.patch(p._id, { order: i });
+      }),
     );
   },
 });
@@ -221,12 +252,7 @@ async function deletePageDeep(ctx: MutationCtx, pageId: Id<"pages">) {
       .withIndex("by_database", (q) => q.eq("databaseId", page.databaseId!))
       .collect();
     for (const row of rows) {
-      const blocks = await ctx.db
-        .query("timeBlocks")
-        .withIndex("by_task", (q) => q.eq("taskRowId", row._id))
-        .collect();
-      for (const b of blocks) await ctx.db.delete(b._id);
-      await ctx.db.delete(row._id);
+      await deleteRowAndReferences(ctx, row._id);
     }
     const views = await ctx.db
       .query("views")
@@ -242,5 +268,6 @@ export const deleteForever = mutation({
   args: { pageId: v.id("pages") },
   handler: async (ctx, args) => {
     await deletePageDeep(ctx, args.pageId);
+    await runReflow(ctx);
   },
 });

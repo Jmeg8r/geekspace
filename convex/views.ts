@@ -19,7 +19,13 @@ export const list = query({
 export const create = mutation({
   args: {
     databaseId: v.id("databases"),
-    type: v.string(),
+    type: v.union(
+      v.literal("table"),
+      v.literal("board"),
+      v.literal("list"),
+      v.literal("calendar"),
+      v.literal("timeline"),
+    ),
     name: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -49,7 +55,8 @@ export const create = mutation({
     // Sensible defaults so new views render immediately.
     if (args.type === "board") {
       const groupProp =
-        props.find((p) => p.type === "status") ?? props.find((p) => p.type === "select");
+        props.find((p) => p.type === "status") ??
+        props.find((p) => p.type === "select");
       if (groupProp) doc.groupByPropId = groupProp.id;
     }
     if (args.type === "calendar" || args.type === "timeline") {
@@ -66,14 +73,47 @@ export const update = mutation({
     name: v.optional(v.string()),
     groupByPropId: v.optional(v.string()),
     datePropId: v.optional(v.string()),
-    filters: v.optional(v.any()),
-    sorts: v.optional(v.any()),
+    filters: v.optional(
+      v.object({
+        conjunction: v.union(v.literal("and"), v.literal("or")),
+        rules: v.array(
+          v.object({
+            propId: v.string(),
+            op: v.union(
+              v.literal("contains"),
+              v.literal("notContains"),
+              v.literal("is"),
+              v.literal("isNot"),
+              v.literal("isEmpty"),
+              v.literal("isNotEmpty"),
+              v.literal("eq"),
+              v.literal("neq"),
+              v.literal("gt"),
+              v.literal("lt"),
+              v.literal("before"),
+              v.literal("after"),
+              v.literal("checked"),
+              v.literal("unchecked"),
+            ),
+            value: v.optional(v.union(v.string(), v.number())),
+          }),
+        ),
+      }),
+    ),
+    sorts: v.optional(
+      v.array(
+        v.object({
+          propId: v.string(),
+          dir: v.union(v.literal("asc"), v.literal("desc")),
+        }),
+      ),
+    ),
     hiddenPropIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const { viewId, ...rest } = args;
     const patch = Object.fromEntries(
-      Object.entries(rest).filter(([, val]) => val !== undefined)
+      Object.entries(rest).filter(([, val]) => val !== undefined),
     );
     await ctx.db.patch(viewId, patch);
   },

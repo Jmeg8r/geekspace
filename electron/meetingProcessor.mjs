@@ -1,11 +1,10 @@
+import { verifiedFile, downloadVerifiedFile } from "./verifiedDownload.mjs";
 // WHAT: The local AI meeting-notes pipeline — runs entirely on this Mac.
 //   audio (webm/opus) → ffmpeg → 16kHz wav → whisper.cpp → transcript
 //   transcript → local Ollama → { summary, key points, decisions, action items }
 // WHY main-process: child processes + localhost HTTP without CORS ceremony.
 import { execFile, spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 
@@ -15,13 +14,22 @@ const EXE = process.platform === "win32" ? ".exe" : "";
 
 const MODEL_DIR = path.join(os.homedir(), ".geekspace", "whisper-models");
 const MODEL_NAME = "ggml-base.en.bin";
+// Hugging Face LFS metadata for ggerganov/whisper.cpp, verified 2026-09-12.
+const MODEL_SIZE = 147964211;
+const MODEL_SHA256 =
+  "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002";
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}`;
 // WHY win32 gets a 4th dir: whisper.cpp ships no winget package, so
 // ~/.geekspace/tools is the documented drop-dir for whisper-cli.exe. The three
 // mac dirs stay exactly as-is and in order on every platform.
 const TOOL_PATHS =
   process.platform === "win32"
-    ? ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", path.join(os.homedir(), ".geekspace", "tools")]
+    ? [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        path.join(os.homedir(), ".geekspace", "tools"),
+      ]
     : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
 const MAX_TRANSCRIPT_CHARS_FOR_LLM = 24_000;
 
@@ -40,7 +48,9 @@ async function findTool(names) {
   // Windows app inherits the registry PATH — unlike a mac app launched from
   // Finder with a stripped-down PATH, which is why TOOL_PATHS above has to be
   // hardcoded in the first place.
-  const pathDirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const pathDirs = (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter(Boolean);
   const dirs = [...TOOL_PATHS, ...pathDirs];
   for (const dir of dirs) {
     for (const name of names) {
@@ -64,61 +74,51 @@ async function findTool(names) {
 export async function toolStatus() {
   const ffmpeg = await findTool(["ffmpeg"]);
   const whisper = await findTool(["whisper-cli", "whisper-cpp"]);
-  let model = false;
-  try {
-    const stat = await fs.stat(path.join(MODEL_DIR, MODEL_NAME));
-    model = stat.size > 100_000_000; // a partial download doesn't count
-  } catch {
-    model = false;
-  }
-  return { ffmpeg: Boolean(ffmpeg), whisper: Boolean(whisper), model, modelName: MODEL_NAME };
+  const model = await verifiedFile(
+    path.join(MODEL_DIR, MODEL_NAME),
+    MODEL_SIZE,
+    MODEL_SHA256,
+  );
+  return {
+    ffmpeg: Boolean(ffmpeg),
+    whisper: Boolean(whisper),
+    model,
+    modelName: MODEL_NAME,
+  };
 }
 
-/** Download the whisper model with progress callbacks (0-100). */
+let modelDownload = null;
+/** Concurrent requests share one verified download; publish only complete bytes. */
 export async function ensureModel(onProgress) {
-  const status = await toolStatus();
-  if (status.model) return true;
-  await fs.mkdir(MODEL_DIR, { recursive: true });
-  const dest = path.join(MODEL_DIR, MODEL_NAME);
-  const tmp = `${dest}.part`;
-
-  await new Promise((resolve, reject) => {
-    const fetchFrom = (url, redirectsLeft) => {
-      https
-        .get(url, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            if (redirectsLeft <= 0) return reject(new Error("Too many redirects"));
-            res.resume();
-            return fetchFrom(res.headers.location, redirectsLeft - 1);
-          }
-          if (res.statusCode !== 200) {
-            return reject(new Error(`Model download failed (HTTP ${res.statusCode})`));
-          }
-          const total = Number(res.headers["content-length"] ?? 0);
-          let got = 0;
-          const file = createWriteStream(tmp);
-          res.on("data", (chunk) => {
-            got += chunk.length;
-            if (total > 0) onProgress?.(Math.round((got / total) * 100));
-          });
-          res.pipe(file);
-          file.on("finish", () => file.close(resolve));
-          file.on("error", reject);
-          res.on("error", reject);
-        })
-        .on("error", reject);
-    };
-    fetchFrom(MODEL_URL, 5);
-  });
-  await fs.rename(tmp, dest);
-  return true;
+  if (modelDownload) return modelDownload;
+  modelDownload = (async () => {
+    const destination = path.join(MODEL_DIR, MODEL_NAME);
+    if (await verifiedFile(destination, MODEL_SIZE, MODEL_SHA256)) return true;
+    await fs.mkdir(MODEL_DIR, { recursive: true });
+    await downloadVerifiedFile(
+      MODEL_URL,
+      destination,
+      MODEL_SIZE,
+      MODEL_SHA256,
+      onProgress,
+    );
+    return true;
+  })();
+  try {
+    return await modelDownload;
+  } finally {
+    modelDownload = null;
+  }
 }
 
 export async function checkOllama(url) {
   const base = (url || "http://127.0.0.1:11434").replace(/\/$/, "");
   try {
-    const res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) });
-    if (!res.ok) return { ok: false, error: `Ollama responded ${res.status}`, models: [] };
+    const res = await fetch(`${base}/api/tags`, {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!res.ok)
+      return { ok: false, error: `Ollama responded ${res.status}`, models: [] };
     const data = await res.json();
     return { ok: true, models: (data.models ?? []).map((m) => m.name) };
   } catch (err) {
@@ -128,10 +128,15 @@ export async function checkOllama(url) {
 
 function run(cmd, args, timeout) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(String(stderr || err.message).slice(0, 400)));
-      else resolve(String(stdout));
-    });
+    execFile(
+      cmd,
+      args,
+      { timeout, maxBuffer: 64 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) reject(new Error(String(stderr || err.message).slice(0, 400)));
+        else resolve(String(stdout));
+      },
+    );
   });
 }
 
@@ -141,7 +146,9 @@ function run(cmd, args, timeout) {
  */
 export function parseVolumeStats(stderr) {
   const read = (label) => {
-    const m = String(stderr).match(new RegExp(`${label}:\\s*(-?[\\d.]+|-inf)\\s*dB`, "i"));
+    const m = String(stderr).match(
+      new RegExp(`${label}:\\s*(-?[\\d.]+|-inf)\\s*dB`, "i"),
+    );
     if (!m) return NaN;
     return m[1] === "-inf" ? -Infinity : Number(m[1]);
   };
@@ -178,17 +185,22 @@ function measureVolume(ffmpegBin, wavPath) {
 function runWhisper(whisperBin, modelPath, wavPath, onProgress) {
   return new Promise((resolve, reject) => {
     const proc = spawn(whisperBin, [
-      "-m", modelPath,
-      "-f", wavPath,
+      "-m",
+      modelPath,
+      "-f",
+      wavPath,
       "-nt", // no timestamps — clean prose transcript
       "--print-progress",
     ]);
     let stdout = "";
     let stderr = "";
-    const killer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      reject(new Error("Transcription timed out (30 min)"));
-    }, 30 * 60 * 1000);
+    const killer = setTimeout(
+      () => {
+        proc.kill("SIGKILL");
+        reject(new Error("Transcription timed out (30 min)"));
+      },
+      30 * 60 * 1000,
+    );
     proc.stdout.on("data", (d) => {
       stdout += d;
     });
@@ -207,19 +219,26 @@ function runWhisper(whisperBin, modelPath, wavPath, onProgress) {
     });
     proc.on("close", (code) => {
       clearTimeout(killer);
-      if (code !== 0) reject(new Error(`whisper exited ${code}: ${stderr.slice(-300)}`));
+      if (code !== 0)
+        reject(new Error(`whisper exited ${code}: ${stderr.slice(-300)}`));
       else resolve(stdout.replace(/\r/g, "").trim());
     });
   });
 }
 
 const TYPE_FOCUS = {
-  general: "Capture what was discussed, what was decided, and what happens next.",
-  standup: "Focus on status updates, blockers, and who is doing what next. Keep it tight.",
-  one_on_one: "Focus on feedback exchanged, growth topics, concerns raised, and follow-ups each person owes.",
-  client: "Focus on client needs and requirements, commitments made (by whom, by when), risks, and next steps.",
-  interview: "Focus on the candidate: background highlights, strengths, concerns, notable answers, and recommended next steps.",
-  brainstorm: "Focus on the ideas generated — list them faithfully — plus emerging themes and which directions were chosen or parked.",
+  general:
+    "Capture what was discussed, what was decided, and what happens next.",
+  standup:
+    "Focus on status updates, blockers, and who is doing what next. Keep it tight.",
+  one_on_one:
+    "Focus on feedback exchanged, growth topics, concerns raised, and follow-ups each person owes.",
+  client:
+    "Focus on client needs and requirements, commitments made (by whom, by when), risks, and next steps.",
+  interview:
+    "Focus on the candidate: background highlights, strengths, concerns, notable answers, and recommended next steps.",
+  brainstorm:
+    "Focus on the ideas generated — list them faithfully — plus emerging themes and which directions were chosen or parked.",
 };
 
 function buildPrompt(transcript, meetingType, truncated) {
@@ -254,7 +273,9 @@ async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
   if (!model) throw new Error("No Ollama models installed");
 
   const truncated = transcript.length > MAX_TRANSCRIPT_CHARS_FOR_LLM;
-  const text = truncated ? transcript.slice(0, MAX_TRANSCRIPT_CHARS_FOR_LLM) : transcript;
+  const text = truncated
+    ? transcript.slice(0, MAX_TRANSCRIPT_CHARS_FOR_LLM)
+    : transcript;
 
   // WHY /api/generate: /api/chat returns empty content for some local models
   // (seen with gemma on Ollama 0.20).
@@ -280,15 +301,21 @@ async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
   } catch {
     const start = raw.indexOf("{");
     const end = raw.lastIndexOf("}");
-    if (start === -1 || end <= start) throw new Error("Model returned unparseable summary");
+    if (start === -1 || end <= start)
+      throw new Error("Model returned unparseable summary");
     parsed = JSON.parse(raw.slice(start, end + 1));
   }
+  if (!parsed || typeof parsed.summary !== "string" || !parsed.summary.trim())
+    throw new Error("Model returned no usable summary");
   const strArray = (x) =>
-    Array.isArray(x) ? x.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim()) : [];
+    Array.isArray(x)
+      ? x.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim())
+      : [];
   return {
-    summary: typeof parsed.summary === "string" && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : "No summary produced.",
+    summary:
+      typeof parsed.summary === "string" && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : "No summary produced.",
     keyPoints: strArray(parsed.key_points),
     decisions: strArray(parsed.decisions),
     actionItems: strArray(parsed.action_items),
@@ -300,20 +327,23 @@ async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
  * Full pipeline. `audio` is a Buffer/Uint8Array of the recorded webm.
  * onProgress({ phase, pct }) fires throughout.
  */
-export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaModel }, onProgress) {
+export async function processMeeting(
+  { audio, meetingType, ollamaUrl, ollamaModel },
+  onProgress,
+) {
   const status = await toolStatus();
   if (!status.ffmpeg) {
     throw new Error(
       process.platform === "win32"
         ? "ffmpeg not found — `winget install Gyan.FFmpeg`"
-        : "ffmpeg not found — `brew install ffmpeg`"
+        : "ffmpeg not found — `brew install ffmpeg`",
     );
   }
   if (!status.whisper) {
     throw new Error(
       process.platform === "win32"
         ? "whisper.cpp not found — download the whisper.cpp Windows release zip and drop whisper-cli.exe into %USERPROFILE%\\.geekspace\\tools"
-        : "whisper.cpp not found — `brew install whisper-cpp`"
+        : "whisper.cpp not found — `brew install whisper-cpp`",
     );
   }
   if (!status.model) {
@@ -331,7 +361,11 @@ export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaMode
     await fs.writeFile(webm, Buffer.from(audio));
 
     onProgress?.({ phase: "transcribing", pct: 0 });
-    await run(ffmpeg, ["-y", "-i", webm, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], 10 * 60 * 1000);
+    await run(
+      ffmpeg,
+      ["-y", "-i", webm, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav],
+      10 * 60 * 1000,
+    );
 
     // WHY here, before whisper: a dead input device (e.g. Bluetooth speakers
     // selected as the system input) yields a perfectly valid but silent stream.
@@ -350,19 +384,27 @@ export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaMode
       throw new Error(
         `No audio captured — the recording is silent (peak ${fmtDb(level.peakDb)}, ` +
           `average ${fmtDb(level.meanDb)}). Check ${soundSettings} ` +
-          `and select your microphone, then record again.`
+          `and select your microphone, then record again.`,
       );
     }
 
     const transcript = await runWhisper(whisper, modelPath, wav, (pct) =>
-      onProgress?.({ phase: "transcribing", pct })
+      onProgress?.({ phase: "transcribing", pct }),
     );
-    if (!transcript || transcript.replace(/[\s[\]BLANK_AUDIO()]+/gi, "").length < 5) {
+    if (
+      !transcript ||
+      transcript.replace(/[\s[\]BLANK_AUDIO()]+/gi, "").length < 5
+    ) {
       throw new Error("No speech detected in the recording");
     }
 
     onProgress?.({ phase: "summarizing", pct: 0 });
-    const summary = await summarize(transcript, meetingType ?? "general", ollamaUrl, ollamaModel);
+    const summary = await summarize(
+      transcript,
+      meetingType ?? "general",
+      ollamaUrl,
+      ollamaModel,
+    );
     return { transcript, ...summary };
   } finally {
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});

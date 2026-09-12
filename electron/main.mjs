@@ -1,10 +1,24 @@
+import {
+  isAppUrl,
+  externalUrl,
+  localStorageUrl,
+  viewerFilename,
+  downloadDocument,
+} from "./desktopSafety.mjs";
 // WHAT: Electron main process — creates the Geekspace window and exposes the
 // macOS Calendar/Mail integration over IPC.
 // WHY: kept dependency-free plain ESM so there is no build step for the main process.
-import { app, BrowserWindow, dialog, ipcMain, shell, systemPreferences } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  shell,
+  systemPreferences,
+} from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   fetchCalendarEvents,
   fetchInbox,
@@ -35,7 +49,11 @@ import {
   searchItems,
 } from "./readerMcp.mjs";
 import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
-import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
+import {
+  localArchitectStatus,
+  resetLocalArchitect,
+  runArchitectLocal,
+} from "./architectLocal.mjs";
 import {
   getUrl as convexUrl,
   isManaged as convexManaged,
@@ -45,12 +63,37 @@ import {
 } from "./convexBackend.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+const devServerUrl = app.isPackaged
+  ? undefined
+  : process.env.VITE_DEV_SERVER_URL;
+const entryUrl =
+  devServerUrl ??
+  pathToFileURL(path.join(__dirname, "../dist/index.html")).href;
+const trustedContents = new WeakSet();
+function requireTrustedSender(event) {
+  if (
+    !trustedContents.has(event.sender) ||
+    event.sender.isDestroyed() ||
+    event.senderFrame !== event.sender.mainFrame ||
+    !isAppUrl(event.senderFrame?.url, entryUrl)
+  ) {
+    throw new Error("IPC request is not from the workspace window");
+  }
+}
+function push(event, channel, payload) {
+  if (!event.sender.isDestroyed()) event.sender.send(channel, payload);
+}
+async function openLink(url) {
+  return shell.openExternal(externalUrl(url));
+}
 
 // WHY: Vite injects .env.local into the renderer only; the main process needs
 // the same secrets (ASTGL_API_KEY, CLAUDECLAW_TOKEN) for its integrations.
 try {
-  const envFile = fs.readFileSync(path.join(__dirname, "..", ".env.local"), "utf8");
+  const envFile = fs.readFileSync(
+    path.join(__dirname, "..", ".env.local"),
+    "utf8",
+  );
   for (const line of envFile.split("\n")) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
     if (m && process.env[m[1]] === undefined) {
@@ -96,7 +139,11 @@ function createWindow() {
       : process.platform === "win32"
         ? {
             titleBarStyle: "hidden",
-            titleBarOverlay: { color: "#1A1A2E", symbolColor: "#E8E8F0", height: 36 },
+            titleBarOverlay: {
+              color: "#1A1A2E",
+              symbolColor: "#E8E8F0",
+              height: 36,
+            },
             autoHideMenuBar: true,
           }
         : {}),
@@ -106,25 +153,62 @@ function createWindow() {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
       spellcheck: true,
     },
   });
 
   win.once("ready-to-show", () => win.show());
 
-  // WHY: external links must open in the user's browser, never inside the app shell.
+  trustedContents.add(win.webContents);
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openLink(url).catch((error) =>
+      console.warn("Could not open link", error.message),
+    );
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (event, url) => {
-    const isInternal =
-      (devServerUrl && url.startsWith(devServerUrl)) || url.startsWith("file://");
-    if (!isInternal) {
+    if (!isAppUrl(url, entryUrl)) {
       event.preventDefault();
-      shell.openExternal(url);
+      openLink(url).catch((error) =>
+        console.warn("Could not open link", error.message),
+      );
     }
   });
+  win.webContents.on("will-redirect", (event, url) => {
+    if (!isAppUrl(url, entryUrl)) event.preventDefault();
+  });
+  win.webContents.on("will-attach-webview", (event) => event.preventDefault());
+  const session = win.webContents.session;
+  session.setPermissionRequestHandler(
+    (contents, permission, callback, details) => {
+      const trusted =
+        contents &&
+        trustedContents.has(contents) &&
+        isAppUrl(contents.getURL(), entryUrl) &&
+        isAppUrl(details.requestingUrl, entryUrl) &&
+        details.isMainFrame;
+      callback(
+        Boolean(
+          trusted &&
+          permission === "media" &&
+          details.mediaTypes?.length &&
+          details.mediaTypes.every((type) => type === "audio"),
+        ),
+      );
+    },
+  );
+  session.setPermissionCheckHandler((contents, permission, _origin, details) =>
+    Boolean(
+      contents &&
+      trustedContents.has(contents) &&
+      isAppUrl(contents.getURL(), entryUrl) &&
+      details.isMainFrame &&
+      isAppUrl(details.requestingUrl, entryUrl) &&
+      permission === "media" &&
+      details.mediaType === "audio",
+    ),
+  );
 
   if (devServerUrl) {
     win.loadURL(devServerUrl);
@@ -135,9 +219,10 @@ function createWindow() {
 
 // IPC: every handler returns { ok, data?, error? } so the renderer never throws.
 function handle(channel, fn) {
-  ipcMain.handle(channel, async (_event, args) => {
+  ipcMain.handle(channel, async (event, args) => {
     try {
-      return { ok: true, data: await fn(args ?? {}) };
+      requireTrustedSender(event);
+      return { ok: true, data: await fn(args ?? {}, event) };
     } catch (err) {
       return { ok: false, error: String(err?.message ?? err) };
     }
@@ -150,7 +235,8 @@ function handle(channel, fn) {
 // Height is pinned to 36 to match the renderer's drag strip.
 handle("gs:chrome:setOverlay", ({ color, symbolColor }) => {
   if (process.platform !== "win32") return;
-  const isHexColor = (s) => typeof s === "string" && /^#[0-9a-fA-F]{6}$/.test(s);
+  const isHexColor = (s) =>
+    typeof s === "string" && /^#[0-9a-fA-F]{6}$/.test(s);
   if (!isHexColor(color) || !isHexColor(symbolColor)) return;
   for (const win of BrowserWindow.getAllWindows()) {
     if (typeof win.setTitleBarOverlay === "function") {
@@ -169,11 +255,11 @@ if (process.platform === "darwin") {
   handle("gs:openApp", ({ name }) => openApp(name));
   handle("gs:listCalendars", () => listCalendars());
   handle("gs:fetchCalendarEvents", ({ start, end, names }) =>
-    fetchCalendarEvents(start, end, names)
+    fetchCalendarEvents(start, end, names),
   );
   handle("gs:fetchInbox", ({ limit }) => fetchInbox(limit));
   handle("gs:openMessage", ({ messageId }) => {
-    shell.openExternal(messageUrl(messageId));
+    return shell.openExternal(messageUrl(messageId));
   });
 }
 
@@ -188,8 +274,9 @@ handle("gs:meeting:askMic", async () => {
 });
 ipcMain.handle("gs:meeting:ensureModel", async (event) => {
   try {
+    requireTrustedSender(event);
     await ensureModel((pct) =>
-      event.sender.send("gs:meeting:progress", { phase: "model", pct })
+      push(event, "gs:meeting:progress", { phase: "model", pct }),
     );
     return { ok: true, data: true };
   } catch (err) {
@@ -198,6 +285,13 @@ ipcMain.handle("gs:meeting:ensureModel", async (event) => {
 });
 ipcMain.handle("gs:meeting:process", async (event, args) => {
   try {
+    requireTrustedSender(event);
+    if (
+      !(args?.audio instanceof ArrayBuffer) ||
+      args.audio.byteLength === 0 ||
+      args.audio.byteLength > 256 * 1024 * 1024
+    )
+      throw new Error("Invalid or oversized meeting audio");
     const result = await processMeeting(
       {
         audio: args.audio,
@@ -206,7 +300,7 @@ ipcMain.handle("gs:meeting:process", async (event, args) => {
         ollamaModel: args.ollamaModel,
       },
       (p) =>
-        event.sender.send("gs:meeting:progress", { meetingId: args.meetingId, ...p })
+        push(event, "gs:meeting:progress", { meetingId: args.meetingId, ...p }),
     );
     return { ok: true, data: result };
   } catch (err) {
@@ -216,18 +310,30 @@ ipcMain.handle("gs:meeting:process", async (event, args) => {
 
 // ----- Docs: open a stored file with the default macOS app -----
 handle("gs:docs:quickLook", async ({ url, name }) => {
-  if (typeof url !== "string" || !url.startsWith("http://127.0.0.1")) {
-    throw new Error("Only local storage URLs can be opened");
+  const storageUrl = localStorageUrl(url, convexUrl());
+  const filename = viewerFilename(name);
+  const directory = await fs.promises.mkdtemp(
+    path.join(app.getPath("temp"), "geekspace-doc-"),
+  );
+  try {
+    const file = path.join(directory, filename);
+    await downloadDocument(storageUrl, file);
+    const error = await shell.openPath(file);
+    if (error) throw new Error(error);
+    // Keep the private temp file briefly for the launched viewer to read.
+    setTimeout(
+      () =>
+        fs.promises
+          .rm(directory, { recursive: true, force: true })
+          .catch((error) =>
+            console.warn("Document cleanup failed", error.message),
+          ),
+      10 * 60 * 1000,
+    ).unref();
+  } catch (error) {
+    await fs.promises.rm(directory, { recursive: true, force: true });
+    throw error;
   }
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Download failed (${res.status})`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  const safeName = path.basename(String(name || "file")).replace(/[^\w.\- ]+/g, "_");
-  const tmpFile = path.join(app.getPath("temp"), `geekspace-${Date.now()}-${safeName}`);
-  await fs.promises.writeFile(tmpFile, buf);
-  await shell.openPath(tmpFile);
-  // Best-effort cleanup after the viewer has had time to read it.
-  setTimeout(() => fs.promises.unlink(tmpFile).catch(() => {}), 10 * 60 * 1000);
 });
 
 // ----- ARCHITECT agent (two lanes: local Ollama default, Claude SDK escalation) -----
@@ -250,11 +356,21 @@ handle("gs:agent:reset", async () => {
 // Runs one ARCHITECT turn; streams token/tool/error frames to the renderer
 // (same push pattern as meeting progress). mode "local" (default) drives the
 // Ollama lane; "claude" escalates to the Agent SDK lane.
-ipcMain.handle("gs:agent:chat", async (event, { message, mode }) => {
+ipcMain.handle("gs:agent:chat", async (event, args) => {
   try {
+    requireTrustedSender(event);
+    const { message, mode } = args ?? {};
+    if (
+      typeof message !== "string" ||
+      !message.trim() ||
+      message.length > 32000
+    )
+      throw new Error("Enter a message under 32000 characters");
+    if (mode !== undefined && mode !== "local" && mode !== "claude")
+      throw new Error("Unknown agent mode");
     const run = mode === "claude" ? runArchitect : runArchitectLocal;
     await run(message, (frame) => {
-      event.sender.send("gs:agent:event", frame);
+      push(event, "gs:agent:event", frame);
     });
     return { ok: true, data: true };
   } catch (err) {
@@ -263,19 +379,25 @@ ipcMain.handle("gs:agent:chat", async (event, { message, mode }) => {
 });
 
 // ----- Enterprise Search (ASTGL knowledge) -----
-handle("gs:knowledge:search", ({ query, limit }) => searchKnowledge(query, limit));
+handle("gs:knowledge:search", ({ query, limit }) =>
+  searchKnowledge(query, limit),
+);
 handle("gs:knowledge:answer", ({ question }) => answerKnowledge(question));
 handle("gs:openExternal", ({ url }) => {
-  if (typeof url === "string" && /^https?:\/\//.test(url)) shell.openExternal(url);
+  return openLink(url);
 });
 
 // ----- Reader (aib-reader RSS) -----
 handle("gs:reader:listFeeds", () => listFeeds());
 handle("gs:reader:recentItems", ({ limit, since, category }) =>
-  recentItems({ limit, since, category })
+  recentItems({ limit, since, category }),
 );
-handle("gs:reader:searchItems", ({ query, limit }) => searchItems(query, limit));
-handle("gs:reader:markProcessed", ({ itemIds, consumer }) => markProcessed(itemIds, consumer));
+handle("gs:reader:searchItems", ({ query, limit }) =>
+  searchItems(query, limit),
+);
+handle("gs:reader:markProcessed", ({ itemIds, consumer }) =>
+  markProcessed(itemIds, consumer),
+);
 handle("gs:reader:addFeed", ({ url, category }) => addFeed(url, category));
 handle("gs:reader:removeFeed", ({ url }) => removeFeed(url));
 handle("gs:reader:pollFeeds", ({ categories }) => pollFeeds(categories));
@@ -312,9 +434,13 @@ app.whenReady().then(async () => {
 
   createWindow();
   // Warm the knowledge connector (connect + tools/list only — no quota used).
-  prewarmKnowledge().catch(() => {});
+  prewarmKnowledge().catch((error) =>
+    console.warn("Knowledge unavailable", error.message),
+  );
   // Warm the reader connector (spawns aib-reader-mcp + tools/list).
-  prewarmReader().catch(() => {});
+  prewarmReader().catch((error) =>
+    console.warn("Reader unavailable", error.message),
+  );
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
@@ -324,11 +450,10 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Graceful backend shutdown — only when WE own the process (never kill a
-// `convex dev` we merely attached to). before-quit can fire before async work
-// settles, so defer the real quit until SIGTERM completes.
+// Stop our backend after windows accept closing, so a beforeunload save guard
+// can keep the editor and database available for retry.
 let shuttingDown = false;
-app.on("before-quit", (event) => {
+app.on("will-quit", (event) => {
   if (shuttingDown || !convexManaged()) return;
   event.preventDefault();
   shuttingDown = true;

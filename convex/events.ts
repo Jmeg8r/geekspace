@@ -1,7 +1,7 @@
+import { validateRange } from "./lib/validation";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { runReflow } from "./scheduling";
-import { DAY_MS } from "./lib/scheduler";
 
 // WHAT: Standalone calendar events (appointments). Any change reflows the
 // auto-schedule because fixed events shape the free time everything else
@@ -13,7 +13,7 @@ export const listRange = query({
     // Pull a little earlier than `start` to catch multi-day events that overlap.
     const events = await ctx.db
       .query("events")
-      .withIndex("by_start", (q) => q.gte("start", args.start - 35 * DAY_MS))
+      .withIndex("by_start", (q) => q.lt("start", args.end))
       .collect();
     return events.filter((e) => e.start < args.end && e.end > args.start);
   },
@@ -30,6 +30,7 @@ export const create = mutation({
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    validateRange(args.start, args.end);
     const { tzOffsetMin, ...doc } = args;
     const id = await ctx.db.insert("events", doc);
     await runReflow(ctx, tzOffsetMin);
@@ -53,10 +54,12 @@ export const update = mutation({
     const existing = await ctx.db.get(eventId);
     if (!existing) return;
     // External mirrors are read-only here — edit them in macOS Calendar.
-    if (existing.source) throw new Error("Synced event — edit it in macOS Calendar.");
+    if (existing.source)
+      throw new Error("Synced event — edit it in macOS Calendar.");
     const patch = Object.fromEntries(
-      Object.entries(rest).filter(([, val]) => val !== undefined)
+      Object.entries(rest).filter(([, val]) => val !== undefined),
     );
+    validateRange(args.start ?? existing.start, args.end ?? existing.end);
     await ctx.db.patch(eventId, patch);
     await runReflow(ctx, tzOffsetMin);
   },
@@ -67,13 +70,23 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     const existing = await ctx.db.get(args.eventId);
     if (!existing) return;
-    if (existing.source) throw new Error("Synced event — delete it in macOS Calendar.");
+    if (existing.source)
+      throw new Error("Synced event — delete it in macOS Calendar.");
     await ctx.db.delete(args.eventId);
     await runReflow(ctx, args.tzOffsetMin);
   },
 });
 
-const SYNC_COLORS = ["teal", "blue", "purple", "pink", "green", "yellow", "brown", "red"];
+const SYNC_COLORS = [
+  "teal",
+  "blue",
+  "purple",
+  "pink",
+  "green",
+  "yellow",
+  "brown",
+  "red",
+];
 function calendarColor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -97,18 +110,23 @@ export const syncExternal = mutation({
         end: v.number(),
         allDay: v.optional(v.boolean()),
         calendarName: v.optional(v.string()),
-      })
+      }),
     ),
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    validateRange(args.windowStart, args.windowEnd);
+    for (const item of args.items) validateRange(item.start, item.end);
     const existing = (
       await ctx.db
         .query("events")
-        .withIndex("by_start", (q) => q.gte("start", args.windowStart - 35 * DAY_MS))
+        .withIndex("by_start", (q) => q.lt("start", args.windowEnd))
         .collect()
     ).filter(
-      (e) => e.source === "macos" && e.start < args.windowEnd && e.end > args.windowStart
+      (e) =>
+        e.source === "macos" &&
+        e.start < args.windowEnd &&
+        e.end > args.windowStart,
     );
     const byExternalId = new Map(existing.map((e) => [e.externalId, e]));
     const seen = new Set<string>();

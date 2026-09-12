@@ -25,13 +25,15 @@ const TITLE_W = 300;
 
 export function TableView({ db, view, rows, relationTitles }: ViewProps) {
   const props = (db.properties as PropertyDef[]).filter(
-    (p) => !(view.hiddenPropIds ?? []).includes(p.id)
+    (p) => !(view.hiddenPropIds ?? []).includes(p.id),
   );
   const createRow = useMutation(api.rows.create);
   const removeRow = useMutation(api.rows.remove);
   const openRow = useUI((s) => s.openRow);
 
-  const gridWidth = props.reduce((acc, p) => acc + (p.type === "title" ? TITLE_W : COL_W), 0) + 44;
+  const gridWidth =
+    props.reduce((acc, p) => acc + (p.type === "title" ? TITLE_W : COL_W), 0) +
+    44;
 
   return (
     <div className="px-8 pb-24 pt-2">
@@ -46,14 +48,25 @@ export function TableView({ db, view, rows, relationTitles }: ViewProps) {
 
         {/* Rows */}
         {rows.map((row) => (
-          <div key={row._id} className="group/row flex border-b border-border hover:bg-[color-mix(in_srgb,var(--hover)_50%,transparent)]">
+          <div
+            key={row._id}
+            className="group/row flex border-b border-border hover:bg-[color-mix(in_srgb,var(--hover)_50%,transparent)]"
+          >
             {props.map((def, i) => (
               <div
                 key={def.id}
-                className={cn("relative shrink-0 border-r border-border/60", i === props.length - 1 && "border-r-0")}
+                className={cn(
+                  "relative shrink-0 border-r border-border/60",
+                  i === props.length - 1 && "border-r-0",
+                )}
                 style={{ width: def.type === "title" ? TITLE_W : COL_W }}
               >
-                <PropertyValueCell def={def} row={row} relationTitles={relationTitles} variant="cell" />
+                <PropertyValueCell
+                  def={def}
+                  row={row}
+                  relationTitles={relationTitles}
+                  variant="cell"
+                />
                 {def.type === "title" && (
                   <button
                     onClick={() => openRow(row._id)}
@@ -69,7 +82,10 @@ export function TableView({ db, view, rows, relationTitles }: ViewProps) {
               title="Delete row"
               onClick={() => {
                 if (confirm(`Delete "${row.title || "Untitled"}"?`))
-                  void removeRow({ rowId: row._id, tzOffsetMin: tzOffsetMin() });
+                  void removeRow({
+                    rowId: row._id,
+                    tzOffsetMin: tzOffsetMin(),
+                  });
               }}
               className="hidden w-8 items-center justify-center text-ink-3 hover:text-[var(--pal-red)] group-hover/row:flex"
             >
@@ -80,7 +96,9 @@ export function TableView({ db, view, rows, relationTitles }: ViewProps) {
 
         {/* New row */}
         <button
-          onClick={() => void createRow({ databaseId: db._id, tzOffsetMin: tzOffsetMin() })}
+          onClick={() =>
+            void createRow({ databaseId: db._id, tzOffsetMin: tzOffsetMin() })
+          }
           className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[13px] text-ink-3 hover:bg-hov hover:text-ink-2"
         >
           <Plus size={14} /> New row
@@ -93,7 +111,15 @@ export function TableView({ db, view, rows, relationTitles }: ViewProps) {
   );
 }
 
-function PropertyHeader({ def, db, viewId }: { def: PropertyDef; db: Doc<"databases">; viewId: Doc<"views">["_id"] }) {
+function PropertyHeader({
+  def,
+  db,
+  viewId,
+}: {
+  def: PropertyDef;
+  db: Doc<"databases">;
+  viewId: Doc<"views">["_id"];
+}) {
   const Icon = PROP_ICONS[def.type];
   return (
     <Popover
@@ -109,7 +135,9 @@ function PropertyHeader({ def, db, viewId }: { def: PropertyDef; db: Doc<"databa
         </button>
       )}
     >
-      {(close) => <PropertyMenu def={def} db={db} viewId={viewId} close={close} />}
+      {(close) => (
+        <PropertyMenu def={def} db={db} viewId={viewId} close={close} />
+      )}
     </Popover>
   );
 }
@@ -128,13 +156,19 @@ function PropertyMenu({
   const updateProperty = useMutation(api.databases.updateProperty);
   const removeProperty = useMutation(api.databases.removeProperty);
   const updateView = useMutation(api.views.update);
-  const view = useQuery(api.views.list, { databaseId: db._id })?.find((v) => v._id === viewId);
+  const view = useQuery(api.views.list, { databaseId: db._id })?.find(
+    (v) => v._id === viewId,
+  );
   const [name, setName] = useState(def.name);
   const props = db.properties as PropertyDef[];
 
   const commitName = () => {
     if (name.trim() && name !== def.name)
-      void updateProperty({ databaseId: db._id, propId: def.id, name: name.trim() });
+      void updateProperty({
+        databaseId: db._id,
+        propId: def.id,
+        name: name.trim(),
+      });
   };
 
   return (
@@ -143,23 +177,40 @@ function PropertyMenu({
         value={name}
         onChange={(e) => setName(e.target.value)}
         onBlur={commitName}
-        onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+        onKeyDown={(e) =>
+          e.key === "Enter" && (e.target as HTMLInputElement).blur()
+        }
         className="mb-1.5 w-full rounded-md border border-border bg-surface px-2 py-1 text-[13px] outline-none focus:border-accent"
       />
-      <div className="px-1 pb-1.5 text-[11px] text-ink-3">{PROP_TYPE_LABELS[def.type]}</div>
+      <div className="px-1 pb-1.5 text-[11px] text-ink-3">
+        {PROP_TYPE_LABELS[def.type]}
+      </div>
 
-      {(def.type === "select" || def.type === "multiSelect" || def.type === "status") && (
-        <OptionsEditor def={def} db={db} />
-      )}
+      {(def.type === "select" ||
+        def.type === "multiSelect" ||
+        def.type === "status") && <OptionsEditor def={def} db={db} />}
 
       {def.type === "number" && (
         <label className="flex items-center justify-between px-1 py-1 text-[13px]">
           <span className="text-ink-2">Format</span>
           <select
             value={def.numberFormat ?? "plain"}
-            onChange={(e) =>
-              void updateProperty({ databaseId: db._id, propId: def.id, numberFormat: e.target.value })
-            }
+            onChange={(e) => {
+              const format = e.currentTarget.value;
+              if (
+                format === "plain" ||
+                format === "minutes" ||
+                format === "percent" ||
+                format === "dollar" ||
+                format === "progress"
+              ) {
+                void updateProperty({
+                  databaseId: db._id,
+                  propId: def.id,
+                  numberFormat: format,
+                });
+              }
+            }}
             className="rounded border border-border bg-surface px-1 py-0.5 text-[12px] outline-none"
           >
             <option value="plain">Plain</option>
@@ -201,14 +252,23 @@ function PropertyMenu({
           </MenuList>
         </>
       )}
-      {def.type === "rollup" && props.filter((p) => p.type === "relation").length === 0 && (
-        <p className="px-1 pt-1 text-[11px] text-ink-3">Add a relation property first.</p>
-      )}
+      {def.type === "rollup" &&
+        props.filter((p) => p.type === "relation").length === 0 && (
+          <p className="px-1 pt-1 text-[11px] text-ink-3">
+            Add a relation property first.
+          </p>
+        )}
     </div>
   );
 }
 
-function OptionsEditor({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) {
+function OptionsEditor({
+  def,
+  db,
+}: {
+  def: PropertyDef;
+  db: Doc<"databases">;
+}) {
   const updateProperty = useMutation(api.databases.updateProperty);
   const [newName, setNewName] = useState("");
   const options = def.options ?? [];
@@ -218,25 +278,36 @@ function OptionsEditor({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) 
   }
 
   function cycleColor(o: SelectOption) {
-    const i = OPTION_COLOR_IDS.indexOf(o.color as (typeof OPTION_COLOR_IDS)[number]);
+    const i = OPTION_COLOR_IDS.indexOf(
+      o.color as (typeof OPTION_COLOR_IDS)[number],
+    );
     const next = OPTION_COLOR_IDS[(i + 1) % OPTION_COLOR_IDS.length];
     save(options.map((x) => (x.id === o.id ? { ...x, color: next } : x)));
   }
 
   return (
     <div className="space-y-0.5 px-1 pb-1">
-      <div className="pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink-3">Options</div>
+      <div className="pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+        Options
+      </div>
       {options.map((o) => (
         <div key={o.id} className="flex items-center gap-1.5">
           <button
             title="Click to change color"
             onClick={() => cycleColor(o)}
-            className={cn("h-3.5 w-3.5 shrink-0 rounded-full", swatchClass(o.color))}
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 rounded-full",
+              swatchClass(o.color),
+            )}
           />
           <input
             value={o.name}
             onChange={(e) =>
-              save(options.map((x) => (x.id === o.id ? { ...x, name: e.target.value } : x)))
+              save(
+                options.map((x) =>
+                  x.id === o.id ? { ...x, name: e.target.value } : x,
+                ),
+              )
             }
             className="min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 text-[13px] outline-none hover:bg-hov focus:bg-hov"
           />
@@ -244,7 +315,13 @@ function OptionsEditor({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) 
             <select
               value={o.group ?? "todo"}
               onChange={(e) =>
-                save(options.map((x) => (x.id === o.id ? { ...x, group: e.target.value as StatusGroup } : x)))
+                save(
+                  options.map((x) =>
+                    x.id === o.id
+                      ? { ...x, group: e.target.value as StatusGroup }
+                      : x,
+                  ),
+                )
               }
               className="rounded border border-border bg-surface px-0.5 py-0.5 text-[11px] outline-none"
             >
@@ -292,18 +369,28 @@ function RollupConfig({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) {
   const updateProperty = useMutation(api.databases.updateProperty);
   const props = db.properties as PropertyDef[];
   const relationProps = props.filter((p) => p.type === "relation");
-  const cfg = def.rollup ?? { relationPropId: "", targetPropId: "", aggregate: "count" as RollupAggregate };
+  const cfg = def.rollup ?? {
+    relationPropId: "",
+    targetPropId: "",
+    aggregate: "count" as RollupAggregate,
+  };
   const relProp = relationProps.find((p) => p.id === cfg.relationPropId);
   const targetDb = useQuery(
     api.databases.get,
-    relProp?.relation ? { databaseId: relProp.relation.databaseId as Doc<"databases">["_id"] } : "skip"
+    relProp?.relation
+      ? { databaseId: relProp.relation.databaseId as Doc<"databases">["_id"] }
+      : "skip",
   );
   const targetProps = ((targetDb?.properties ?? []) as PropertyDef[]).filter(
-    (p) => p.type !== "rollup" && p.type !== "relation"
+    (p) => p.type !== "rollup" && p.type !== "relation",
   );
 
   function save(patch: Partial<typeof cfg>) {
-    void updateProperty({ databaseId: db._id, propId: def.id, rollup: { ...cfg, ...patch } });
+    void updateProperty({
+      databaseId: db._id,
+      propId: def.id,
+      rollup: { ...cfg, ...patch },
+    });
   }
 
   const aggregates: Array<{ id: RollupAggregate; label: string }> = [
@@ -322,12 +409,16 @@ function RollupConfig({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) {
         <span className="text-ink-2">Relation</span>
         <select
           value={cfg.relationPropId}
-          onChange={(e) => save({ relationPropId: e.target.value, targetPropId: "" })}
+          onChange={(e) =>
+            save({ relationPropId: e.target.value, targetPropId: "" })
+          }
           className="w-36 rounded border border-border bg-surface px-1 py-0.5 text-[12px] outline-none"
         >
           <option value="">Choose…</option>
           {relationProps.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
           ))}
         </select>
       </label>
@@ -340,7 +431,9 @@ function RollupConfig({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) {
         >
           <option value="">Choose…</option>
           {targetProps.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
           ))}
         </select>
       </label>
@@ -348,11 +441,15 @@ function RollupConfig({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) {
         <span className="text-ink-2">Calculate</span>
         <select
           value={cfg.aggregate}
-          onChange={(e) => save({ aggregate: e.target.value as RollupAggregate })}
+          onChange={(e) =>
+            save({ aggregate: e.target.value as RollupAggregate })
+          }
           className="w-36 rounded border border-border bg-surface px-1 py-0.5 text-[12px] outline-none"
         >
           {aggregates.map((a) => (
-            <option key={a.id} value={a.id}>{a.label}</option>
+            <option key={a.id} value={a.id}>
+              {a.label}
+            </option>
           ))}
         </select>
       </label>
@@ -366,8 +463,18 @@ function AddPropertyButton({ db }: { db: Doc<"databases"> }) {
   const [mode, setMode] = useState<"types" | "relationTarget">("types");
 
   const types: PropertyType[] = [
-    "text", "number", "select", "multiSelect", "status", "date",
-    "checkbox", "url", "relation", "rollup", "createdTime", "updatedTime",
+    "text",
+    "number",
+    "select",
+    "multiSelect",
+    "status",
+    "date",
+    "checkbox",
+    "url",
+    "relation",
+    "rollup",
+    "createdTime",
+    "updatedTime",
   ];
 
   return (
@@ -375,7 +482,11 @@ function AddPropertyButton({ db }: { db: Doc<"databases"> }) {
       className="w-56"
       onOpenChange={(open) => !open && setMode("types")}
       trigger={(p) => (
-        <button {...p} className="flex w-9 shrink-0 items-center justify-center py-1.5 text-ink-3 hover:bg-hov hover:text-ink" title="Add property">
+        <button
+          {...p}
+          className="flex w-9 shrink-0 items-center justify-center py-1.5 text-ink-3 hover:bg-hov hover:text-ink"
+          title="Add property"
+        >
           <Plus size={14} />
         </button>
       )}

@@ -16,9 +16,20 @@ import {
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
-import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
+import {
+  cn,
+  debounce,
+  isElectron,
+  isMacLike,
+  tzOffsetMin,
+} from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
-import { listMicrophones, recorder, resolveMicChoice, type MicDevice } from "../../lib/recorder";
+import {
+  listMicrophones,
+  recorder,
+  resolveMicChoice,
+  type MicDevice,
+} from "../../lib/recorder";
 import {
   meetingAskMic,
   meetingsAvailable,
@@ -42,7 +53,10 @@ export function MeetingsView() {
   const [startOpen, setStartOpen] = useState(false);
   const [tools, setTools] = useState<MeetingToolStatus | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
-  const recStatus = useSyncExternalStore(recorder.subscribe, () => recorder.getState().status);
+  const recStatus = useSyncExternalStore(
+    recorder.subscribe,
+    () => recorder.getState().status,
+  );
 
   useEffect(() => {
     if (!meetingsAvailable()) return;
@@ -53,7 +67,12 @@ export function MeetingsView() {
   }, []);
 
   if (selectedId) {
-    return <MeetingDetail meetingId={selectedId} onBack={() => setSelectedId(null)} />;
+    return (
+      <MeetingDetail
+        meetingId={selectedId}
+        onBack={() => setSelectedId(null)}
+      />
+    );
   }
 
   const missing: string[] = [];
@@ -61,14 +80,16 @@ export function MeetingsView() {
     // WHY: mirrors the Phase 2 main-process error strings (electron/meetingProcessor.mjs).
     if (!tools.ffmpeg) {
       missing.push(
-        isMacLike() ? "ffmpeg (`brew install ffmpeg`)" : "ffmpeg (`winget install Gyan.FFmpeg`)"
+        isMacLike()
+          ? "ffmpeg (`brew install ffmpeg`)"
+          : "ffmpeg (`winget install Gyan.FFmpeg`)",
       );
     }
     if (!tools.whisper) {
       missing.push(
         isMacLike()
           ? "whisper.cpp (`brew install whisper-cpp`)"
-          : "whisper.cpp (drop whisper-cli.exe into %USERPROFILE%\\.geekspace\\tools)"
+          : "whisper.cpp (drop whisper-cli.exe into %USERPROFILE%\\.geekspace\\tools)",
       );
     }
   }
@@ -77,9 +98,13 @@ export function MeetingsView() {
     <div className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-10 pb-24 pt-12">
         <div className="flex items-center gap-3 pb-1">
-          <h1 className="flex-1 text-[28px] font-extrabold tracking-tight">Meetings</h1>
+          <h1 className="flex-1 text-[28px] font-extrabold tracking-tight">
+            Meetings
+          </h1>
           <button
-            disabled={!meetingsAvailable() || recStatus !== "idle" || missing.length > 0}
+            disabled={
+              !meetingsAvailable() || recStatus !== "idle" || missing.length > 0
+            }
             onClick={() => setStartOpen(true)}
             className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[13.5px] font-semibold text-white hover:bg-accent-2 disabled:opacity-50"
           >
@@ -87,7 +112,8 @@ export function MeetingsView() {
           </button>
         </div>
         <p className="pb-6 text-[13px] text-ink-2">
-          Record → transcribe (whisper.cpp) → summarize (your local Ollama). Nothing leaves this machine.
+          Record → transcribe (whisper.cpp) → summarize (your local Ollama).
+          Nothing leaves this machine.
         </p>
 
         {!meetingsAvailable() && (
@@ -104,13 +130,18 @@ export function MeetingsView() {
           </Banner>
         )}
         {recStatus !== "idle" && (
-          <Banner tone="accent">Recording in progress — use the widget in the corner to pause or stop.</Banner>
+          <Banner tone="accent">
+            Recording in progress — use the widget in the corner to pause or
+            stop.
+          </Banner>
         )}
 
         {meetings.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-20 text-ink-3">
             <Mic size={28} />
-            <p className="text-[14px]">No meetings yet. Hit Record when one starts.</p>
+            <p className="text-[14px]">
+              No meetings yet. Hit Record when one starts.
+            </p>
           </div>
         ) : (
           <div className="divide-y divide-border">
@@ -122,10 +153,14 @@ export function MeetingsView() {
               >
                 <span className="text-[18px]">🎙️</span>
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px] font-medium">{m.title}</span>
+                  <span className="block truncate text-[14px] font-medium">
+                    {m.title}
+                  </span>
                   <span className="block text-[12px] text-ink-3">
                     {format(m.startedAt, "EEE, MMM d · h:mm a")}
-                    {m.durationSec ? ` · ${fmtDuration(Math.max(1, Math.round(m.durationSec / 60)))}` : ""}
+                    {m.durationSec
+                      ? ` · ${fmtDuration(Math.max(1, Math.round(m.durationSec / 60)))}`
+                      : ""}
                     {m.meetingType && m.meetingType !== "general"
                       ? ` · ${MEETING_TYPES.find((t) => t.id === m.meetingType)?.label ?? m.meetingType}`
                       : ""}
@@ -142,14 +177,20 @@ export function MeetingsView() {
   );
 }
 
-function Banner({ children, tone }: { children: React.ReactNode; tone?: "accent" }) {
+function Banner({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone?: "accent";
+}) {
   return (
     <div
       className={cn(
         "mb-4 rounded-lg border px-3 py-2 text-[13px]",
         tone === "accent"
           ? "border-accent/40 bg-accent-soft text-ink"
-          : "border-border bg-hov text-ink-2"
+          : "border-border bg-hov text-ink-2",
       )}
     >
       {children}
@@ -176,7 +217,8 @@ function StatusChip({ meeting }: { meeting: Doc<"meetings"> }) {
   if (s === "recording") {
     return (
       <span className="flex items-center gap-1 text-[12px] font-medium text-[var(--pal-red)]">
-        <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--pal-red)]" /> Recording
+        <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--pal-red)]" />{" "}
+        Recording
       </span>
     );
   }
@@ -208,10 +250,12 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
       end: dayStart.getTime() + 86_400_000,
     }) ?? [];
   const now = Date.now();
-  const happeningNow = todaysEvents.find((e) => !e.allDay && e.start <= now && e.end >= now);
+  const happeningNow = todaysEvents.find(
+    (e) => !e.allDay && e.start <= now && e.end >= now,
+  );
 
   const [title, setTitle] = useState(
-    happeningNow?.title ?? `Meeting — ${format(now, "MMM d, h:mm a")}`
+    happeningNow?.title ?? `Meeting — ${format(now, "MMM d, h:mm a")}`,
   );
   const [meetingType, setMeetingType] = useState("general");
   const [eventId, setEventId] = useState<string>(happeningNow?._id ?? "");
@@ -249,7 +293,7 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
     } else {
       setMicId("");
       setMicError(
-        `Saved microphone "${settings.micDeviceLabel ?? saved}" isn't connected — using the system default.`
+        `Saved microphone "${settings.micDeviceLabel ?? saved}" isn't connected — using the system default.`,
       );
     }
   }, [settings, mics]);
@@ -260,14 +304,19 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
     try {
       const mic = await meetingAskMic();
       if (!mic.ok || !mic.data) {
-        setErr("Microphone access denied — System Settings → Privacy & Security → Microphone.");
+        setErr(
+          "Microphone access denied — System Settings → Privacy & Security → Microphone.",
+        );
         return;
       }
       // WHY persist unconditionally: picking "System default" must overwrite a
       // previously saved device, or the next meeting's preselection restores it
       // and records from an input the user deliberately deselected.
       const chosen = resolveMicChoice(micId, mics);
-      await setMicDevice({ micDeviceId: chosen.deviceId, micDeviceLabel: chosen.label });
+      await setMicDevice({
+        micDeviceId: chosen.deviceId,
+        micDeviceLabel: chosen.label,
+      });
       const meetingId = await start({
         title,
         meetingType,
@@ -307,7 +356,7 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
                 "rounded-md border px-2 py-1 text-[12px] font-medium",
                 meetingType === t.id
                   ? "border-accent bg-accent-soft text-accent"
-                  : "border-border text-ink-2 hover:bg-hov"
+                  : "border-border text-ink-2 hover:bg-hov",
               )}
             >
               {t.label}
@@ -350,15 +399,23 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
           </select>
         </label>
         {micError && (
-          <p className="pb-2 text-[11.5px] leading-snug text-[var(--pal-red)]">{micError}</p>
+          <p className="pb-2 text-[11.5px] leading-snug text-[var(--pal-red)]">
+            {micError}
+          </p>
         )}
         <p className="pb-3 text-[11.5px] leading-snug text-ink-3">
-          Records your microphone. The summary is tailored to the meeting type. For the other side
-          of video calls, use speakers (not headphones) or a loopback device.
+          Records your microphone. The summary is tailored to the meeting type.
+          For the other side of video calls, use speakers (not headphones) or a
+          loopback device.
         </p>
-        {err && <p className="pb-2 text-[12.5px] text-[var(--pal-red)]">{err}</p>}
+        {err && (
+          <p className="pb-2 text-[12.5px] text-[var(--pal-red)]">{err}</p>
+        )}
         <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-[13px] text-ink-2 hover:bg-hov">
+          <button
+            onClick={onClose}
+            className="rounded-md px-3 py-1.5 text-[13px] text-ink-2 hover:bg-hov"
+          >
             Cancel
           </button>
           <button
@@ -374,7 +431,13 @@ function StartMeetingModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBack: () => void }) {
+function MeetingDetail({
+  meetingId,
+  onBack,
+}: {
+  meetingId: Id<"meetings">;
+  onBack: () => void;
+}) {
   const meeting = useQuery(api.meetings.get, { meetingId });
   const rename = useMutation(api.meetings.rename);
   const removeMeeting = useMutation(api.meetings.remove);
@@ -386,11 +449,19 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
   const [reprocessing, setReprocessing] = useState(false);
   const [title, setTitle] = useState<string | null>(null);
   const [saveTitle] = useState(() =>
-    debounce((id: Id<"meetings">, value: string) => void rename({ meetingId: id, title: value }), 400)
+    debounce(
+      (id: Id<"meetings">, value: string) =>
+        void rename({ meetingId: id, title: value }),
+      400,
+    ),
   );
 
   if (meeting === undefined) {
-    return <div className="flex h-full items-center justify-center text-ink-3">Loading…</div>;
+    return (
+      <div className="flex h-full items-center justify-center text-ink-3">
+        Loading…
+      </div>
+    );
   }
   if (meeting === null) {
     onBack();
@@ -410,7 +481,10 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-10 pb-24 pt-10">
-        <button onClick={onBack} className="mb-4 flex items-center gap-1 text-[13px] text-ink-3 hover:text-ink">
+        <button
+          onClick={onBack}
+          className="mb-4 flex items-center gap-1 text-[13px] text-ink-3 hover:text-ink"
+        >
           <ArrowLeft size={14} /> Meetings
         </button>
 
@@ -426,7 +500,11 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
           <button
             title="Delete meeting (notes page stays)"
             onClick={() => {
-              if (confirm("Delete this meeting and its audio? The notes page stays.")) {
+              if (
+                confirm(
+                  "Delete this meeting and its audio? The notes page stays.",
+                )
+              ) {
                 onBack();
                 void removeMeeting({ meetingId });
               }
@@ -438,35 +516,50 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
         </div>
         <p className="pb-4 text-[12.5px] text-ink-3">
           {format(meeting.startedAt, "EEEE, MMM d · h:mm a")}
-          {meeting.durationSec ? ` · ${fmtDuration(Math.max(1, Math.round(meeting.durationSec / 60)))}` : ""}
+          {meeting.durationSec
+            ? ` · ${fmtDuration(Math.max(1, Math.round(meeting.durationSec / 60)))}`
+            : ""}
           {meeting.modelUsed ? ` · ${meeting.modelUsed}` : ""}
         </p>
 
         <div className="flex items-center gap-3 pb-4">
           <StatusChip meeting={meeting} />
           {meeting.status === "error" && meeting.error && (
-            <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--pal-red)]">{meeting.error}</span>
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--pal-red)]">
+              {meeting.error}
+            </span>
           )}
-          {(meeting.status === "error" || meeting.status === "done") && meeting.audioUrl && (
-            <button
-              disabled={reprocessing}
-              onClick={async () => {
-                setReprocessing(true);
-                try {
-                  const { reprocessMeeting } = await import("../../lib/meetingPipeline");
-                  await reprocessMeeting(meetingId);
-                } finally {
-                  setReprocessing(false);
-                }
-              }}
-              className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-ink-2 hover:bg-hov hover:text-ink disabled:opacity-50"
-            >
-              <RefreshCw size={12} className={cn(reprocessing && "animate-spin")} /> Re-run AI
-            </button>
-          )}
+          {(meeting.status === "error" || meeting.status === "done") &&
+            meeting.audioUrl && (
+              <button
+                disabled={reprocessing}
+                onClick={async () => {
+                  setReprocessing(true);
+                  try {
+                    const { reprocessMeeting } =
+                      await import("../../lib/meetingPipeline");
+                    await reprocessMeeting(meetingId);
+                  } catch (error) {
+                    // The pipeline also stores the error on the meeting for retries.
+                    console.error("Meeting reprocessing failed", error);
+                  } finally {
+                    setReprocessing(false);
+                  }
+                }}
+                className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-ink-2 hover:bg-hov hover:text-ink disabled:opacity-50"
+              >
+                <RefreshCw
+                  size={12}
+                  className={cn(reprocessing && "animate-spin")}
+                />{" "}
+                Re-run AI
+              </button>
+            )}
           {meeting.pageId && (
             <button
-              onClick={() => navigate({ kind: "page", pageId: meeting.pageId! })}
+              onClick={() =>
+                navigate({ kind: "page", pageId: meeting.pageId! })
+              }
               className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-ink-2 hover:bg-hov hover:text-ink"
             >
               <FileText size={12} /> Open notes page
@@ -475,27 +568,38 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
         </div>
 
         {meeting.audioUrl && (
-          <audio controls src={meeting.audioUrl} className="mb-5 h-9 w-full" preload="none" />
+          <audio
+            controls
+            src={meeting.audioUrl}
+            className="mb-5 h-9 w-full"
+            preload="none"
+          />
         )}
 
         {meeting.summary && (
           <Section title="Summary">
             {meeting.summary.split(/\n+/).map((p, i) => (
-              <p key={i} className="pb-2 text-[14px] leading-relaxed">{p}</p>
+              <p key={i} className="pb-2 text-[14px] leading-relaxed">
+                {p}
+              </p>
             ))}
           </Section>
         )}
         {(meeting.keyPoints?.length ?? 0) > 0 && (
           <Section title="Key points">
             <ul className="list-disc space-y-1 pl-5 text-[14px]">
-              {meeting.keyPoints!.map((k, i) => <li key={i}>{k}</li>)}
+              {meeting.keyPoints!.map((k, i) => (
+                <li key={i}>{k}</li>
+              ))}
             </ul>
           </Section>
         )}
         {(meeting.decisions?.length ?? 0) > 0 && (
           <Section title="Decisions">
             <ul className="list-disc space-y-1 pl-5 text-[14px]">
-              {meeting.decisions!.map((d, i) => <li key={i}>{d}</li>)}
+              {meeting.decisions!.map((d, i) => (
+                <li key={i}>{d}</li>
+              ))}
             </ul>
           </Section>
         )}
@@ -537,7 +641,13 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <section className="pb-5">
       <h2 className="border-b border-border pb-1.5 text-[13px] font-bold uppercase tracking-wide text-ink-2">

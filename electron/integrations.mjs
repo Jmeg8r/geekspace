@@ -9,44 +9,51 @@ const ALLOWED_APPS = new Set(["Calendar", "Mail"]);
 
 function run(cmd, args, timeout = 90_000) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        const msg = String(stderr || err.message || "");
-        // WHY: a timeout kill produces a bare "Command failed: …" with no
-        // stderr — usually the macOS Automation dialog sitting unanswered
-        // (it blocks the script and loves hiding behind windows).
-        if (err.killed || err.signal) {
-          reject(
-            new Error(
-              "Timed out — three usual suspects: a macOS permission dialog is open (check behind windows), the app is unresponsive (quit and reopen Calendar/Mail), or it's just huge. Then hit Refresh."
-            )
-          );
-        } else if (msg.includes("-1743") || /not authori[sz]ed/i.test(msg)) {
-          reject(
-            new Error(
-              "Permission needed: System Settings → Privacy & Security → Automation → allow Geekspace (or Electron) to control Calendar/Mail."
-            )
-          );
-        } else if (msg.includes("-600")) {
-          reject(new Error("The app isn't running."));
-        } else {
-          reject(new Error(msg.slice(0, 300) || "osascript failed"));
+    execFile(
+      cmd,
+      args,
+      { timeout, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (err) {
+          const msg = String(stderr || err.message || "");
+          // WHY: a timeout kill produces a bare "Command failed: …" with no
+          // stderr — usually the macOS Automation dialog sitting unanswered
+          // (it blocks the script and loves hiding behind windows).
+          if (err.killed || err.signal) {
+            reject(
+              new Error(
+                "Timed out — three usual suspects: a macOS permission dialog is open (check behind windows), the app is unresponsive (quit and reopen Calendar/Mail), or it's just huge. Then hit Refresh.",
+              ),
+            );
+          } else if (msg.includes("-1743") || /not authori[sz]ed/i.test(msg)) {
+            reject(
+              new Error(
+                "Permission needed: System Settings → Privacy & Security → Automation → allow Geekspace (or Electron) to control Calendar/Mail.",
+              ),
+            );
+          } else if (msg.includes("-600")) {
+            reject(new Error("The app isn't running."));
+          } else {
+            reject(new Error(msg.slice(0, 300) || "osascript failed"));
+          }
+          return;
         }
-        return;
-      }
-      resolve(String(stdout).trim());
-    });
+        resolve(String(stdout).trim());
+      },
+    );
   });
 }
 
-const runJxa = (script, timeout) => run(OSASCRIPT, ["-l", "JavaScript", "-e", script], timeout);
+const runJxa = (script, timeout) =>
+  run(OSASCRIPT, ["-l", "JavaScript", "-e", script], timeout);
 
 /**
  * Trigger the one-time Automation permission with a near-zero-work probe and a
  * generous window for the user to find the dialog. Heavy fetches run after.
  */
 async function armAutomation(appName) {
-  if (!ALLOWED_APPS.has(appName)) throw new Error(`Unsupported app: ${appName}`);
+  if (!ALLOWED_APPS.has(appName))
+    throw new Error(`Unsupported app: ${appName}`);
   await runJxa(`Application(${JSON.stringify(appName)}).name()`, 180_000);
 }
 
@@ -67,11 +74,15 @@ export async function openApp(name) {
 
 export async function listCalendars() {
   await armAutomation("Calendar");
-  const out = await runJxa(`JSON.stringify(Application("Calendar").calendars.name())`);
+  const out = await runJxa(
+    `JSON.stringify(Application("Calendar").calendars.name())`,
+  );
   return JSON.parse(out || "[]");
 }
 
 export async function fetchCalendarEvents(startMs, endMs, names) {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
+    throw new Error("Invalid calendar window");
   await armAutomation("Calendar");
   const script = `
 (() => {
@@ -83,22 +94,22 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
   const cals = Calendar.calendars();
   for (const cal of cals) {
     let name = "";
-    try { name = cal.name(); } catch (e) { continue; }
+    name = cal.name();
     if (wanted.length > 0 && wanted.indexOf(name) === -1) continue;
     let events = [];
     try {
       events = cal.events.whose({
         _and: [
-          { startDate: { _greaterThan: startWindow } },
+          { endDate: { _greaterThan: startWindow } },
           { startDate: { _lessThan: endWindow } },
         ],
       })();
-    } catch (e) { continue; }
+    } catch (e) { throw new Error("Calendar read incomplete; existing events were preserved: " + e); }
     for (const ev of events) {
       try {
         const sd = ev.startDate();
         const ed = ev.endDate();
-        if (!sd || !ed) continue;
+        if (!sd || !ed || !isFinite(sd.getTime()) || !isFinite(ed.getTime())) throw new Error("Unreadable event dates");
         out.push({
           // uid + start: recurring events share a uid, so each occurrence
           // needs its own identity for the mirror upsert.
@@ -109,7 +120,7 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
           allDay: Boolean(ev.alldayEvent()),
           calendarName: name,
         });
-      } catch (e) {}
+      } catch (e) { throw new Error("Calendar event read incomplete; existing events were preserved: " + e); }
     }
   }
   return JSON.stringify(out);
@@ -131,7 +142,7 @@ export async function fetchInbox(limit = 12) {
   try {
     msgs = Mail.inbox.messages;
     if (msgs.length === 0) return "[]";
-  } catch (e) { return "[]"; }
+  } catch (e) { throw new Error("Could not read Mail inbox: " + e); }
   const subjects = msgs.subject();
   const senders = msgs.sender();
   const dates = msgs.dateReceived();

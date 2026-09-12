@@ -21,12 +21,19 @@ const MCP_SERVER =
     ? BUNDLED_MCP
     : path.join(__dirname, "..", "mcp", "index.mjs");
 
-const OLLAMA_URL = (process.env.OLLAMA_URL ?? "http://127.0.0.1:11434").replace(/\/$/, "");
+const ollamaUrl = () =>
+  (process.env.OLLAMA_URL ?? "http://127.0.0.1:11434").replace(/\/$/, "");
 
 // Tool-calling reliability varies wildly across local models (gemma narrates
 // and fences JSON). Preference order favors agentic/coder models; overridable
 // via GEEKSPACE_LOCAL_MODEL in .env.local.
-const MODEL_PREFERENCE = ["qwen3-coder", "gpt-oss", "qwen3", "llama3.3", "mistral"];
+const MODEL_PREFERENCE = [
+  "qwen3-coder",
+  "gpt-oss",
+  "qwen3",
+  "llama3.3",
+  "mistral",
+];
 const EXCLUDE = /embed|whisper|astgl-voice/i;
 
 const MAX_TOOL_ROUNDS = 12;
@@ -109,14 +116,18 @@ async function loadTools() {
 
 async function pickModel() {
   if (resolvedModel) return resolvedModel;
-  const res = await fetch(`${OLLAMA_URL}/api/tags`);
-  if (!res.ok) throw new Error(`Ollama unreachable at ${OLLAMA_URL}`);
+  const res = await fetch(`${ollamaUrl()}/api/tags`, {
+    signal: AbortSignal.timeout(5000),
+    redirect: "error",
+  });
+  if (!res.ok) throw new Error(`Ollama unreachable at ${ollamaUrl()}`);
   const { models } = await res.json();
   const names = models.map((m) => m.name).filter((n) => !EXCLUDE.test(n));
   const wanted = process.env.GEEKSPACE_LOCAL_MODEL;
   if (wanted) {
-    const hit = names.find((n) => n === wanted || n.startsWith(wanted));
+    const hit = names.find((n) => n === wanted || n.startsWith(`${wanted}:`));
     if (hit) return (resolvedModel = hit);
+    throw new Error(`Configured model is unavailable: ${wanted}`);
   }
   for (const pref of MODEL_PREFERENCE) {
     const hit = names.find((n) => n.startsWith(pref));
@@ -151,8 +162,10 @@ function textOf(result) {
  * which is fine for a local lane. Returns {content, toolCalls}.
  */
 async function chatRound(model, messages, tools, onEvent) {
-  const res = await fetch(`${OLLAMA_URL}/api/chat`, {
+  const res = await fetch(`${ollamaUrl()}/api/chat`, {
     method: "POST",
+    signal: AbortSignal.timeout(10 * 60 * 1000),
+    redirect: "error",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
@@ -164,7 +177,10 @@ async function chatRound(model, messages, tools, onEvent) {
       options: { num_ctx: NUM_CTX, temperature: 0.2 },
     }),
   });
-  if (!res.ok) throw new Error(`Ollama /api/chat ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  if (!res.ok)
+    throw new Error(
+      `Ollama /api/chat ${res.status}: ${(await res.text()).slice(0, 200)}`,
+    );
 
   const data = await res.json();
   const msg = data.message ?? {};
@@ -185,12 +201,22 @@ export async function runArchitectLocal(message, onEvent) {
   const tools = await loadTools();
   const c = await connectMcp();
 
-  if (history.length === 0) history.push({ role: "system", content: SYSTEM_PROMPT });
+  if (history.length === 0)
+    history.push({ role: "system", content: SYSTEM_PROMPT });
   history.push({ role: "user", content: message });
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const { content, toolCalls } = await chatRound(model, history, tools, onEvent);
-    history.push({ role: "assistant", content, tool_calls: toolCalls.length ? toolCalls : undefined });
+    const { content, toolCalls } = await chatRound(
+      model,
+      history,
+      tools,
+      onEvent,
+    );
+    history.push({
+      role: "assistant",
+      content,
+      tool_calls: toolCalls.length ? toolCalls : undefined,
+    });
 
     if (!toolCalls.length) return; // final answer already streamed
 
@@ -198,7 +224,11 @@ export async function runArchitectLocal(message, onEvent) {
       const name = call.function?.name;
       let args = call.function?.arguments ?? {};
       if (typeof args === "string") {
-        try { args = JSON.parse(args); } catch { args = {}; }
+        try {
+          args = JSON.parse(args);
+        } catch {
+          args = {};
+        }
       }
       onEvent({ type: "tool", text: name });
       let resultText;
@@ -216,5 +246,8 @@ export async function runArchitectLocal(message, onEvent) {
       history.push({ role: "tool", content: resultText, tool_name: name });
     }
   }
-  onEvent({ type: "error", text: `Stopped after ${MAX_TOOL_ROUNDS} tool rounds without a final answer.` });
+  onEvent({
+    type: "error",
+    text: `Stopped after ${MAX_TOOL_ROUNDS} tool rounds without a final answer.`,
+  });
 }
