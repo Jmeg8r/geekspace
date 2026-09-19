@@ -311,7 +311,27 @@ REQ=$(mktemp); DTMP=$(mktemp); CJSON=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJS
 # the whole request is rejected, the gate dies with no verdict, and forge-pr fails
 # closed on the missing verdict — a merge blocked by arithmetic nobody could see.
 # Codex [P2].
-DIFF_CAP=60000
+# The per-file cap is DERIVED from the broker's own budget rather than picked. A flat
+# 60,000 made the gate UNINSTALLABLE: this gate's own bin/blast-radius.py crossed that
+# line on 2026-08-30 (84ac987, 60,261 bytes) and a fresh install PR carries it as a
+# 61,500-byte new-file diff, so review-pr.sh refused to review the PR that installs
+# review-pr.sh. Nobody noticed because no repo had been onboarded since that date.
+#
+# A quarter of the request budget is the rule: no single file may consume more than 25%
+# of what the broker will accept, which leaves room for at least three more changed
+# files plus the standards and blast radius before the whole-request check below fires.
+# The cap's PURPOSE is unchanged and does not depend on the number — it refuses to send
+# a truncated diff while claiming the file was examined. Only the threshold moves, and
+# it now moves automatically if the broker's budget ever does, instead of silently
+# drifting out of proportion to it the way the flat value did.
+#
+# BROKER_MAX_BYTES is defined in 4b below, after this block. It is repeated as a literal
+# here ON PURPOSE rather than reordered: 4b's value is the one the whole-request check
+# uses, and moving it up to satisfy this arithmetic would put the definition far from the
+# comment explaining how it is kept in sync with review-broker.py. The guard immediately
+# after keeps the two honest, so a future edit to one that forgets the other FAILS rather
+# than quietly re-introducing a hand-picked cap.
+DIFF_CAP=$(( 400000 / 4 ))
 DIFF_BYTES=0
 {
   first=1
@@ -368,6 +388,11 @@ DIFF_BYTES=0
 # against that constant drifting, not against the measurement, which is already
 # conservative for the reason above.
 BROKER_MAX_BYTES=400000
+# DIFF_CAP above is derived from this number by hand (it is needed earlier in the file).
+# Assert the two still agree rather than trusting a comment: a silent divergence would
+# restore exactly the hand-picked cap this change removed.
+[ "$DIFF_CAP" -eq "$(( BROKER_MAX_BYTES / 4 ))" ] \
+  || die "DIFF_CAP=$DIFF_CAP is no longer BROKER_MAX_BYTES/4=$(( BROKER_MAX_BYTES / 4 )) — one was edited without the other; refusing to review against a cap nobody chose"
 BROKER_SAFETY_MARGIN=20000
 CONTEXT_CAP=30000
 CONTEXT_CAP_MIN=500
