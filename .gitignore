@@ -1,5 +1,7 @@
 # Dependencies
-node_modules/
+# No trailing slash: a "node_modules/" pattern matches only real directories, so a
+# node_modules SYMLINK (how worktrees reuse the root install) showed as untracked.
+/node_modules
 
 # Build output
 dist/
