@@ -428,8 +428,13 @@ if [ "$BR_COUNT" -gt 0 ]; then
 fi
 # Every branch above holds files_sent * CONTEXT_CAP <= CONTEXT_BUDGET, so the assembled
 # request totals at most REQUEST_ALLOWANCE.
+# Omitted dependents are COUNTED for section 6, not only echoed here. The console line was
+# the sole record, so a comment could claim a clean blast radius that the file limit had
+# cut short (Codex [P2] on jfcadm/claude-config PR #27).
+CTX_OMITTED=0
 if [ "$BR_COUNT" -gt "$CONTEXT_FILE_LIMIT" ]; then
-  echo "   context: capping to $CONTEXT_FILE_LIMIT/$BR_COUNT blast-radius file(s) ($(( BR_COUNT - CONTEXT_FILE_LIMIT )) omitted)"
+  CTX_OMITTED=$(( BR_COUNT - CONTEXT_FILE_LIMIT ))
+  echo "   context: capping to $CONTEXT_FILE_LIMIT/$BR_COUNT blast-radius file(s) ($CTX_OMITTED omitted)"
 fi
 echo "   budget: diff $DIFF_BYTES B; standards $STD_BYTES B; context <= $CONTEXT_BUDGET B at <= $CONTEXT_CAP B/file (broker cap $BROKER_MAX_BYTES B)"
 
@@ -439,7 +444,12 @@ echo "   budget: diff $DIFF_BYTES B; standards $STD_BYTES B; context <= $CONTEXT
 # files_supplied_total -- "everything supplied was read" -- for a review that silently
 # omitted a dependent, and section 6 would then claim the whole blast radius clean
 # (Codex [P2] on PR #71). The braces below are not a subshell, so the count survives.
+#
+# Dependents larger than CONTEXT_CAP are counted the same way. Only their prefix is sent,
+# and the model can "read" every supplied prefix, so files_examined == files_supplied_total
+# holds while most of the file never reached it (same Codex [P2] as CTX_OMITTED above).
 CTX_SKIPPED=0
+CTX_TRUNCATED=0
 {
   echo '{'
   echo "\"head_sha\": $(printf '%s' "$HEAD_SHA" | jq -R .),"
@@ -467,6 +477,10 @@ CTX_SKIPPED=0
     fi
     [ $first -eq 1 ] || echo ','
     first=0
+    fsize=$(wc -c < "$f") || die "could not size context file $f"
+    if [ "$(( fsize ))" -gt "$CONTEXT_CAP" ]; then
+      CTX_TRUNCATED=$(( CTX_TRUNCATED + 1 ))
+    fi
     # -Rs on the path for the same reason as the changed-file entry above. `--` ends
     # option parsing: a path beginning with a dash is otherwise read by head as a flag.
     printf '{"path":%s,"content":%s}' "$(printf '%s' "$f" | jq -Rs .)" "$(head -c "$CONTEXT_CAP" -- "$f" | jq -Rs .)"
@@ -476,6 +490,9 @@ CTX_SKIPPED=0
 jq -e . "$REQ" >/dev/null || die "assembled an invalid request JSON"
 if [ "$CTX_SKIPPED" -gt 0 ]; then
   echo "   context: $CTX_SKIPPED dependent(s) were refused as non-regular or unreadable and never sent — this blast radius is INCOMPLETE"
+fi
+if [ "$CTX_TRUNCATED" -gt 0 ]; then
+  echo "   context: $CTX_TRUNCATED dependent(s) exceeded ${CONTEXT_CAP} B and were sent truncated — this blast radius is PARTIAL"
 fi
 
 # ---- 5. ask the broker ------------------------------------------------------------
@@ -742,7 +759,9 @@ fi
 # severity emoji, and this line is a blockquote. Verified against the deployed parser.
 BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR_SCANNED" \
   --arg generated "$GENERATED_NOTE" \
-  --argjson changed "${#CHANGED[@]}" --argjson skipped "$CTX_SKIPPED" '
+  --argjson changed "${#CHANGED[@]}" --argjson skipped "$CTX_SKIPPED" \
+  --argjson truncated "$CTX_TRUNCATED" --argjson omitted "$CTX_OMITTED" \
+  --argjson ctxcap "$CONTEXT_CAP" '
   "## 🤖 Local AI review — **" + (.verdict|ascii_upcase) + "**\n\n" +
   "`" + $sha + "` · model `" + .model + "` · " +
   (.files_examined|tostring) + "/" + (.files_supplied_total|tostring) + " supplied file(s) examined" +
@@ -764,6 +783,18 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
       "> ⚠️ " + ($skipped|tostring) + " dependent(s) were refused as non-regular or " +
       "unreadable and never sent to the model, so this blast radius is **incomplete**. " +
       "The changed files are unaffected.\n\n"
+    else "" end) +
+  # The two cuts made by the context budget, disclosed beside the refusal above and for the same
+  # reason: files_examined counts what was SENT, so neither cut can show up as a
+  # shortfall in the ratio. Blockquote below the metadata line, so forge-pr (header,
+  # metadata and "### " finding lines only) reads the comment exactly as before.
+   (if ($truncated > 0) or ($omitted > 0) then
+      "> ⚠️ Context budget: " +
+      ([ (if $truncated > 0 then ($truncated|tostring) + " dependent(s) were sent " +
+            "truncated to their first " + ($ctxcap|tostring) + " bytes" else empty end),
+         (if $omitted > 0 then ($omitted|tostring) + " dependent(s) were omitted by " +
+            "the context-file limit and never sent" else empty end) ] | join("; ")) +
+      ". This blast radius is **partial**. The changed files are unaffected.\n\n"
     else "" end) +
   # The console NOTE is ephemeral; THIS is the artifact a human and forge-pr actually
   # read. Without it the comment presents a clamped N/N as full coverage, and the
@@ -800,6 +831,8 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
          or (.files_examined_changed < $changed)
          or (.examined_overcounted != false)
          or ($skipped > 0)
+         or ($truncated > 0)
+         or ($omitted > 0)
       then "No findings in the changed code.\n"
       else "No findings in the changed code or its blast radius.\n" end)
    else ((.findings | map(
