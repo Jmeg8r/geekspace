@@ -19,6 +19,10 @@ set -euo pipefail
 
 FORGE_API="${FORGE_API:-http://100.88.14.2:3300/api/v1}"
 BROKER="${BROKER_URL:-http://100.88.14.2:3401}"
+# Seconds the verdict-comment POST may take. Overridable so a test can prove the bound
+# without waiting a minute; validated below, because curl -m with a non-number fails in a
+# way that would read as a forge outage.
+FORGE_POST_TIMEOUT="${FORGE_POST_TIMEOUT:-60}"
 REPO="${REVIEW_REPO:-jfcadm/sovereign-forge}"
 BASE="main"
 PR=""
@@ -36,6 +40,9 @@ done
 [ -n "$PR" ] || { echo "usage: $(basename "$0") --pr N [--base main] [--no-post]" >&2; exit 2; }
 
 die() { echo "GATE ERROR: $*" >&2; exit 1; }
+case "$FORGE_POST_TIMEOUT" in
+  ''|*[!0-9]*|0) die "FORGE_POST_TIMEOUT='$FORGE_POST_TIMEOUT' is not a positive whole number of seconds" ;;
+esac
 
 # Every count this gate reads from the broker goes through here. Digits-only is NOT
 # sufficient on its own: a JSON integer beyond the shell's signed range (say
@@ -956,10 +963,16 @@ if [ "$POST" -eq 1 ]; then
   # The body goes through a file too. Not a credential, but a long review on argv is
   # an E2BIG waiting for the PR that finally exceeds the limit.
   jq -n --arg b "$BODY" '{body:$b}' > "$CMT"
-  pc=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+  # Bounded, like the broker call. Without -m a forge that accepts the connection and
+  # then stalls holds this POST open until the CI job's own timeout cancels it, with the
+  # review finished and never published (Codex [P2] on claude-memory #50: the fork there
+  # carried -m 60, and upstream never had it). A curl failure inside $( ) would also have
+  # ended the script under set -e with curl's bare exit code and no message, hence the die.
+  pc=$(curl -sS -m "$FORGE_POST_TIMEOUT" -o /dev/null -w '%{http_code}' -X POST \
        -H @"$FHDR" -H 'Content-Type: application/json' \
        --data-binary @"$CMT" \
-       "$FORGE_API/repos/$REPO/issues/$PR/comments")
+       "$FORGE_API/repos/$REPO/issues/$PR/comments") \
+    || die "the forge did not accept the review comment within ${FORGE_POST_TIMEOUT}s (curl exit $?) — the review ran but nobody will see it"
   [ "$pc" = "201" ] || die "could not post the review comment (HTTP $pc) — the review ran but nobody will see it"
   echo "   posted to $REPO PR #$PR"
 else
