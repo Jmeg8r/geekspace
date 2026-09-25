@@ -231,7 +231,23 @@ BR_JSON=$("${GATE_BIN:-bin}/blast-radius.py" --json --changed-from "$BASE") \
   || die "blast-radius resolver failed its positive control — dependency scan is UNKNOWN, not empty"
 BR_COUNT=$(echo "$BR_JSON" | jq '.blast_radius | length')
 BR_SCANNED=$(echo "$BR_JSON" | jq '.files_scanned')
+# Tracked files the resolver could NOT search (over its size limit, or not text) are
+# counted here and carried to section 6. The resolver reports them and exits 0 on
+# purpose -- see its main() -- so they never become dependents, never enter the context
+# loop, and none of CTX_SKIPPED / CTX_TRUNCATED / CTX_OMITTED can see them. Without this
+# the comment claimed "No findings in the changed code or its blast radius" over a sweep
+# the resolver itself had called INCOMPLETE (Codex, round 4 of jfcadm/claude-config PR #31).
+# Every shape is mapped, not just the expected one: an array is its length; absent, null
+# or any other type is UNKNOWN (-1), and unknown drops the all-clear exactly like a
+# nonzero count. Advisory like the rest: disclosed, never fatal.
+BR_UNREADABLE=$(echo "$BR_JSON" | jq 'if (.unreadable|type) == "array" then (.unreadable|length) else -1 end') \
+  || die "could not read the resolver's unreadable-file count"
 echo "   blast radius: $BR_COUNT dependent(s) from $BR_SCANNED file(s) scanned"
+if [ "$BR_UNREADABLE" -gt 0 ]; then
+  echo "   blast radius: $BR_UNREADABLE tracked file(s) could not be read and were never searched — this blast radius is INCOMPLETE"
+elif [ "$BR_UNREADABLE" -lt 0 ]; then
+  echo "   blast radius: the resolver did not report its unreadable files — completeness is UNKNOWN"
+fi
 
 # Context FILE-COUNT budget — independent of the byte budget below. The broker enforces
 # TWO separate caps (review-broker.py MAX_BYTES=400,000 OR MAX_FILES=120, either one
@@ -761,6 +777,7 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
   --arg generated "$GENERATED_NOTE" \
   --argjson changed "${#CHANGED[@]}" --argjson skipped "$CTX_SKIPPED" \
   --argjson truncated "$CTX_TRUNCATED" --argjson omitted "$CTX_OMITTED" \
+  --argjson unreadable "$BR_UNREADABLE" \
   --argjson ctxcap "$CONTEXT_CAP" '
   "## 🤖 Local AI review — **" + (.verdict|ascii_upcase) + "**\n\n" +
   "`" + $sha + "` · model `" + .model + "` · " +
@@ -783,6 +800,18 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
       "> ⚠️ " + ($skipped|tostring) + " dependent(s) were refused as non-regular or " +
       "unreadable and never sent to the model, so this blast radius is **incomplete**. " +
       "The changed files are unaffected.\n\n"
+    else "" end) +
+  # Files the RESOLVER could not search, one step upstream of the refusal above: they
+  # were never candidates, so no dependent count reflects them. Same placement and same
+  # every-verdict rule. Unknown (-1) gets its own wording rather than a made-up number.
+   (if $unreadable > 0 then
+      "> ⚠️ " + ($unreadable|tostring) + " tracked file(s) could not be read by the " +
+      "blast-radius resolver (over its size limit or not text) and were never searched " +
+      "for references to this change, so this blast radius is **incomplete**. The " +
+      "changed files are unaffected.\n\n"
+    elif $unreadable < 0 then
+      "> ⚠️ The blast-radius resolver did not report which files it could not read, so " +
+      "this blast radius is **unverified**. The changed files are unaffected.\n\n"
     else "" end) +
   # The two cuts made by the context budget, disclosed beside the refusal above and for the same
   # reason: files_examined counts what was SENT, so neither cut can show up as a
@@ -833,6 +862,7 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
          or ($skipped > 0)
          or ($truncated > 0)
          or ($omitted > 0)
+         or ($unreadable != 0)
       then "No findings in the changed code.\n"
       else "No findings in the changed code or its blast radius.\n" end)
    else ((.findings | map(
