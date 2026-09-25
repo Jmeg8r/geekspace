@@ -40,8 +40,11 @@ done
 [ -n "$PR" ] || { echo "usage: $(basename "$0") --pr N [--base main] [--no-post]" >&2; exit 2; }
 
 die() { echo "GATE ERROR: $*" >&2; exit 1; }
+# Digits alone are not enough: curl -m reads 00 or 000 as 0, which means NO limit.
 case "$FORGE_POST_TIMEOUT" in
-  ''|*[!0-9]*|0) die "FORGE_POST_TIMEOUT='$FORGE_POST_TIMEOUT' is not a positive whole number of seconds" ;;
+  ''|*[!0-9]*) die "FORGE_POST_TIMEOUT='$FORGE_POST_TIMEOUT' is not a positive whole number of seconds" ;;
+  *[1-9]*) ;;
+  *) die "FORGE_POST_TIMEOUT='$FORGE_POST_TIMEOUT' is not a positive whole number of seconds" ;;
 esac
 
 # Every count this gate reads from the broker goes through here. Digits-only is NOT
