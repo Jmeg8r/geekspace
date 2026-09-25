@@ -19,6 +19,10 @@ set -euo pipefail
 
 FORGE_API="${FORGE_API:-http://100.88.14.2:3300/api/v1}"
 BROKER="${BROKER_URL:-http://100.88.14.2:3401}"
+# Seconds the verdict-comment POST may take. Overridable so a test can prove the bound
+# without waiting a minute; validated below, because curl -m with a non-number fails in a
+# way that would read as a forge outage.
+FORGE_POST_TIMEOUT="${FORGE_POST_TIMEOUT:-60}"
 REPO="${REVIEW_REPO:-jfcadm/sovereign-forge}"
 BASE="main"
 PR=""
@@ -36,6 +40,9 @@ done
 [ -n "$PR" ] || { echo "usage: $(basename "$0") --pr N [--base main] [--no-post]" >&2; exit 2; }
 
 die() { echo "GATE ERROR: $*" >&2; exit 1; }
+case "$FORGE_POST_TIMEOUT" in
+  ''|*[!0-9]*|0) die "FORGE_POST_TIMEOUT='$FORGE_POST_TIMEOUT' is not a positive whole number of seconds" ;;
+esac
 
 # Every count this gate reads from the broker goes through here. Digits-only is NOT
 # sufficient on its own: a JSON integer beyond the shell's signed range (say
@@ -668,6 +675,20 @@ fi
 if [ "$VERDICT" = "pass" ] && [ "$EXAMINED_CHANGED" -gt "$EXAMINED" ]; then
   die "broker reported files_examined_changed=$EXAMINED_CHANGED against files_examined=$EXAMINED — the changed-file count cannot exceed the total, so the two contradict each other and neither is evidence of coverage"
 fi
+# Each count is also bounded by what it counts. The broker clamps both before emitting
+# them, so a PASS above either bound came from something other than this broker's
+# arithmetic: a stale or faulty broker, or schema drift. The checks above only ever
+# compared the counts with EACH OTHER and with a floor. So 2 examined of 1 supplied, with
+# 2 of 1 changed read and both overcount flags false, cleared all of them and rendered an
+# unqualified all-clear (Codex [P2] on claude-memory #50; the fork this was vendored into
+# had kept the bound, and upstream had not). Impossible ratios are one input-validation
+# class, alongside the standards ratio above.
+if [ "$VERDICT" = "pass" ] && [ "$EXAMINED" -gt "$SUBMITTED" ]; then
+  die "broker reports $EXAMINED file(s) examined of $SUBMITTED supplied — an impossible ratio means the response cannot be trusted as coverage evidence; UNKNOWN, refusing"
+fi
+if [ "$VERDICT" = "pass" ] && [ "$EXAMINED_CHANGED" -gt "${#CHANGED[@]}" ]; then
+  die "broker reports $EXAMINED_CHANGED changed file(s) read of the ${#CHANGED[@]} this PR changes — an impossible ratio; UNKNOWN, refusing"
+fi
 # The count above can also be wrong in the direction the comparison cannot see.
 # review-broker.py CLAMPS files_examined down to files_supplied_total when the model
 # claims more files than it was handed, and records that in examined_overcounted ("a
@@ -681,7 +702,11 @@ fi
 # whether the number was clamped, and cannot-tell is UNKNOWN. Gated on a merge-eligible
 # verdict only, for the same reason the check above is — a partial concerns/fail already
 # stops at forge-pr, and killing it here would cost the human its findings.
-OVERCOUNTED=$(jq -r '.examined_overcounted' "$V")
+# Read with its JSON TYPE, not through jq -r alone. jq -r prints the string "false" and
+# the boolean false identically, so a broker emitting the wrong type cleared a check that
+# means "the literal boolean false" (Codex [P2] on claude-memory #50). Anything that is
+# not a boolean becomes a value no case arm below accepts.
+OVERCOUNTED=$(jq -r '.examined_overcounted | if type == "boolean" then tostring else "non-boolean \(type) \(tojson)" end' "$V")
 case "$OVERCOUNTED" in
   false) : ;;
   # REPORTED, not fatal — downgraded once files_examined_changed existed. When this
@@ -723,7 +748,8 @@ esac
 #
 # Only a literal false clears it, for the reason given above — absent means this client
 # cannot tell whether the number was clamped, and cannot-tell is UNKNOWN.
-CHANGED_OVERCOUNTED=$(jq -r '.examined_changed_overcounted' "$V")
+# Type-preserving, for the reason given at OVERCOUNTED above.
+CHANGED_OVERCOUNTED=$(jq -r '.examined_changed_overcounted | if type == "boolean" then tostring else "non-boolean \(type) \(tojson)" end' "$V")
 if [ "$VERDICT" = "pass" ] && [ "$CHANGED_OVERCOUNTED" != "false" ]; then
   if [ "$CHANGED_OVERCOUNTED" = "true" ]; then
     die "broker clamped an overcounted files_examined_changed to $EXAMINED_CHANGED — the model claimed to read more changed files than the PR contains, so the count is not evidence of coverage and a clean verdict on it is UNKNOWN, not a pass"
@@ -937,10 +963,16 @@ if [ "$POST" -eq 1 ]; then
   # The body goes through a file too. Not a credential, but a long review on argv is
   # an E2BIG waiting for the PR that finally exceeds the limit.
   jq -n --arg b "$BODY" '{body:$b}' > "$CMT"
-  pc=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+  # Bounded, like the broker call. Without -m a forge that accepts the connection and
+  # then stalls holds this POST open until the CI job's own timeout cancels it, with the
+  # review finished and never published (Codex [P2] on claude-memory #50: the fork there
+  # carried -m 60, and upstream never had it). A curl failure inside $( ) would also have
+  # ended the script under set -e with curl's bare exit code and no message, hence the die.
+  pc=$(curl -sS -m "$FORGE_POST_TIMEOUT" -o /dev/null -w '%{http_code}' -X POST \
        -H @"$FHDR" -H 'Content-Type: application/json' \
        --data-binary @"$CMT" \
-       "$FORGE_API/repos/$REPO/issues/$PR/comments")
+       "$FORGE_API/repos/$REPO/issues/$PR/comments") \
+    || die "the forge did not accept the review comment within ${FORGE_POST_TIMEOUT}s (curl exit $?) — the review ran but nobody will see it"
   [ "$pc" = "201" ] || die "could not post the review comment (HTTP $pc) — the review ran but nobody will see it"
   echo "   posted to $REPO PR #$PR"
 else
