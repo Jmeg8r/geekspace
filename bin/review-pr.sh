@@ -570,8 +570,38 @@ fi
 # never reads this ratio, so nothing downstream would catch it (Codex [P2] on PR #71).
 # The live-traffic evidence that motivated the softening was 2/12, 10/10 and 11/11 -- all
 # non-zero -- so refusing exactly zero costs none of it.
+# Docs-only PRs are the ONE exception to the zero-standards refusal, and it is decided here
+# from this client's own paths, never from the broker's docs_only flag. Every standard in a
+# repo like this one is about code, so on a PR that changes only documentation the model
+# answers truthfully that none apply: 0 of N, even from the WHICH follow-up, and even
+# when a "not-applicable still counts" wording is used (measured 2026-09-25 on #98). Refusing
+# that blocked every docs PR since b0b2c62. Accepted only when every changed file was named
+# as read, and never silently: the comment says no project rule was applied (STD_ZERO_DOCS).
+# DOC_SUFFIXES must match review-broker.py's by inspection. No txt: requirements.txt and
+# CMakeLists.txt are build inputs (Codex [P2], #101). Lowercased through tr because
+# macOS bash 3.2 has no ${x,,}.
+DOC_SUFFIXES="md markdown rst"
+DOCS_ONLY=0
+if [ "${#CHANGED[@]}" -gt 0 ]; then
+  DOCS_ONLY=1
+  for _f in "${CHANGED[@]}"; do
+    _ext=$(printf '%s' "${_f##*/}" | tr '[:upper:]' '[:lower:]')
+    case "$_ext" in *.*) _ext="${_ext##*.}" ;; *) _ext="" ;; esac
+    # An empty extension becomes "  ", which the single-spaced list never contains.
+    case " $DOC_SUFFIXES " in
+      *" $_ext "*) ;;
+      *) DOCS_ONLY=0; break ;;
+    esac
+  done
+fi
+STD_ZERO_DOCS=0
 if [ "$VERDICT" = "pass" ] && [ "$STD_SUPPLIED" -gt 0 ] && [ "$STD_CHECKED" -eq 0 ]; then
-  die "broker checked 0 of $STD_SUPPLIED standard(s) — a clean verdict that applied none of this repo's rules is a generic review wearing this gate's badge; UNKNOWN, refusing"
+  if [ "$DOCS_ONLY" -eq 1 ] && [ "$EXAMINED_CHANGED" = "${#CHANGED[@]}" ]; then
+    STD_ZERO_DOCS=1
+    echo "   NOTE: docs-only PR — 0 of $STD_SUPPLIED standard(s) applied; accepted because every changed file is documentation and all ${#CHANGED[@]} were read, and disclosed in the comment"
+  else
+    die "broker checked 0 of $STD_SUPPLIED standard(s) — a clean verdict that applied none of this repo's rules is a generic review wearing this gate's badge; UNKNOWN, refusing"
+  fi
 fi
 # 1..N-1 is a real but tolerable gap: reported, not refused.
 if [ "$VERDICT" = "pass" ] && [ "$STD_CHECKED" -lt "$STD_SUPPLIED" ]; then
@@ -777,7 +807,7 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
   --arg generated "$GENERATED_NOTE" \
   --argjson changed "${#CHANGED[@]}" --argjson skipped "$CTX_SKIPPED" \
   --argjson truncated "$CTX_TRUNCATED" --argjson omitted "$CTX_OMITTED" \
-  --argjson unreadable "$BR_UNREADABLE" \
+  --argjson unreadable "$BR_UNREADABLE" --argjson stdzerodocs "$STD_ZERO_DOCS" \
   --argjson ctxcap "$CONTEXT_CAP" '
   "## 🤖 Local AI review — **" + (.verdict|ascii_upcase) + "**\n\n" +
   "`" + $sha + "` · model `" + .model + "` · " +
@@ -824,6 +854,20 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
          (if $omitted > 0 then ($omitted|tostring) + " dependent(s) were omitted by " +
             "the context-file limit and never sent" else empty end) ] | join("; ")) +
       ". This blast radius is **partial**. The changed files are unaffected.\n\n"
+    else "" end) +
+  # The docs-only exceptions, disclosed where the reader looks. Both are on the record in
+  # the verdict (files_examined_reported, files_examined_source); this puts them in the
+  # comment, so the pass on a docs PR never reads as a rule check that did not happen.
+   (if .files_examined_source == "follow-up" then
+      "> ℹ️ Docs-only: the review turn reported 0 files examined (it counts files containing code), " +
+      "so the examined count above is its follow-up answer, which named every changed " +
+      "file as read.\n\n"
+    else "" end) +
+   (if $stdzerodocs == 1 then
+      "> ℹ️ Docs-only: **no project standard was applied**. This PR changes only " +
+      "documentation, and the model judged none of the " +
+      (.standards_supplied|tostring) + " standards applicable. This pass means the " +
+      "text was read and nothing was flagged. It is not a rule check.\n\n"
     else "" end) +
   # The console NOTE is ephemeral; THIS is the artifact a human and forge-pr actually
   # read. Without it the comment presents a clamped N/N as full coverage, and the
