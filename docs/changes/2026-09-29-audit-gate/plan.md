@@ -1,6 +1,6 @@
 ---
 change: 2026-09-29-audit-gate
-status: draft
+status: accepted
 track: T1
 intent: ./intent.md
 linear: pending

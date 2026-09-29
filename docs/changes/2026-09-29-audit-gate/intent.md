@@ -1,9 +1,9 @@
 ---
 change: 2026-09-29-audit-gate
-status: draft
+status: accepted
 track: T1
 author: james
-accepted_by:
+accepted_by: james
 linear: pending
 source: conversation
 ---
