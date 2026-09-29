@@ -94,4 +94,39 @@ Not changed: `electron/*.mjs` (see the intent's constraints).
 
 ## Deviations
 
-None yet.
+Results of the plan's proofs, run 2026-09-29, and the departures from the plan text.
+
+- **Wait proof (step 2), with the script's own arguments and `-t 3000`:** neither port up
+  → exit 1, "Timed out waiting for: tcp:127.0.0.1:5173, tcp:127.0.0.1:3210"; 5173 up and
+  3210 down (the race) → exit 1, "Timed out waiting for: tcp:127.0.0.1:3210"; both up →
+  exit 0. `wait-on` prints a stack trace after the message, but the message is the first
+  line.
+- **Live probe (step 3), real `npm run dev`:** the `[app]` output shows the wait-on line,
+  `convex dev` reporting functions ready at 15:15:44, and then
+  "Attached to an already-running Convex backend on :3210" at 19:15:49Z (15:15:49 local).
+  0 lines of "Starting backend" and 0 of "binary not found". The real data dir
+  (`~/Library/Application Support/Geekspace/convex`) was identical before and after: 391
+  files with the same mtimes and sizes, the same sqlite SHA-256 prefix (`84eeb4477b876ca9`),
+  and no journal files.
+- **What that probe does and does not show.** The worktree's Electron binary was not
+  installed (it was set up with `ELECTRON_SKIP_BINARY_DOWNLOAD=1`), so `electron .`
+  downloaded it after the wait returned, which itself delayed the window by several
+  seconds. The run confirms the intended order and the attach. It does not prove by
+  itself that the race would have hit without the fix; that rests on the 2026-09-29
+  observation in the intent (the data-dir warning logged while `convex dev` was still
+  downloading) and on step 2's case B. I did not run the un-fixed script as a control,
+  because a spawn on the installed app's data dir is the hazard being closed.
+- **Fault case (step 4), real script:** Vite stand-in on :5173, nothing on :3210,
+  `npm run electron` → exit 1 after 122 seconds with "Timed out waiting for:
+  tcp:127.0.0.1:3210", and no Electron process was started.
+- **The step 3 guard held but was not needed:** `~/.cache/convex/binaries/` had only
+  `precompiled-2026-09-28-5c7cb5b`, not the bundled `precompiled-2026-07-21-82d5e9f`.
+- **`convex dev` regenerated three files under `convex/_generated/`** (the same
+  drift seen while probing #39: a missing `lib/predicates` entry and a typed `env`).
+  Reverted, to keep this change to script and docs.
+- **`USER-GUIDE.md` row "App opens but no data (dev only)" was replaced,** not only
+  supplemented: it predates the standalone work and contradicted what `startOrAttach`
+  does. That is outside the plan's literal "one sentence" but inside its intent.
+- **Process slip while cleaning up:** `pgrep -f` matched my own tool shell, whose command
+  text held the worktree name, and I killed it. No effect on the work. The rest of the
+  cleanup used a bracketed pattern (`[g]eekspace-devwait`) that cannot match itself.
