@@ -1,6 +1,6 @@
 ---
 change: 2026-09-29-pages-get-foreign-id
-status: draft
+status: accepted
 track: T1
 intent: ./intent.md
 linear: pending
