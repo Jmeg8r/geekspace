@@ -39,3 +39,41 @@ jobs:
 
       - name: Verify (lint + typecheck + tests)
         run: npm run verify
+
+  # Fails the run on any high or critical advisory, across the FULL dependency tree:
+  # electron is a devDependency, but it is the runtime that ships inside the app, so
+  # --omit=dev would skip exactly what ships. npm audit reads package-lock.json directly,
+  # so nothing is installed and no dependency lifecycle script runs in this job.
+  # Added 2026-09-29 with the fix that cleared 14 high and 3 critical advisories;
+  # see docs/changes/2026-09-29-audit-gate/.
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+
+      - name: Count audited packages (fails closed on zero)
+        run: |
+          set -euo pipefail
+          rc=0
+          npm audit --json > audit.raw.json || rc=$?
+          # Advisory text can carry raw control characters that jq rejects.
+          tr -d '\000-\011\013-\037' < audit.raw.json > audit.json
+          examined=$(jq -r '.metadata.dependencies.total // 0' audit.json)
+          flagged=$(jq -r '(.metadata.vulnerabilities.high // 0) + (.metadata.vulnerabilities.critical // 0)' audit.json)
+          echo "npm audit examined ${examined:-?} packages; ${flagged:-?} high/critical (exit ${rc})"
+          # Empty or non-numeric output (e.g. a registry error) counts as zero.
+          case "${examined}" in ''|*[!0-9]*) examined=0 ;; esac
+          if [ "${examined}" -eq 0 ]; then
+            echo "::error::audit examined zero packages: result UNKNOWN, failing closed"
+            exit 1
+          fi
+
+      - name: Full-tree dependency audit
+        run: npm audit --audit-level=high
