@@ -72,4 +72,34 @@ linear: pending
 
 ## Deviations
 
-None yet.
+- **`@tiptap/*` needed a targeted re-resolve.** `npm audit fix` cleared 16 of 17
+  advisories but left `@tiptap/core` on 3.26.0. `@blocknote/*` 0.51.4 declares
+  `^3.13.0`, but `npm update` does not move transitive packages. Removing the `@tiptap`
+  lockfile entries and reinstalling put all 14 packages on 3.31.3, with no override and
+  `package.json` unchanged.
+- **The live probe ran on a copy, in an order that keeps real data safe** (James chose
+  "I run it on your data", 2026-09-29).
+  - **Data was copied, not shared.** `convex dev` keeps its anonymous-deployment state
+    per checkout, in `.convex/local/`. `default` was copied from the main checkout into
+    the worktree; the `default.LIVE-REAL` and backup copies were left alone.
+  - **The Electron app's `startBackend()` races `convex dev`.** It checks :3210 before
+    the CLI's backend is up. If the bundled-version binary is cached, it spawns a backend
+    on the **installed app's** data dir (`~/Library/Application Support/Geekspace/convex`).
+    It was not cached here: the app logged the version warning and quit before spawning.
+  - **So the re-run went backend first:** start `convex dev`, wait for :3210, then
+    Vite, then Electron. The app logged "Attached to an already-running Convex backend".
+  - **The UI state was isolated.** The default profile's persisted UI state
+    (`geekspace-ui` for origin `localhost:5173`) held a stale ID from an `events` table,
+    used as a `pageId`. The server rejected it (`ArgumentValidationError`) and the
+    renderer went blank. That is pre-existing state, not this change, so the probe used
+    a temporary `--user-data-dir`.
+  - **Result:** the sidebar rendered 5 pages. A doc page mounted an editable ProseMirror
+    editor (tiptap 3.31.3 under BlockNote 0.51.4), typing into it worked, and there were
+    0 runtime errors.
+  - **Originals were checked unmodified afterwards,** and the copies and temporary
+    profile were deleted: the installed app's `convex_local_backend.sqlite3` still showed
+    2026-09-18 23:20 with no journal files, and the main checkout's dev state 2026-07-16.
+- **`convex dev` regenerated `convex/_generated/`** (with the 1.46 CLI): a missing
+  `lib/predicates` entry (drift already on `main`), plus the new typed `env` export.
+  Reverted, to keep this PR to the lockfile. The next `convex dev` on `main`
+  regenerates it.
