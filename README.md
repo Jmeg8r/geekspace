@@ -165,7 +165,8 @@ Other scripts:
 | `npm run migrate:local-data` | copy your dev `.convex` workspace into the packaged app |
 | `npm run deploy:local` | push function changes onto the running standalone app |
 
-> In **dev**, `npm run dev` runs the backend (data in the repo's `.convex/`). The
+> In **dev**, `npm run dev` runs the backend (data in the repo's `.convex/`) and opens the
+> window only once that backend answers on :3210, so the app attaches to it. The
 > packaged app is self-contained: Electron starts the bundled backend itself and
 > keeps data in `~/Library/Application Support/Geekspace/` on macOS or
 > `%APPDATA%\Geekspace\` on Windows.

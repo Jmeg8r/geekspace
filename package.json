@@ -10,7 +10,7 @@
   "scripts": {
     "backend": "convex dev",
     "frontend": "vite",
-    "electron": "wait-on tcp:127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "electron": "wait-on -t 120000 tcp:127.0.0.1:5173 tcp:127.0.0.1:3210 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
     "dev": "concurrently -k -n convex,vite,app -c blue,magenta,yellow \"npm:backend\" \"npm:frontend\" \"npm:electron\"",
     "dev:web": "concurrently -k -n convex,vite -c blue,magenta \"npm:backend\" \"npm:frontend\"",
     "seed": "convex run seed:seedWorkspace",

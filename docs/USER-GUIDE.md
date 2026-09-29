@@ -32,6 +32,7 @@ npm run dev          # backend + UI + app window, all together
 - **Stop it with one Ctrl-C** in that terminal — this shuts down all three processes cleanly.
 - If you ever see *"A local backend is still running on port 3210"*, something exited uncleanly. Fix: `lsof -ti:3210 | xargs kill`, then `npm run dev` again.
 - In dev, data lives under the repo's `.convex/`; the packaged app uses `~/Library/Application Support/Geekspace/`. Both are local SQLite — nothing touches the cloud.
+- `npm run dev` opens the window only after Vite (:5173) and a backend on :3210 both answer, so the window attaches to `convex dev`'s backend. If :3210 stays silent for two minutes it stops with `Timed out waiting for: tcp:127.0.0.1:3210` instead of opening a window. The installed app uses the same port, so don't run the two at once.
 - First-time setup on a new machine: `npm install`, then `npm run dev`, then `npm run seed` once.
 
 ---
@@ -177,7 +178,7 @@ right glyph for your platform.
 | Symptom | Fix |
 |---|---|
 | "Port 3210 still running" on `npm run dev` | macOS/Linux: `lsof -ti:3210 \| xargs kill`, retry. Windows: `netstat -ano \| findstr :3210` to find the PID, then `taskkill /PID <pid> /F`, retry. Backend logs on Windows live at `%APPDATA%\Geekspace\logs\convex.log`. |
-| App opens but no data (dev only) | In dev use `npm run dev`, not `electron .` alone. The packaged app starts its own backend automatically. |
+| App shows different data than `npm run dev` (dev only) | Starting Electron alone (`electron .`) with nothing on :3210 starts the bundled backend against `~/Library/Application Support/Geekspace/`, the installed app's data, not the repo's `.convex/`. That needs the convex CLI's cached backend binary; without it the app stops with *"Convex backend binary not found"*. For dev data, use `npm run dev`. |
 | Calendar/Mail sync error mentioning permissions | System Settings → Privacy & Security → Automation |
 | Mail/Calendar "timed out" | Three causes, same symptom: ① the macOS permission dialog is blocking — it can hide **behind windows**; find it, approve once. ② The app is **unresponsive** — quit and reopen Mail/Calendar. ③ A very large mailbox/calendar — just Refresh and wait. |
 | "Calendar.app isn't running" | Open Calendar (sync needs it alive), or hit Sync now after opening it |
