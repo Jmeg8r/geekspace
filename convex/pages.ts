@@ -1,6 +1,7 @@
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { getPageByAnyId } from "./lib/pageLookup";
 import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
 
 // WHAT: Page tree CRUD. Pages are docs or database containers; trash works on
@@ -24,8 +25,8 @@ export const listTrashed = query({
 });
 
 export const get = query({
-  args: { pageId: v.id("pages") },
-  handler: async (ctx, args) => ctx.db.get(args.pageId),
+  args: { pageId: v.string() },
+  handler: async (ctx, args) => getPageByAnyId(ctx.db, args.pageId),
 });
 
 export function defaultDatabaseProperties(): PropertyDef[] {
