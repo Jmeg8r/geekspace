@@ -1,0 +1,17 @@
+# Snyk (https://snyk.io) policy file, patches or ignores known vulnerabilities.
+version: v1.25.1
+# ignores vulnerabilities until expiry date; change duration by modifying expiry date
+ignore:
+  SNYK-JS-ESBUILD-17750822:
+    - '*':
+        reason: >-
+          Not reachable here: the advisory (GHSA-gv7w-rqvm-qjhr) is in esbuild's
+          Deno install path with an attacker-controlled NPM_CONFIG_REGISTRY, and
+          this project does not use Deno. No parent bump fixes it: convex 1.46.0
+          pins esbuild 0.27.0 exactly and vite 7.3.5 declares ^0.27.0, so only
+          an override would, which was tried and declined (forge PR #47).
+          Recheck at expiry, or sooner if convex or vite accept esbuild
+          >=0.28.1.
+        expires: 2027-01-11T00:00:00.000Z
+        created: 2026-10-11T17:12:59.986Z
+patch: {}
