@@ -36,10 +36,23 @@ const fail = (message) => ({
   isError: true,
 });
 
+const READ_ONLY_TOOLS = new Set([
+  "get_page", "list_rows", "my_tasks", "schedule_warnings", "list_templates",
+]);
+let schemaRead = false;
+
 function tool(name, description, shape, handler) {
   server.tool(name, description, shape, async (args) => {
     try {
-      return ok(await handler(args ?? {}));
+      if (name === "query_schema") {
+        // A failed refresh must not leave writes authorized by an older read.
+        schemaRead = false;
+      } else if (!READ_ONLY_TOOLS.has(name) && !schemaRead) {
+        throw new Error("Call query_schema successfully in this session before changing the workspace");
+      }
+      const result = await handler(args ?? {});
+      if (name === "query_schema") schemaRead = true;
+      return ok(result);
     } catch (err) {
       return fail(String(err?.message ?? err).slice(0, 500));
     }
