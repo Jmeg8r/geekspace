@@ -1,4 +1,5 @@
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
 import { runReflow } from "./scheduling";
@@ -149,6 +150,47 @@ function defaultPropName(type: string, existing: PropertyDef[]): string {
   return candidate;
 }
 
+// WHY: row values are validated against the current options, so an id left behind by a
+// deleted option would make every later edit of that cell fail (and the picker hides the
+// deleted option, so it could not be deselected). Deleting an option removes it from
+// every stored value: multi-selects drop the id, selects and statuses are cleared.
+async function dropDeletedOptionValues(
+  ctx: MutationCtx,
+  db: Doc<"databases">,
+  propId: string,
+  nextOptions: SelectOption[] | undefined,
+  tzOffsetMin: number | undefined
+) {
+  if (nextOptions === undefined) return;
+  const defs: PropertyDef[] = db.properties;
+  const def = defs.find((p) => p.id === propId);
+  if (!def || !["select", "status", "multiSelect"].includes(def.type)) return;
+  const kept = new Set(nextOptions.map((o) => o.id));
+  const deleted = (def.options ?? []).filter((o) => !kept.has(o.id));
+  if (deleted.length === 0) return;
+  const rows = await ctx.db
+    .query("rows")
+    .withIndex("by_database", (q) => q.eq("databaseId", db._id))
+    .collect();
+  for (const row of rows) {
+    const value = row.properties?.[propId];
+    if (value === undefined) continue;
+    const values = { ...row.properties };
+    if (Array.isArray(value)) {
+      const remaining = value.filter((id) => kept.has(id));
+      if (remaining.length === value.length) continue;
+      values[propId] = remaining;
+    } else if (!kept.has(value)) {
+      delete values[propId];
+    } else {
+      continue;
+    }
+    await ctx.db.patch(row._id, { properties: values, updatedAt: Date.now() });
+  }
+  // A cleared status or priority changes what the scheduler does with those tasks.
+  if (db.isTaskSource) await runReflow(ctx, tzOffsetMin);
+}
+
 export const updateProperty = mutation({
   args: {
     databaseId: v.id("databases"),
@@ -158,6 +200,7 @@ export const updateProperty = mutation({
     numberFormat: v.optional(numberFormat),
     rollup: v.optional(rollupConfig),
     includeTime: v.optional(v.boolean()),
+    tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const db = await ctx.db.get(args.databaseId);
@@ -174,6 +217,7 @@ export const updateProperty = mutation({
       return next;
     });
     await ctx.db.patch(args.databaseId, { properties: props });
+    await dropDeletedOptionValues(ctx, db, args.propId, args.options, args.tzOffsetMin);
   },
 });
 

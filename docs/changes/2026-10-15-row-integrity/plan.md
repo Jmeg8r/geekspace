@@ -122,3 +122,10 @@ departures from the plan text.
   picker now keeps the original end time with the pending start and restores it when the
   second click completes a multi-day range. Live: Oct 26 17:00 → Oct 29 09:00 moved with
   two clicks to Oct 19 17:00 → Oct 21 09:00 (read back from the backend). Suite 97/97.
+- **Codex review round 3 (`b7a0b18`): GATE PASS, one [P2], fixed** — the second regression
+  from stricter validation. Deleting an assigned option left its id in rows; the cell sends
+  its current selection back with every edit, so every later edit was rejected, and the
+  picker hides deleted options so it could not be deselected. `databases.updateProperty`
+  now removes deleted option ids from stored values (multi-select drops the id; select and
+  status are cleared) and reflows a task source. Two failing-first tests (`expected
+  ['keep','drop'] to equal ['keep']`), then 10/10; suite 99/99.

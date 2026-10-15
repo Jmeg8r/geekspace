@@ -172,6 +172,51 @@ describe("databases.removeProperty", () => {
   });
 });
 
+describe("databases.updateProperty", () => {
+  // Codex review of PR #52, round 3 [P2]: once values are validated, a deleted option's id
+  // left in a row would make every later edit of that cell fail.
+  it("removes a deleted option's id from stored values, so the cell stays editable", async () => {
+    const s = await seeded();
+    const tags = await s.t.mutation(api.databases.addProperty, {
+      databaseId: s.tasks._id,
+      type: "multiSelect",
+      name: "Tags",
+    });
+    if (!tags) throw new Error("addProperty returned null");
+    const options = [
+      { id: "keep", name: "Keep", color: "blue" },
+      { id: "drop", name: "Drop", color: "red" },
+    ];
+    await s.t.mutation(api.databases.updateProperty, { databaseId: s.tasks._id, propId: tags, options });
+    const task = await s.firstRow(s.tasks);
+    await s.t.mutation(api.rows.updateProperty, { rowId: task._id, propId: tags, value: ["keep", "drop"] });
+
+    await s.t.mutation(api.databases.updateProperty, {
+      databaseId: s.tasks._id,
+      propId: tags,
+      options: options.filter((o) => o.id !== "drop"),
+    });
+    expect(ids((await s.row(task._id))?.properties[tags])).toEqual(["keep"]);
+    // What the cell sends next: its current selection plus a change.
+    await s.t.mutation(api.rows.updateProperty, { rowId: task._id, propId: tags, value: [] });
+    expect(ids((await s.row(task._id))?.properties[tags])).toEqual([]);
+  });
+
+  it("clears a select value whose option was deleted", async () => {
+    const s = await seeded();
+    const priority = s.prop(s.tasks, "Priority");
+    const task = (await s.rowsOf(s.tasks)).find((r) => r.properties[priority.id]);
+    if (!task) throw new Error("no task with a priority");
+    const used = task.properties[priority.id];
+    await s.t.mutation(api.databases.updateProperty, {
+      databaseId: s.tasks._id,
+      propId: priority.id,
+      options: (priority.options ?? []).filter((o) => o.id !== used),
+    });
+    expect((await s.row(task._id))?.properties).not.toHaveProperty(priority.id);
+  });
+});
+
 describe("databases.setTaskSource", () => {
   it("keeps the dependency, parent and sprint wiring across an off/on toggle", async () => {
     const s = await seeded();
