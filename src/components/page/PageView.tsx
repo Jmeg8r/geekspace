@@ -31,13 +31,14 @@ export function PageView({ pageId }: { pageId: Id<"pages"> }) {
 
   return (
     <div className="flex h-full flex-col overflow-y-auto">
-      <PageHeader page={page} />
+      <PageHeader key={page._id} page={page} />
       {page.kind === "doc" ? (
         <div className="mx-auto w-full max-w-3xl flex-1 px-14 pb-40">
           <Editor
             key={page._id}
-            initialJson={page.content}
-            onSave={(json) => void setContent({ pageId: page._id, content: json })}
+            documentId={page._id}
+            content={page.content}
+            onSave={(json) => setContent({ pageId: page._id, content: json })}
           />
         </div>
       ) : page.databaseId ? (

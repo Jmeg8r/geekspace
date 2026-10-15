@@ -17,7 +17,9 @@ export function RowPeek() {
   const openRowId = useUI((s) => s.openRowId);
   const openRow = useUI((s) => s.openRow);
   if (!openRowId) return null;
-  return <RowPeekInner rowId={openRowId as Id<"rows">} onClose={() => openRow(null)} />;
+  return (
+    <RowPeekInner key={openRowId} rowId={openRowId as Id<"rows">} onClose={() => openRow(null)} />
+  );
 }
 
 function RowPeekInner({ rowId, onClose }: { rowId: Id<"rows">; onClose: () => void }) {
@@ -87,8 +89,9 @@ function RowPeekInner({ rowId, onClose }: { rowId: Id<"rows">; onClose: () => vo
         <div className="pt-4">
           <Editor
             key={row._id}
-            initialJson={row.content}
-            onSave={(json) => void setContent({ rowId, content: json })}
+            documentId={row._id}
+            content={row.content}
+            onSave={(json) => setContent({ rowId, content: json })}
           />
         </div>
       </div>
