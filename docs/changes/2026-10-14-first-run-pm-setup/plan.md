@@ -1,6 +1,6 @@
 ---
 change: 2026-10-14-first-run-pm-setup
-status: draft
+status: accepted
 track: T1
 intent: ./intent.md
 linear: pending
