@@ -93,3 +93,50 @@ linear: pending
   too; local storage is the only place guaranteed to be writable then.
 - **Un-favourite descendants inside `trash`.** Mutates data the user did not touch, and
   does not fix Recently edited or MCP; filtering reachability in `list` fixes all three.
+
+## Deviations
+
+Results of the plan's proofs, run 2026-10-15 on the isolated worktree backend, and the
+departures from the plan text.
+
+- **Failing first (`c1323b0`):** `saveQueue` and `incomingContent` tests failed with
+  "Cannot find module"; `pages.list` failed `not to have property "content"` and returned
+  `['Child', 'Grandchild', 'Other']` instead of `['Other']` after trashing Root.
+- **Added after the test-only commit:** two `pages.move` tests (top level through the
+  `by_parent` index with `parentId` undefined, and reparenting). They pass on `main`'s
+  `move` too, as intended: they guard the index change, they do not demonstrate a bug.
+- **Suite:** `npm run verify` 77/77.
+- **External edit, clean (probe 1):** first run failed. The page showed the new text, but
+  the stored content became BlockNote's normalised form: `replaceBlocks` fires `onChange`
+  synchronously, before the guard value was set, so the editor saved the applied text back.
+  Fixed with an `applying` flag held across `replaceBlocks`. Re-run: the editor showed the
+  write and the stored string was byte-identical to what was sent.
+- **External edit, dirty (probe 2):** typed via `insertText` and wrote through the backend's
+  HTTP mutation API within the 600 ms debounce. The conflict bar appeared and the server
+  kept the external text while the choice was open. "Load latest" showed it; "Keep mine"
+  wrote the local version (`… MINE WINS` on the server).
+- **Save while the backend is down (probe 3):** the Convex client queues the mutation
+  rather than rejecting it, so the visible state is "Not saved yet. Waiting for the backend
+  to answer…" (shown after 3 s), not an error. The draft held the text; a reload with the
+  backend still down, then a restart, showed "Restored edits that were not saved last time";
+  "Keep them" saved it (positive control: the server held the previous text before, the
+  typed text after) and cleared the draft.
+- **Rejected-save path ("Not saved: … Retry"):** exercised by the unit tests only; I found
+  no way to make a live `setContent` reject without also removing the page it targets.
+- **Unreadable content (probe 4):** planted non-JSON content → read-only panel with the
+  original; `updatedAt` unchanged after opening it.
+- **Trash leak (probe 5):** favourited "Content Ideas", trashed its parent "Welcome": the
+  child left Favorites and Recently edited. Restoring "Welcome" returned it, still
+  favourited.
+- **Row pages:** typed into a task's page body; the row's stored content held the text.
+- **Bundle:** the main chunk grew 5 kB (1,538.80 → 1,543.95 kB; gzip 464.69 → 466.48 kB)
+  from the new editor code. The plan expected "not larger"; that was wrong, and bundle
+  splitting is PR 9.
+- **No close prompt on `beforeunload`:** #28 called `preventDefault` while saves were
+  outstanding. In Electron that cancels closing the window with no dialog, so the editor
+  only flushes; recovery drafts cover anything that does not reach the server.
+- **Save queue created lazily** (`queueRef ??=`) and latest-prop refs updated in a layout
+  effect, so the editor passes ESLint's `react-hooks/refs` rule. `main`'s editor fails that
+  rule today; CI runs oxlint, not ESLint.
+- **Title editors keyed by document** (`PageHeader`, `RowPeekInner`) so a pending title
+  debounce flushes on switch instead of being replaced by the next page's call.
