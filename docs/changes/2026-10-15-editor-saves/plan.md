@@ -198,3 +198,12 @@ departures from the plan text.
     still offers it. Exercised by reasoning and the suite only; the gated double-save
     timing is not reproducible by hand.
   - Suite 86/86.
+- **Codex review round 5 (`36fc457`): GATE PASS (no P0/P1), one [P2], fixed.** "Keep mine"
+  queued the chosen document without keeping it as a recovery draft, so a reload before
+  the write landed could lose it. Both conflict choices now go through one
+  `holdAsUnsaved` helper. Live: "Keep mine" left the server holding the local version and
+  0 drafts once saved. Suite 86/86.
+- **Review loop stopped here.** Five Codex rounds; the critical findings ended at round 3,
+  and rounds 4 and 5 passed with advisory items only. CLAUDE.md L42 caps fix-review loops
+  at 3–4 rounds, so the round-5 fix was not sent back to Codex; it is covered by the suite,
+  the live re-run above and the forge ai-review gate on the PR head.

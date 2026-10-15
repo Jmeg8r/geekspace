@@ -269,14 +269,25 @@ function EditableDocument({
   }, [content]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
+  // A version the user chose in a conflict is an unsaved edit like any other until its
+  // write lands: keep it as the recovery draft so a reload before then still offers it.
+  function holdAsUnsaved(json: string): string {
+    latestLocal.current = json;
+    dirty.current = true;
+    const storage = localDrafts();
+    try {
+      if (storage) retainDraft(storage, documentId, json);
+    } catch (error) {
+      setSaveError(`could not keep a recovery copy (${String(error)})`);
+    }
+    return json;
+  }
+
   function keepMine() {
     paused.current = false;
     lastSynced.current = contentRef.current;
-    const json = JSON.stringify(editor.document);
-    latestLocal.current = json;
-    dirty.current = true;
     queue().release();
-    queue().enqueue(json);
+    queue().enqueue(holdAsUnsaved(JSON.stringify(editor.document)));
     setBar(null);
   }
 
@@ -289,18 +300,7 @@ function EditableDocument({
     queue().discardPending();
     queue().release();
     if (mustResave({ chosen: value, serverNow: contentRef.current, saving: queue().hasUnsaved() })) {
-      // Until this repair write lands, the chosen copy is an unsaved edit like any other:
-      // keep it as the recovery draft so a reload before then still offers it.
-      const chosen = value ?? "";
-      latestLocal.current = chosen;
-      dirty.current = true;
-      const storage = localDrafts();
-      try {
-        if (storage) retainDraft(storage, documentId, chosen);
-      } catch (error) {
-        setSaveError(`could not keep a recovery copy (${String(error)})`);
-      }
-      queue().enqueue(chosen);
+      queue().enqueue(holdAsUnsaved(value ?? ""));
     }
     return true;
   }
