@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { mutation, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
@@ -59,290 +59,298 @@ function findProp(props: PropertyDef[], name: string): PropertyDef | undefined {
 
 export const applyPmUpgrade = mutation({
   args: { tzOffsetMin: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const { doc: settingsDoc, merged: settings } = await getMergedSettings(ctx);
-    const did: string[] = [];
+  handler: (ctx, args) => applyPmUpgradeImpl(ctx, args.tzOffsetMin),
+});
 
-    const dbs = await ctx.db.query("databases").collect();
-    const tasksDb = dbs.find((d) => d.isTaskSource && d.taskConfig);
-    if (!tasksDb) return "no-task-source-database";
-    let tasksProps = tasksDb.properties as PropertyDef[];
-    const taskConfig = { ...tasksDb.taskConfig! };
-    const statusProp = tasksProps.find((p) => p.id === taskConfig.statusPropId);
+// WHY a plain helper: seedWorkspace runs the same upgrade in its own transaction, so a
+// fresh workspace and an upgraded old one cannot drift apart (they did — see
+// docs/changes/2026-10-14-first-run-pm-setup/). Idempotent; returns the same strings.
+export async function applyPmUpgradeImpl(
+  ctx: MutationCtx,
+  tzOffsetMin?: number
+): Promise<string> {
+  const { doc: settingsDoc, merged: settings } = await getMergedSettings(ctx);
+  const did: string[] = [];
 
-    // ---------- 1. Dependencies: Blocked by ⇄ Blocking ----------
-    let blockedByProp = findProp(tasksProps, "Blocked by");
-    if (!blockedByProp) {
-      const blockedById = makeId();
-      const blockingId = makeId();
-      blockedByProp = {
-        id: blockedById,
-        name: "Blocked by",
+  const dbs = await ctx.db.query("databases").collect();
+  const tasksDb = dbs.find((d) => d.isTaskSource && d.taskConfig);
+  if (!tasksDb) return "no-task-source-database";
+  let tasksProps = tasksDb.properties as PropertyDef[];
+  const taskConfig = { ...tasksDb.taskConfig! };
+  const statusProp = tasksProps.find((p) => p.id === taskConfig.statusPropId);
+
+  // ---------- 1. Dependencies: Blocked by ⇄ Blocking ----------
+  let blockedByProp = findProp(tasksProps, "Blocked by");
+  if (!blockedByProp) {
+    const blockedById = makeId();
+    const blockingId = makeId();
+    blockedByProp = {
+      id: blockedById,
+      name: "Blocked by",
+      type: "relation",
+      relation: { databaseId: tasksDb._id, syncedPropId: blockingId },
+    };
+    const blocking: PropertyDef = {
+      id: blockingId,
+      name: "Blocking",
+      type: "relation",
+      relation: { databaseId: tasksDb._id, syncedPropId: blockedById },
+    };
+    tasksProps = [...tasksProps, blockedByProp, blocking];
+    did.push("dependencies");
+  }
+  taskConfig.blockedByPropId = blockedByProp.id;
+
+  // ---------- 2. Sub-tasks: Parent task ⇄ Sub-tasks ----------
+  let parentProp = findProp(tasksProps, "Parent task");
+  if (!parentProp) {
+    const parentId = makeId();
+    const subtasksId = makeId();
+    parentProp = {
+      id: parentId,
+      name: "Parent task",
+      type: "relation",
+      relation: { databaseId: tasksDb._id, syncedPropId: subtasksId },
+    };
+    const subtasks: PropertyDef = {
+      id: subtasksId,
+      name: "Sub-tasks",
+      type: "relation",
+      relation: { databaseId: tasksDb._id, syncedPropId: parentId },
+    };
+    tasksProps = [...tasksProps, parentProp, subtasks];
+    did.push("sub-tasks");
+  }
+  taskConfig.parentPropId = parentProp.id;
+
+  // ---------- 3. Sprints database ----------
+  const now = Date.now();
+  const tz = tzOffsetMin ?? settings.tzOffsetMin;
+  let sprintsDb = dbs.find((d) => d.sprintConfig);
+  let currentSprintId: Id<"rows"> | undefined;
+
+  if (!sprintsDb) {
+    const sprintStatusOptions: SelectOption[] = [
+      { id: makeId(), name: "Upcoming", color: "gray" },
+      { id: makeId(), name: "Current", color: "orange" },
+      { id: makeId(), name: "Completed", color: "green" },
+    ];
+    const sStatusId = makeId();
+    const sDatesId = makeId();
+    const sTasksId = makeId(); // relation Sprints -> Tasks
+    const tSprintId = makeId(); // synced: Tasks -> Sprint
+    const sProgressId = makeId();
+
+    const sprintsProps: PropertyDef[] = [
+      { id: "title", name: "Name", type: "title" },
+      { id: sStatusId, name: "Status", type: "select", options: sprintStatusOptions },
+      { id: sDatesId, name: "Dates", type: "date" },
+      {
+        id: sTasksId,
+        name: "Tasks",
         type: "relation",
-        relation: { databaseId: tasksDb._id, syncedPropId: blockingId },
-      };
-      const blocking: PropertyDef = {
-        id: blockingId,
-        name: "Blocking",
-        type: "relation",
-        relation: { databaseId: tasksDb._id, syncedPropId: blockedById },
-      };
-      tasksProps = [...tasksProps, blockedByProp, blocking];
-      did.push("dependencies");
-    }
-    taskConfig.blockedByPropId = blockedByProp.id;
-
-    // ---------- 2. Sub-tasks: Parent task ⇄ Sub-tasks ----------
-    let parentProp = findProp(tasksProps, "Parent task");
-    if (!parentProp) {
-      const parentId = makeId();
-      const subtasksId = makeId();
-      parentProp = {
-        id: parentId,
-        name: "Parent task",
-        type: "relation",
-        relation: { databaseId: tasksDb._id, syncedPropId: subtasksId },
-      };
-      const subtasks: PropertyDef = {
-        id: subtasksId,
-        name: "Sub-tasks",
-        type: "relation",
-        relation: { databaseId: tasksDb._id, syncedPropId: parentId },
-      };
-      tasksProps = [...tasksProps, parentProp, subtasks];
-      did.push("sub-tasks");
-    }
-    taskConfig.parentPropId = parentProp.id;
-
-    // ---------- 3. Sprints database ----------
-    const now = Date.now();
-    const tz = args.tzOffsetMin ?? settings.tzOffsetMin;
-    let sprintsDb = dbs.find((d) => d.sprintConfig);
-    let currentSprintId: Id<"rows"> | undefined;
-
-    if (!sprintsDb) {
-      const sprintStatusOptions: SelectOption[] = [
-        { id: makeId(), name: "Upcoming", color: "gray" },
-        { id: makeId(), name: "Current", color: "orange" },
-        { id: makeId(), name: "Completed", color: "green" },
-      ];
-      const sStatusId = makeId();
-      const sDatesId = makeId();
-      const sTasksId = makeId(); // relation Sprints -> Tasks
-      const tSprintId = makeId(); // synced: Tasks -> Sprint
-      const sProgressId = makeId();
-
-      const sprintsProps: PropertyDef[] = [
-        { id: "title", name: "Name", type: "title" },
-        { id: sStatusId, name: "Status", type: "select", options: sprintStatusOptions },
-        { id: sDatesId, name: "Dates", type: "date" },
-        {
-          id: sTasksId,
-          name: "Tasks",
-          type: "relation",
-          relation: { databaseId: tasksDb._id, syncedPropId: tSprintId },
+        relation: { databaseId: tasksDb._id, syncedPropId: tSprintId },
+      },
+      {
+        id: sProgressId,
+        name: "Progress",
+        type: "rollup",
+        numberFormat: "progress",
+        rollup: {
+          relationPropId: sTasksId,
+          targetPropId: taskConfig.statusPropId,
+          aggregate: "percentComplete",
         },
-        {
-          id: sProgressId,
-          name: "Progress",
-          type: "rollup",
-          numberFormat: "progress",
-          rollup: {
-            relationPropId: sTasksId,
-            targetPropId: taskConfig.statusPropId,
-            aggregate: "percentComplete",
-          },
-        },
-      ];
-      const sprintsDbId = await ctx.db.insert("databases", {
-        name: "Sprints",
-        properties: sprintsProps,
-        color: "purple",
-        sprintConfig: {
-          statusPropId: sStatusId,
-          datePropId: sDatesId,
-          tasksPropId: sTasksId,
-        },
-      });
-      const sprintsPageId = await ctx.db.insert("pages", {
-        title: "Sprints",
-        icon: "🏃",
-        kind: "database",
-        databaseId: sprintsDbId,
-        favorite: false,
-        trashed: false,
-        order: now,
-        updatedAt: now,
-      });
-      await ctx.db.patch(sprintsDbId, { pageId: sprintsPageId });
-      await ctx.db.insert("views", { databaseId: sprintsDbId, name: "Table", type: "table", order: 1 });
-      await ctx.db.insert("views", {
-        databaseId: sprintsDbId,
-        name: "Board",
-        type: "board",
-        groupByPropId: sStatusId,
-        order: 2,
-      } as never);
+      },
+    ];
+    const sprintsDbId = await ctx.db.insert("databases", {
+      name: "Sprints",
+      properties: sprintsProps,
+      color: "purple",
+      sprintConfig: {
+        statusPropId: sStatusId,
+        datePropId: sDatesId,
+        tasksPropId: sTasksId,
+      },
+    });
+    const sprintsPageId = await ctx.db.insert("pages", {
+      title: "Sprints",
+      icon: "🏃",
+      kind: "database",
+      databaseId: sprintsDbId,
+      favorite: false,
+      trashed: false,
+      order: now,
+      updatedAt: now,
+    });
+    await ctx.db.patch(sprintsDbId, { pageId: sprintsPageId });
+    await ctx.db.insert("views", { databaseId: sprintsDbId, name: "Table", type: "table", order: 1 });
+    await ctx.db.insert("views", {
+      databaseId: sprintsDbId,
+      name: "Board",
+      type: "board",
+      groupByPropId: sStatusId,
+      order: 2,
+    } as never);
 
-      // Tasks side: Sprint relation
-      const tSprint: PropertyDef = {
-        id: tSprintId,
-        name: "Sprint",
-        type: "relation",
-        relation: { databaseId: sprintsDbId, syncedPropId: sTasksId },
-      };
-      tasksProps = [...tasksProps, tSprint];
-      taskConfig.sprintPropId = tSprintId;
+    // Tasks side: Sprint relation
+    const tSprint: PropertyDef = {
+      id: tSprintId,
+      name: "Sprint",
+      type: "relation",
+      relation: { databaseId: sprintsDbId, syncedPropId: sTasksId },
+    };
+    tasksProps = [...tasksProps, tSprint];
+    taskConfig.sprintPropId = tSprintId;
 
-      // Sprint 1 (current, two weeks from today) + Sprint 2 (upcoming)
-      const today = localMsToCalendarDate(now, tz);
-      const s1Start = today;
-      const s1End = today + (SPRINT_LENGTH_DAYS - 1) * DAY_MS;
-      currentSprintId = await ctx.db.insert("rows", {
-        databaseId: sprintsDbId,
+    // Sprint 1 (current, two weeks from today) + Sprint 2 (upcoming)
+    const today = localMsToCalendarDate(now, tz);
+    const s1Start = today;
+    const s1End = today + (SPRINT_LENGTH_DAYS - 1) * DAY_MS;
+    currentSprintId = await ctx.db.insert("rows", {
+      databaseId: sprintsDbId,
+      title: "Sprint 1",
+      properties: {
         title: "Sprint 1",
-        properties: {
-          title: "Sprint 1",
-          [sStatusId]: sprintStatusOptions[1].id, // Current
-          [sDatesId]: { start: s1Start, end: s1End },
-        },
-        order: now,
-        updatedAt: now,
-      });
-      await ctx.db.insert("rows", {
-        databaseId: sprintsDbId,
+        [sStatusId]: sprintStatusOptions[1].id, // Current
+        [sDatesId]: { start: s1Start, end: s1End },
+      },
+      order: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("rows", {
+      databaseId: sprintsDbId,
+      title: "Sprint 2",
+      properties: {
         title: "Sprint 2",
-        properties: {
-          title: "Sprint 2",
-          [sStatusId]: sprintStatusOptions[0].id, // Upcoming
-          [sDatesId]: { start: s1End + DAY_MS, end: s1End + SPRINT_LENGTH_DAYS * DAY_MS },
-        },
-        order: now + 1,
-        updatedAt: now,
-      });
+        [sStatusId]: sprintStatusOptions[0].id, // Upcoming
+        [sDatesId]: { start: s1End + DAY_MS, end: s1End + SPRINT_LENGTH_DAYS * DAY_MS },
+      },
+      order: now + 1,
+      updatedAt: now,
+    });
 
-      // Pull open tasks due inside Sprint 1 into it (both relation sides).
-      const taskRows = await ctx.db
-        .query("rows")
-        .withIndex("by_database", (q) => q.eq("databaseId", tasksDb._id))
-        .collect();
-      const completeIds = new Set(
-        (statusProp?.options ?? []).filter((o) => o.group === "complete").map((o) => o.id)
-      );
-      const inSprint: Id<"rows">[] = [];
-      for (const row of taskRows) {
-        const sv = row.properties?.[taskConfig.statusPropId];
-        if (isString(sv) && completeIds.has(sv)) continue;
-        const due = row.properties?.[taskConfig.datePropId] as
-          | { start: number; end?: number }
-          | undefined;
-        if (!due || (due.end ?? due.start) > s1End) continue;
-        inSprint.push(row._id);
-        await ctx.db.patch(row._id, {
-          properties: { ...(row.properties ?? {}), [tSprintId]: [currentSprintId] },
-        });
-      }
-      const sprint1 = await ctx.db.get(currentSprintId);
-      if (sprint1) {
-        await ctx.db.patch(currentSprintId, {
-          properties: { ...(sprint1.properties ?? {}), [sTasksId]: inSprint },
-        });
-      }
-      did.push(`sprints (${inSprint.length} tasks in Sprint 1)`);
-    }
-
-    // Persist tasks db changes.
-    await ctx.db.patch(tasksDb._id, { properties: tasksProps, taskConfig });
-
-    // ---------- 4. Views: Sprint Board + Backlog ----------
-    const taskViews = await ctx.db
-      .query("views")
+    // Pull open tasks due inside Sprint 1 into it (both relation sides).
+    const taskRows = await ctx.db
+      .query("rows")
       .withIndex("by_database", (q) => q.eq("databaseId", tasksDb._id))
       .collect();
-    const sprintPropId = taskConfig.sprintPropId;
-    if (sprintPropId && currentSprintId && !taskViews.some((vw) => vw.name === "Sprint Board")) {
-      await ctx.db.insert("views", {
-        databaseId: tasksDb._id,
-        name: "Sprint Board",
-        type: "board",
-        groupByPropId: taskConfig.statusPropId,
-        filters: {
-          conjunction: "and",
-          rules: [{ propId: sprintPropId, op: "contains", value: currentSprintId }],
-        },
-        order: now + 10,
-      } as never);
-      did.push("sprint-board-view");
-    }
-    if (sprintPropId && !taskViews.some((vw) => vw.name === "Backlog")) {
-      const completeOption = statusProp?.options?.find((o) => o.group === "complete");
-      await ctx.db.insert("views", {
-        databaseId: tasksDb._id,
-        name: "Backlog",
-        type: "list",
-        filters: {
-          conjunction: "and",
-          rules: [
-            { propId: sprintPropId, op: "isEmpty" },
-            ...(completeOption
-              ? [{ propId: taskConfig.statusPropId, op: "isNot", value: completeOption.id }]
-              : []),
-          ],
-        },
-        sorts: [{ propId: taskConfig.datePropId, dir: "asc" }],
-        order: now + 11,
-      } as never);
-      did.push("backlog-view");
-    }
-
-    // ---------- 5. Declutter: hide reverse/secondary relation columns in the
-    // default Table view (they stay visible in the row peek) ----------
-    const hideIds = [
-      blockedByProp.relation?.syncedPropId, // Blocking
-      parentProp.id, // Parent task
-      parentProp.relation?.syncedPropId, // Sub-tasks
-    ].filter((x): x is string => Boolean(x));
-    const defaultTable = taskViews.find((vw) => vw.type === "table");
-    if (defaultTable && hideIds.length > 0) {
-      const hidden = new Set(defaultTable.hiddenPropIds ?? []);
-      const before = hidden.size;
-      for (const id of hideIds) hidden.add(id);
-      if (hidden.size !== before) {
-        await ctx.db.patch(defaultTable._id, { hiddenPropIds: [...hidden] });
-        did.push("table-decluttered");
-      }
-    }
-
-    // ---------- 6. In-app User Guide page ----------
-    const allPages = await ctx.db.query("pages").collect();
-    if (!allPages.some((p) => p.title === "User Guide" && !p.trashed)) {
-      await ctx.db.insert("pages", {
-        title: "User Guide",
-        icon: "📖",
-        kind: "doc",
-        content: JSON.stringify(USER_GUIDE_BLOCKS),
-        favorite: false,
-        trashed: false,
-        order: now + 100,
-        updatedAt: now,
+    const completeIds = new Set(
+      (statusProp?.options ?? []).filter((o) => o.group === "complete").map((o) => o.id)
+    );
+    const inSprint: Id<"rows">[] = [];
+    for (const row of taskRows) {
+      const sv = row.properties?.[taskConfig.statusPropId];
+      if (isString(sv) && completeIds.has(sv)) continue;
+      const due = row.properties?.[taskConfig.datePropId] as
+        | { start: number; end?: number }
+        | undefined;
+      if (!due || (due.end ?? due.start) > s1End) continue;
+      inSprint.push(row._id);
+      await ctx.db.patch(row._id, {
+        properties: { ...(row.properties ?? {}), [tSprintId]: [currentSprintId] },
       });
-      did.push("user-guide");
     }
-
-    // ---------- 7. Starter project templates ----------
-    const templatesAdded = await seedTemplatesHelper(ctx);
-    if (templatesAdded > 0) did.push(`templates (${templatesAdded})`);
-
-    // ---------- 8. Settings flag + reflow ----------
-    if (settingsDoc) {
-      await ctx.db.patch(settingsDoc._id, { pmUpgraded: true });
-    } else {
-      await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, pmUpgraded: true });
+    const sprint1 = await ctx.db.get(currentSprintId);
+    if (sprint1) {
+      await ctx.db.patch(currentSprintId, {
+        properties: { ...(sprint1.properties ?? {}), [sTasksId]: inSprint },
+      });
     }
-    await runReflow(ctx, args.tzOffsetMin);
-    return did.length > 0 ? `upgraded: ${did.join(", ")}` : "already-up-to-date";
-  },
-});
+    did.push(`sprints (${inSprint.length} tasks in Sprint 1)`);
+  }
+
+  // Persist tasks db changes.
+  await ctx.db.patch(tasksDb._id, { properties: tasksProps, taskConfig });
+
+  // ---------- 4. Views: Sprint Board + Backlog ----------
+  const taskViews = await ctx.db
+    .query("views")
+    .withIndex("by_database", (q) => q.eq("databaseId", tasksDb._id))
+    .collect();
+  const sprintPropId = taskConfig.sprintPropId;
+  if (sprintPropId && currentSprintId && !taskViews.some((vw) => vw.name === "Sprint Board")) {
+    await ctx.db.insert("views", {
+      databaseId: tasksDb._id,
+      name: "Sprint Board",
+      type: "board",
+      groupByPropId: taskConfig.statusPropId,
+      filters: {
+        conjunction: "and",
+        rules: [{ propId: sprintPropId, op: "contains", value: currentSprintId }],
+      },
+      order: now + 10,
+    } as never);
+    did.push("sprint-board-view");
+  }
+  if (sprintPropId && !taskViews.some((vw) => vw.name === "Backlog")) {
+    const completeOption = statusProp?.options?.find((o) => o.group === "complete");
+    await ctx.db.insert("views", {
+      databaseId: tasksDb._id,
+      name: "Backlog",
+      type: "list",
+      filters: {
+        conjunction: "and",
+        rules: [
+          { propId: sprintPropId, op: "isEmpty" },
+          ...(completeOption
+            ? [{ propId: taskConfig.statusPropId, op: "isNot", value: completeOption.id }]
+            : []),
+        ],
+      },
+      sorts: [{ propId: taskConfig.datePropId, dir: "asc" }],
+      order: now + 11,
+    } as never);
+    did.push("backlog-view");
+  }
+
+  // ---------- 5. Declutter: hide reverse/secondary relation columns in the
+  // default Table view (they stay visible in the row peek) ----------
+  const hideIds = [
+    blockedByProp.relation?.syncedPropId, // Blocking
+    parentProp.id, // Parent task
+    parentProp.relation?.syncedPropId, // Sub-tasks
+  ].filter((x): x is string => Boolean(x));
+  const defaultTable = taskViews.find((vw) => vw.type === "table");
+  if (defaultTable && hideIds.length > 0) {
+    const hidden = new Set(defaultTable.hiddenPropIds ?? []);
+    const before = hidden.size;
+    for (const id of hideIds) hidden.add(id);
+    if (hidden.size !== before) {
+      await ctx.db.patch(defaultTable._id, { hiddenPropIds: [...hidden] });
+      did.push("table-decluttered");
+    }
+  }
+
+  // ---------- 6. In-app User Guide page ----------
+  const allPages = await ctx.db.query("pages").collect();
+  if (!allPages.some((p) => p.title === "User Guide" && !p.trashed)) {
+    await ctx.db.insert("pages", {
+      title: "User Guide",
+      icon: "📖",
+      kind: "doc",
+      content: JSON.stringify(USER_GUIDE_BLOCKS),
+      favorite: false,
+      trashed: false,
+      order: now + 100,
+      updatedAt: now,
+    });
+    did.push("user-guide");
+  }
+
+  // ---------- 7. Starter project templates ----------
+  const templatesAdded = await seedTemplatesHelper(ctx);
+  if (templatesAdded > 0) did.push(`templates (${templatesAdded})`);
+
+  // ---------- 8. Settings flag + reflow ----------
+  if (settingsDoc) {
+    await ctx.db.patch(settingsDoc._id, { pmUpgraded: true });
+  } else {
+    await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, pmUpgraded: true });
+  }
+  await runReflow(ctx, tzOffsetMin);
+  return did.length > 0 ? `upgraded: ${did.join(", ")}` : "already-up-to-date";
+}
 
 /** Force-refresh the in-app User Guide page from the bundled content. */
 export const updateUserGuide = mutation({

@@ -7,7 +7,7 @@ import {
   DAY_MS,
 } from "./lib/scheduler";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
-import { runReflow } from "./scheduling";
+import { applyPmUpgradeImpl } from "./pm";
 
 // WHAT: One-shot workspace seed — Notion Projects-style PM template (Projects +
 // Tasks wired with a synced relation and a percent-complete rollup), a Welcome
@@ -303,7 +303,9 @@ export const seedWorkspace = mutation({
       updatedAt: now,
     });
 
-    await runReflow(ctx);
+    // The full PM setup (sprints, dependencies, sub-tasks, views, guide, templates);
+    // it ends with the reflow this seed used to run itself.
+    await applyPmUpgradeImpl(ctx);
     return "seeded";
   },
 });

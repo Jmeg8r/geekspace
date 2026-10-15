@@ -119,7 +119,7 @@ npm run dev        # Convex backend + Vite + Electron, all at once
 First run only:
 
 ```bash
-npm run seed       # Projects/Tasks template + sample week (idempotent)
+npm run seed       # Projects/Tasks/Sprints PM setup, User Guide, templates + sample week (idempotent)
 ```
 
 ### Build the standalone app
