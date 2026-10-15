@@ -116,3 +116,9 @@ departures from the plan text.
   cannot produce a reversed range either. Failing-first test (`Cannot find module`), then
   3/3; suite 97/97. Live: a range Oct 19–21 moved with two clicks to Oct 26–29, with no
   rejected mutation.
+- **Codex review round 2 (`21eef70`): GATE PASS, one [P2], fixed.** Collapsing the range
+  onto the new start day overwrote the end time, so a timed range ending earlier in the
+  day than it starts (17:00 → 09:00 next day) came back with 17:00 as its deadline. The
+  picker now keeps the original end time with the pending start and restores it when the
+  second click completes a multi-day range. Live: Oct 26 17:00 → Oct 29 09:00 moved with
+  two clicks to Oct 19 17:00 → Oct 21 09:00 (read back from the backend). Suite 97/97.

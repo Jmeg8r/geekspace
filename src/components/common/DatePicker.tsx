@@ -44,6 +44,10 @@ export function DatePicker({
   // The start the user just clicked, until the end is picked: the server copy in `value`
   // may not have caught up yet when the second click lands.
   const [pendingStart, setPendingStart] = useState<number | undefined>(undefined);
+  // The end time before that start was picked: collapsing the range onto one day must not
+  // overwrite it, or a timed range ending earlier in the day than it starts would come
+  // back with the start time as its deadline.
+  const [pendingEndMin, setPendingEndMin] = useState<number | undefined>(undefined);
 
   const includeTime = value?.includeTime === true;
   const startMin = includeTime && value ? minutesOfDay(value.start) : 9 * 60;
@@ -94,11 +98,13 @@ export function DatePicker({
 
   function clickDay(dayMs: number) {
     const next = pickDay({ day: dayMs, rangeMode, pickingEnd, start: pendingStart ?? startCal });
+    const originalEndMin = pendingEndMin ?? endMin;
     // On one day, the end time must not fall before the start time either.
-    const sameDayEndMin = next.end === next.start ? Math.max(startMin, endMin) : undefined;
-    emit(next.start, next.end, undefined, undefined, sameDayEndMin);
+    const emitEndMin = next.end === next.start ? Math.max(startMin, originalEndMin) : originalEndMin;
+    emit(next.start, next.end, undefined, undefined, emitEndMin);
     setPickingEnd(next.pickingEnd);
     setPendingStart(next.pickingEnd ? next.start : undefined);
+    setPendingEndMin(next.pickingEnd ? originalEndMin : undefined);
   }
 
   return (
