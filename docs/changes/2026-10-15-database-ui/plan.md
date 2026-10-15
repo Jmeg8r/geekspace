@@ -114,3 +114,16 @@ departures from the plan text.
     clipped bar had 0 handles, a bar with a visible end had 1.
   - Today and the jump chips scroll back to the start. Live: 900 px → 0 on Today.
   - Suite 102/102.
+- **Codex review round 2 (`91ea073`): GATE PASS, three [P2], fixed by restating the rules
+  rather than patching each case.**
+  - Filters had the option editor's lost-update race (type a value, click "Add filter" at
+    once). The filter menu now builds every change from the last config it sent, until the
+    server copy matches it, plus values still being typed. Live: the server kept
+    `value: "draft"` and the new rule.
+  - `DraftInput` rewritten around two rules: an outside value is adopted on blur only if
+    nothing was typed during that focus (so blurring while a save is in flight keeps the
+    typed text), and a save is skipped only when it equals the current server value (so
+    an edit back to the old text after an outside change is still saved). Live: focused
+    "Low", renamed elsewhere to "Low (renamed elsewhere)", typed "Lowx" then "Low", blurred
+    → the server held "Low".
+  - Suite 102/102.

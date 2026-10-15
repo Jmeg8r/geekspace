@@ -5,6 +5,9 @@ import { debounce, type Debounced } from "../../lib/utils";
 // unmount, instead of writing to the server on every keystroke.
 // WHY: inputs bound straight to server state dropped characters and jumped the caret when
 // a round trip lagged, and each keystroke rewrote a whole property list or view.
+// Rules: the draft is the user's while they type in it. An outside change is shown when the
+// input is not focused, or on blur if nothing was typed during that focus. A save is skipped
+// only when it equals the current server value.
 // See docs/changes/2026-10-15-database-ui/.
 
 const SAVE_PAUSE_MS = 400;
@@ -19,32 +22,25 @@ type DraftInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "on
 export function DraftInput({ value, onCommit, onDraftChange, onBlur, onFocus, ...rest }: DraftInputProps) {
   const [draft, setDraft] = useState(value);
   const focused = useRef(false);
-  // The newest outside value, kept while focused so blur can show it.
-  const external = useRef(value);
-  // Whether the draft holds a local edit not yet handed to onCommit.
-  const edited = useRef(false);
+  // The newest server value, including changes that arrived while focused.
+  const server = useRef(value);
+  // Whether anything was typed during the current focus.
+  const typedThisFocus = useRef(false);
   const commitRef = useRef(onCommit);
-  const lastSent = useRef(value);
   const saver = useRef<Debounced<[string]> | null>(null);
 
   useEffect(() => {
     commitRef.current = onCommit;
   });
 
-  // Take outside changes (another window, the agent) only while the user is not typing.
   useEffect(() => {
-    external.current = value;
-    if (focused.current) return;
-    lastSent.current = value;
-    setDraft(value);
+    server.current = value;
+    if (!focused.current) setDraft(value);
   }, [value]);
 
   useEffect(() => {
     const pending = debounce((next: string) => {
-      edited.current = false;
-      if (next === lastSent.current) return;
-      lastSent.current = next;
-      commitRef.current(next);
+      if (next !== server.current) commitRef.current(next);
     }, SAVE_PAUSE_MS);
     saver.current = pending;
     return () => {
@@ -58,24 +54,22 @@ export function DraftInput({ value, onCommit, onDraftChange, onBlur, onFocus, ..
       {...rest}
       value={draft}
       onChange={(e) => {
-        edited.current = true;
+        typedThisFocus.current = true;
         setDraft(e.target.value);
         onDraftChange?.(e.target.value);
         saver.current?.(e.target.value);
       }}
       onFocus={(e) => {
         focused.current = true;
+        typedThisFocus.current = false;
         onFocus?.(e);
       }}
       onBlur={(e) => {
         focused.current = false;
-        const hadEdit = edited.current;
         saver.current?.flush();
-        // Nothing typed here: show whatever changed elsewhere while it was focused.
-        if (!hadEdit && external.current !== draft) {
-          lastSent.current = external.current;
-          setDraft(external.current);
-        }
+        // Typed something: the draft stands (its save may still be in flight), and the
+        // server copy catches up through the effect above. Typed nothing: show the server.
+        if (!typedThisFocus.current) setDraft(server.current);
         onBlur?.(e);
       }}
     />

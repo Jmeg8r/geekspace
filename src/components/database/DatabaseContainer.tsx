@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowUpDown,
@@ -283,8 +283,28 @@ function FilterMenu({ db, view, count }: { db: Doc<"databases">; view: Doc<"view
   const updateView = useMutation(api.views.update);
   const props = db.properties as PropertyDef[];
   const filters = (view.filters as FilterConfig | undefined) ?? { conjunction: "and", rules: [] };
+  // WHY: every change sends the whole filter config. Two quick changes (type a value, then
+  // click "Add filter") would otherwise build the second from the server copy that does not
+  // have the first yet, and undo it. So: the last config sent stays the base until the
+  // server copy matches it, and values still being typed are merged into every change.
+  const sent = useRef<FilterConfig | null>(null);
+  const typing = useRef(new Map<number, FilterRule["value"]>());
+  useEffect(() => {
+    if (sent.current && JSON.stringify(sent.current) === JSON.stringify(filters)) sent.current = null;
+  }, [filters]);
 
-  function save(next: FilterConfig) {
+  function current(): FilterConfig {
+    const base = sent.current ?? filters;
+    return {
+      ...base,
+      rules: base.rules.map((r, j) => (typing.current.has(j) ? { ...r, value: typing.current.get(j) } : r)),
+    };
+  }
+
+  function save(change: (config: FilterConfig) => FilterConfig) {
+    const next = change(current());
+    typing.current.clear();
+    sent.current = next;
     void updateView({ viewId: view._id, filters: next });
   }
 
@@ -300,7 +320,10 @@ function FilterMenu({ db, view, count }: { db: Doc<"databases">; view: Doc<"view
               Match
               <select
                 value={filters.conjunction}
-                onChange={(e) => save({ ...filters, conjunction: e.target.value as "and" | "or" })}
+                onChange={(e) => {
+                  const conjunction = e.target.value === "or" ? "or" : "and";
+                  save((c) => ({ ...c, conjunction }));
+                }}
                 className="rounded border border-border bg-surface px-1 py-0.5 outline-none"
               >
                 <option value="and">all (and)</option>
@@ -314,17 +337,16 @@ function FilterMenu({ db, view, count }: { db: Doc<"databases">; view: Doc<"view
               key={i}
               rule={rule}
               props={props}
-              onChange={(next) =>
-                save({ ...filters, rules: filters.rules.map((r, j) => (j === i ? next : r)) })
-              }
-              onRemove={() => save({ ...filters, rules: filters.rules.filter((_, j) => j !== i) })}
+              onChange={(next) => save((c) => ({ ...c, rules: c.rules.map((r, j) => (j === i ? next : r)) }))}
+              onTyping={(value) => typing.current.set(i, value)}
+              onRemove={() => save((c) => ({ ...c, rules: c.rules.filter((_, j) => j !== i) }))}
             />
           ))}
           <button
             onClick={() => {
               const prop = props.find((p) => p.type !== "rollup") ?? props[0];
               const firstOp = opsForType(prop.type)[0]?.op ?? "isNotEmpty";
-              save({ ...filters, rules: [...filters.rules, { propId: prop.id, op: firstOp }] });
+              save((c) => ({ ...c, rules: [...c.rules, { propId: prop.id, op: firstOp }] }));
             }}
             className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] text-ink-2 hover:bg-hov"
           >
@@ -340,11 +362,13 @@ function FilterRuleRow({
   rule,
   props,
   onChange,
+  onTyping,
   onRemove,
 }: {
   rule: FilterRule;
   props: PropertyDef[];
   onChange: (rule: FilterRule) => void;
+  onTyping: (value: string) => void;
   onRemove: () => void;
 }) {
   const def = props.find((p) => p.id === rule.propId);
@@ -376,7 +400,12 @@ function FilterRuleRow({
         ))}
       </select>
       {needsValue && def && (
-        <FilterValueInput def={def} value={rule.value} onChange={(v) => onChange({ ...rule, value: v })} />
+        <FilterValueInput
+          def={def}
+          value={rule.value}
+          onChange={(v) => onChange({ ...rule, value: v })}
+          onTyping={onTyping}
+        />
       )}
       <button onClick={onRemove} className="rounded p-1 text-ink-3 hover:bg-hov hover:text-ink">
         <X size={13} />
@@ -389,10 +418,12 @@ function FilterValueInput({
   def,
   value,
   onChange,
+  onTyping,
 }: {
   def: PropertyDef;
   value: string | number | undefined;
   onChange: (v: string | number | undefined) => void;
+  onTyping: (value: string) => void;
 }) {
   if (def.type === "relation" && def.relation) {
     return <RelationValueSelect def={def} value={value} onChange={onChange} />;
@@ -440,6 +471,7 @@ function FilterValueInput({
     <DraftInput
       value={String(value ?? "")}
       onCommit={onChange}
+      onDraftChange={onTyping}
       placeholder="Value"
       className="flex-1 rounded border border-border bg-surface px-1.5 py-1 text-[12px] outline-none"
     />
