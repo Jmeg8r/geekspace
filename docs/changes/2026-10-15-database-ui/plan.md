@@ -127,3 +127,19 @@ departures from the plan text.
     "Low", renamed elsewhere to "Low (renamed elsewhere)", typed "Lowx" then "Low", blurred
     → the server held "Low".
   - Suite 102/102.
+- **Codex review round 3 (`fab3f41`): GATE PASS, three [P2]; two were caused by round 2's
+  remembered "last sent" filter config** (Convex returns object keys in a different order,
+  so the "caught up" check never matched; and the remembered config was not scoped to a
+  view). Per CLAUDE.md L42 the response was to remove machinery, not add it:
+  - the remembered config is gone. The filter menu keeps only values still being typed,
+    dropped once the server copy shows them (the option-editor pattern), and is keyed by
+    view so nothing carries across views;
+  - `DraftInput` no longer skips a save that equals the server value; whatever was typed
+    is saved after a pause (a repeat is harmless; a skip could leave an earlier in-flight
+    save as the last word).
+  - Two structural clicks inside one round trip still race, exactly as on `main`; not a
+    regression from this PR.
+  - Live: the filter value survived an immediate "Add filter". Suite 102/102.
+- **Review loop stopped here** (L42): three rounds, all GATE PASS, no P0/P1. The round-3
+  fix was not sent back to Codex; it is covered by the suite, the live check and the
+  forge ai-review gate on the PR head.

@@ -6,8 +6,9 @@ import { debounce, type Debounced } from "../../lib/utils";
 // WHY: inputs bound straight to server state dropped characters and jumped the caret when
 // a round trip lagged, and each keystroke rewrote a whole property list or view.
 // Rules: the draft is the user's while they type in it. An outside change is shown when the
-// input is not focused, or on blur if nothing was typed during that focus. A save is skipped
-// only when it equals the current server value.
+// input is not focused, or on blur if nothing was typed during that focus. Whatever was typed
+// is saved after a pause, even if it matches the server: a repeated save is harmless, and
+// skipping one could leave an earlier in-flight save as the last word.
 // See docs/changes/2026-10-15-database-ui/.
 
 const SAVE_PAUSE_MS = 400;
@@ -39,9 +40,7 @@ export function DraftInput({ value, onCommit, onDraftChange, onBlur, onFocus, ..
   }, [value]);
 
   useEffect(() => {
-    const pending = debounce((next: string) => {
-      if (next !== server.current) commitRef.current(next);
-    }, SAVE_PAUSE_MS);
+    const pending = debounce((next: string) => commitRef.current(next), SAVE_PAUSE_MS);
     saver.current = pending;
     return () => {
       pending.flush();

@@ -181,7 +181,7 @@ export function DatabaseContainer({ databaseId }: { databaseId: Id<"databases"> 
           </Popover>
         </div>
 
-        <FilterMenu db={db} view={activeView} count={filterCount} />
+        <FilterMenu key={activeView._id} db={db} view={activeView} count={filterCount} />
         <SortMenu db={db} view={activeView} count={sortCount} />
         <PropsMenu db={db} view={activeView} />
         <DbConfigMenu db={db} />
@@ -283,29 +283,23 @@ function FilterMenu({ db, view, count }: { db: Doc<"databases">; view: Doc<"view
   const updateView = useMutation(api.views.update);
   const props = db.properties as PropertyDef[];
   const filters = (view.filters as FilterConfig | undefined) ?? { conjunction: "and", rules: [] };
-  // WHY: every change sends the whole filter config. Two quick changes (type a value, then
-  // click "Add filter") would otherwise build the second from the server copy that does not
-  // have the first yet, and undo it. So: the last config sent stays the base until the
-  // server copy matches it, and values still being typed are merged into every change.
-  const sent = useRef<FilterConfig | null>(null);
+  // WHY: every change sends the whole filter config, so a value still being typed (or sent
+  // but not yet back from the server) must be carried by any other change made meanwhile,
+  // or that change would write the old value back. A typed value is dropped once the server
+  // copy shows it. This menu is keyed by view, so nothing carries across views.
   const typing = useRef(new Map<number, FilterRule["value"]>());
   useEffect(() => {
-    if (sent.current && JSON.stringify(sent.current) === JSON.stringify(filters)) sent.current = null;
+    filters.rules.forEach((r, j) => {
+      if (typing.current.get(j) === r.value) typing.current.delete(j);
+    });
   }, [filters]);
 
-  function current(): FilterConfig {
-    const base = sent.current ?? filters;
-    return {
-      ...base,
-      rules: base.rules.map((r, j) => (typing.current.has(j) ? { ...r, value: typing.current.get(j) } : r)),
-    };
-  }
-
   function save(change: (config: FilterConfig) => FilterConfig) {
-    const next = change(current());
-    typing.current.clear();
-    sent.current = next;
-    void updateView({ viewId: view._id, filters: next });
+    const withTyping = {
+      ...filters,
+      rules: filters.rules.map((r, j) => (typing.current.has(j) ? { ...r, value: typing.current.get(j) } : r)),
+    };
+    void updateView({ viewId: view._id, filters: change(withTyping) });
   }
 
   return (
