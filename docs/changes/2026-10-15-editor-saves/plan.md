@@ -140,3 +140,20 @@ departures from the plan text.
   rule today; CI runs oxlint, not ESLint.
 - **Title editors keyed by document** (`PageHeader`, `RowPeekInner`) so a pending title
   debounce flushes on switch instead of being replaced by the next page's call.
+- **Codex review round 1 (`4ec9ef8`): GATE FAIL, one [P1] and one [P2], both fixed.**
+  - [P1] A value already in the save queue behind an active save, or a Retry, could still
+    be sent while the conflict bar was open. The queue gained `hold`/`release`/
+    `discardPending`; a conflict holds it (flush included), "Keep mine" releases and sends
+    the local version, "Load latest" drops the held value and rewrites the loaded version
+    after any save still in flight. Two failing-first unit tests (`queue.hold is not a
+    function`), then 6/6. Exercised by unit test only: the slow-save timing is not
+    reproducible by hand.
+  - [P2] Valid JSON holding a block BlockNote cannot build (`[{"type":"unknown-block"}]`)
+    threw inside `replaceBlocks` with no error boundary. `applyServer` now catches it and
+    keeps the current document (live: the conflict bar offered only "Keep mine" and the
+    console logged `Could not load the latest copy of …`); a `LoadGuard` boundary covers
+    the same input at mount, which crashes the whole app on `main` (live: the page opened
+    read-only showing the stored JSON).
+  - ESLint `react-hooks/set-state-in-effect` is disabled for the one effect that reacts to
+    the server copy changing, with the reason in the code.
+  - Suite after the fixes: 79/79.

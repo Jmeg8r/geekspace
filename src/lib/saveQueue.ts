@@ -9,12 +9,15 @@ export function createSaveQueue(
   let pending: string | undefined;
   let active: Promise<void> | undefined;
   let failed = false;
+  // While held (a conflict is open), nothing is sent, not even by an explicit flush.
+  let held = false;
 
   const flush = (): Promise<void> => {
     if (active) return active;
+    if (held) return Promise.resolve();
     failed = false;
     active = (async () => {
-      while (pending !== undefined) {
+      while (pending !== undefined && !held) {
         const value = pending;
         pending = undefined;
         try {
@@ -30,7 +33,7 @@ export function createSaveQueue(
       }
     })().finally(() => {
       active = undefined;
-      if (!failed && pending !== undefined) void flush();
+      if (!failed && !held && pending !== undefined) void flush();
     });
     return active;
   };
@@ -40,9 +43,19 @@ export function createSaveQueue(
       pending = value;
       // After a failure, wait for an explicit retry (flush) instead of hammering a
       // backend that just rejected us; the newest value is held meanwhile.
-      if (!failed) void flush();
+      if (!failed && !held) void flush();
     },
     flush,
+    hold() {
+      held = true;
+    },
+    release() {
+      held = false;
+    },
+    /** Forget a value that is waiting to be sent (not one already in flight). */
+    discardPending() {
+      pending = undefined;
+    },
     hasUnsaved: () => pending !== undefined || active !== undefined,
   };
 }

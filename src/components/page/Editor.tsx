@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Component, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useCreateBlockNote } from "@blocknote/react";
 import { BlockNoteView } from "@blocknote/mantine";
 import type { PartialBlock } from "@blocknote/core";
@@ -75,7 +75,30 @@ export function Editor(props: EditorProps) {
   });
 
   if (!start.readable) return <UnreadableDocument original={props.content ?? ""} />;
-  return <EditableDocument {...props} initialBlocks={start.blocks} restoredDraft={start.draft} />;
+  return (
+    <LoadGuard documentId={props.documentId} original={props.content ?? ""}>
+      <EditableDocument {...props} initialBlocks={start.blocks} restoredDraft={start.draft} />
+    </LoadGuard>
+  );
+}
+
+// WHY: JSON that parses can still hold blocks BlockNote cannot build (an unknown block
+// type), and it throws while mounting. Without this the whole app unmounts; with it the
+// page opens read-only like any other unreadable content.
+class LoadGuard extends Component<
+  { documentId: string; original: string; children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(error: Error) {
+    console.error(`Could not open document ${this.props.documentId}`, error);
+  }
+  render() {
+    return this.state.failed ? <UnreadableDocument original={this.props.original} /> : this.props.children;
+  }
 }
 
 function EditableDocument({
@@ -168,7 +191,14 @@ function EditableDocument({
   function applyServer(value: string | undefined): boolean {
     const parsed = parseDocument(value);
     if (!parsed.ok) return false;
-    setDocument(parsed.blocks);
+    try {
+      setDocument(parsed.blocks);
+    } catch (error) {
+      // Valid JSON that BlockNote cannot load (an unknown block type, say): keep the
+      // document on screen and report the incoming copy as unreadable instead of crashing.
+      console.error(`Could not load the latest copy of ${documentId}`, error);
+      return false;
+    }
     lastSynced.current = value;
     latestLocal.current = undefined;
     dirty.current = false;
@@ -181,6 +211,20 @@ function EditableDocument({
     return true;
   }
 
+  // Unsaved edits meet a change made elsewhere (or that change cannot be loaded): send
+  // nothing, not even a value already queued or a Retry, until the user decides, so
+  // neither version is overwritten silently. A save already in flight cannot be recalled;
+  // the choice below rewrites whichever version wins after it.
+  function openConflict(incoming: string | undefined, readable: boolean) {
+    paused.current = true;
+    saver.current.cancel();
+    queue().hold();
+    setBar({ kind: "conflict", incoming, readable });
+  }
+
+  // Showing the conflict bar is this effect's job: it reacts to the server copy changing,
+  // an outside event, not to state derivable during render.
+  /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (content === inFlight.current) {
       lastSynced.current = content;
@@ -192,14 +236,15 @@ function EditableDocument({
       dirty: dirty.current || paused.current,
     });
     if (action === "ignore") return;
-    if (action === "apply" && applyServer(content)) return;
-    // Unsaved edits meet a change made elsewhere (or that change cannot be read): stop
-    // sending until the user decides, so neither version is overwritten silently.
-    paused.current = true;
-    saver.current.cancel();
-    setBar({ kind: "conflict", incoming: content, readable: parseDocument(content).ok });
+    if (action === "apply") {
+      if (applyServer(content)) return;
+      openConflict(content, false);
+      return;
+    }
+    openConflict(content, parseDocument(content).ok);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the server copy only
   }, [content]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   function keepMine() {
     paused.current = false;
@@ -207,13 +252,20 @@ function EditableDocument({
     const json = JSON.stringify(editor.document);
     latestLocal.current = json;
     dirty.current = true;
+    queue().release();
     queue().enqueue(json);
     setBar(null);
   }
 
   function loadLatest(incoming: string | undefined) {
+    if (!applyServer(incoming)) {
+      setBar({ kind: "conflict", incoming, readable: false });
+      return;
+    }
     paused.current = false;
-    if (!applyServer(incoming)) return;
+    // The held local edit is superseded by the version just loaded.
+    queue().discardPending();
+    queue().release();
     // A save of the old text may still be in flight; write the loaded version after it.
     if (queue().hasUnsaved() && incoming !== undefined) queue().enqueue(incoming);
     setBar(null);

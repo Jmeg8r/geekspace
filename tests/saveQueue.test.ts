@@ -56,6 +56,47 @@ describe("createSaveQueue", () => {
     expect(report).toHaveBeenLastCalledWith(null);
     expect(queue.hasUnsaved()).toBe(false);
   });
+
+  // Codex review of PR #51 [P1]: a value already queued behind an active save must not be
+  // sent while a conflict is open, and Retry must not send it either.
+  it("holds queued values until released, including through flush", async () => {
+    let finish = () => {};
+    const waiting = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const sent: string[] = [];
+    const queue = createSaveQueue(async (value) => {
+      sent.push(value);
+      if (value === "active") await waiting;
+    }, () => {});
+    queue.enqueue("active");
+    queue.enqueue("queued");
+    queue.hold();
+    finish();
+    await queue.flush();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toEqual(["active"]);
+    expect(queue.hasUnsaved()).toBe(true);
+
+    queue.release();
+    await queue.flush();
+    expect(sent).toEqual(["active", "queued"]);
+    expect(queue.hasUnsaved()).toBe(false);
+  });
+
+  it("drops a held value when told to", async () => {
+    const sent: string[] = [];
+    const queue = createSaveQueue(async (value) => {
+      sent.push(value);
+    }, () => {});
+    queue.hold();
+    queue.enqueue("stale");
+    queue.discardPending();
+    queue.release();
+    await queue.flush();
+    expect(sent).toEqual([]);
+    expect(queue.hasUnsaved()).toBe(false);
+  });
 });
 
 describe("editor recovery drafts", () => {
