@@ -17,6 +17,7 @@ import { nextOptionColor, swatchClass } from "../../lib/optionColors";
 import { Popover } from "../common/Popover";
 import { MenuItem, MenuLabel, MenuList, MenuSeparator } from "../common/Menu";
 import { PROP_ICONS, PROP_TYPE_LABELS } from "../common/bits";
+import { DraftInput } from "../common/DraftInput";
 import { PropertyValueCell } from "./cells";
 import type { ViewProps } from "./DatabaseContainer";
 
@@ -234,11 +235,9 @@ function OptionsEditor({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) 
             onClick={() => cycleColor(o)}
             className={cn("h-3.5 w-3.5 shrink-0 rounded-full", swatchClass(o.color))}
           />
-          <input
+          <DraftInput
             value={o.name}
-            onChange={(e) =>
-              save(options.map((x) => (x.id === o.id ? { ...x, name: e.target.value } : x)))
-            }
+            onCommit={(name) => save(options.map((x) => (x.id === o.id ? { ...x, name } : x)))}
             className="min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 text-[13px] outline-none hover:bg-hov focus:bg-hov"
           />
           {def.type === "status" && (

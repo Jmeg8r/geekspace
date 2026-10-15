@@ -30,6 +30,7 @@ import { cn, tzOffsetMin } from "../../lib/utils";
 import { swatchClass } from "../../lib/optionColors";
 import { useUI } from "../../state/ui";
 import { Popover } from "../common/Popover";
+import { DraftInput } from "../common/DraftInput";
 import { MenuItem, MenuLabel, MenuList, MenuSeparator } from "../common/Menu";
 import { VIEW_ICONS } from "../common/bits";
 import { TableView } from "./TableView";
@@ -436,9 +437,9 @@ function FilterValueInput({
     );
   }
   return (
-    <input
+    <DraftInput
       value={String(value ?? "")}
-      onChange={(e) => onChange(e.target.value)}
+      onCommit={onChange}
       placeholder="Value"
       className="flex-1 rounded border border-border bg-surface px-1.5 py-1 text-[12px] outline-none"
     />
@@ -454,7 +455,7 @@ function RelationValueSelect({
   value: string | number | undefined;
   onChange: (v: string | number | undefined) => void;
 }) {
-  const data = useQuery(api.rows.list, {
+  const titles = useQuery(api.rows.listTitles, {
     databaseId: def.relation!.databaseId as Id<"databases">,
   });
   return (
@@ -464,7 +465,7 @@ function RelationValueSelect({
       className="flex-1 rounded border border-border bg-surface px-1 py-1 text-[12px] outline-none"
     >
       <option value="">Choose…</option>
-      {(data?.rows ?? []).map((r) => (
+      {(titles ?? []).map((r) => (
         <option key={r._id} value={r._id}>
           {r.title || "Untitled"}
         </option>

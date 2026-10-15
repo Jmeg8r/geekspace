@@ -35,11 +35,16 @@ async function enrichRows(
       for (const id of ids) refIds.add(id);
     }
   }
+  // Concurrently: these reads are independent, and a database with many relations used
+  // to await them one by one on every run of the query.
+  const fetched = await Promise.all(
+    [...refIds].map(async (id) => {
+      const rowId = ctx.db.normalizeId("rows", id);
+      return { id, doc: rowId ? await ctx.db.get(rowId) : null };
+    })
+  );
   const refDocs = new Map<string, Doc<"rows">>();
-  for (const id of refIds) {
-    const doc = await ctx.db.get(id as Id<"rows">);
-    if (doc) refDocs.set(id, doc);
-  }
+  for (const { id, doc } of fetched) if (doc) refDocs.set(id, doc);
   const relationTitles: Record<string, string> = {};
   for (const [id, doc] of refDocs) relationTitles[id] = doc.title || "Untitled";
 
@@ -132,7 +137,26 @@ export const list = query({
       .withIndex("by_database", (q) => q.eq("databaseId", args.databaseId))
       .collect();
     rows.sort((a, b) => a.order - b.order);
-    return enrichRows(ctx, db, rows);
+    const enriched = await enrichRows(ctx, db, rows);
+    // Without page bodies: every view and picker subscribes to this query, and a body
+    // would re-send the whole table on each row-page autosave. rows.get carries it.
+    return {
+      ...enriched,
+      rows: enriched.rows.map(({ content: _content, ...row }) => row),
+    };
+  },
+});
+
+// Just enough for relation pickers and filters: id and title, in row order.
+export const listTitles = query({
+  args: { databaseId: v.id("databases") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("rows")
+      .withIndex("by_database", (q) => q.eq("databaseId", args.databaseId))
+      .collect();
+    rows.sort((a, b) => a.order - b.order);
+    return rows.map((row) => ({ _id: row._id, title: row.title }));
   },
 });
 

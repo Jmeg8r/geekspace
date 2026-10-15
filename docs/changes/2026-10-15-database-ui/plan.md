@@ -66,3 +66,39 @@ linear: pending
 - **Virtualising the table now.** Real cost, no need at current sizes.
 - **Removing `content` from rows entirely** (separate table). A schema migration for a
   payload problem a projection solves.
+
+## Deviations
+
+Results of the plan's proofs, run 2026-10-15 on the isolated worktree backend, and the
+departures from the plan text.
+
+- **Failing first (`085c039`):** `rows.list` returned `content`; `rows.listTitles` did not
+  exist. The rollup case passed (it guards the change). After: 3/3; suite 102/102; build
+  passes.
+- **Callers:** the relation picker, relation filter and Docs project list moved to
+  `listTitles`; `DocViewer`'s project list is typed as the new `RowTitle`. The typecheck
+  confirmed nothing in `src/` read `content` from `rows.list`.
+- **Payload proof changed:** Convex sends queries over a WebSocket, so the plan's
+  "network log" check is not available. The unit test proves `content` is absent; the
+  typecheck proves no caller needed it.
+- **Option name (live):** typed "Lowest priority (someday)" in one burst; the input held
+  all 25 characters and the saved option name matched exactly. Restored afterwards.
+- **Timeline (live):** a sticky title column; titles beside bars too short to hold them;
+  ‹ Today › week navigation; a task moved to March 2027 left the grid and showed as
+  "1 later →", which jumped the window there ("← 9 earlier" back). Dragging a bar two days
+  moved its date Oct 16 → Oct 18 (drag maths unchanged). ESLint's `react-hooks` "value
+  cannot be modified" error in the drag handler is on `main` too and was left as is.
+- **Calendar — claim corrected.** The intent said a far-future end date "freezes" the
+  view. Measured for a range ending in 2204: the old loop walked 64,818 days and took
+  ~7 ms per render per such row (plus a map of that size); the clipped loop walks the 17
+  visible days. Real waste, not a freeze.
+- **Settings popover — root cause, wider than described.** The `.fade-in` keyframes
+  animated `transform`, which Floating UI also uses to position every popover, so for the
+  animation's length each popover sat at the window's top-left (at `currentTime = 0`:
+  (1, 3) instead of under the gear). Where animations are slowed it stays there visibly,
+  which is what the walkthrough saw. A first fix animated `translate` instead, which broke
+  the modal (Tailwind v4 centres it with the `translate` property; first frame 380 px off
+  centre). Final: opacity and `scale` only. Verified with the animation frozen at its
+  first frame: popover (495, 270) vs final (502, 273); modal centred at 512 px in both.
+  This fixes every popover and keeps the modal, agent panel, doc viewer, context menu and
+  recorder unaffected.

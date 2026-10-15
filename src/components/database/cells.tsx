@@ -467,9 +467,9 @@ export function RelationPicker({
   onChange: (ids: string[]) => void;
   excludeRowId?: string;
 }) {
-  const data = useQuery(api.rows.list, { databaseId: targetDatabaseId });
+  const titles = useQuery(api.rows.listTitles, { databaseId: targetDatabaseId });
   const [q, setQ] = useState("");
-  const rows = (data?.rows ?? [])
+  const rows = (titles ?? [])
     .filter((r) => r._id !== excludeRowId)
     .filter((r) => (r.title || "Untitled").toLowerCase().includes(q.toLowerCase()));
 
@@ -503,7 +503,7 @@ export function RelationPicker({
         })}
         {rows.length === 0 && (
           <div className="px-2 py-3 text-center text-[12px] text-ink-3">
-            {data === undefined ? "Loading…" : "No rows found"}
+            {titles === undefined ? "Loading…" : "No rows found"}
           </div>
         )}
       </div>

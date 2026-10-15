@@ -3,7 +3,7 @@ import { useMutation } from "convex/react";
 import { Eye, Loader2, Trash2, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import type { RowDoc } from "../../lib/viewLogic";
+import type { RowTitle } from "../../lib/viewLogic";
 import { cn } from "../../lib/utils";
 
 export type DocItem = Doc<"docs"> & { url: string | null };
@@ -22,7 +22,7 @@ export function DocViewer({
   onClose,
 }: {
   doc: DocItem;
-  projectRows: RowDoc[];
+  projectRows: RowTitle[];
   onClose: () => void;
 }) {
   const removeDoc = useMutation(api.docs.remove);

@@ -66,7 +66,11 @@ export function DbCalendarView({ db, view, rows }: ViewProps) {
     if (!dv) continue;
     const startDay = dv.includeTime ? epochToCalendarMs(dv.start) : dv.start;
     const endDay = dv.end !== undefined ? (dv.includeTime ? epochToCalendarMs(dv.end) : dv.end) : startDay;
-    for (let day = startDay; day <= endDay; day += DAY_MS) {
+    // Only the 42 days on screen: a typo like 2206 for 2026 used to walk tens of thousands
+    // of days for one row on every render.
+    const firstShown = Math.max(startDay, cells[0]);
+    const lastShown = Math.min(endDay, cells[cells.length - 1]);
+    for (let day = firstShown; day <= lastShown; day += DAY_MS) {
       const list = itemsByDay.get(day) ?? [];
       list.push(row);
       itemsByDay.set(day, list);
