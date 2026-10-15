@@ -1,9 +1,9 @@
 ---
 change: 2026-10-15-row-integrity
-status: draft
+status: accepted
 track: T1
 author: claude
-accepted_by: pending
+accepted_by: james
 linear: pending
 source: conversation
 ---
