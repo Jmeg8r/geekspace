@@ -49,6 +49,26 @@ describe("attachDocumentSaves", () => {
     second.detach();
   });
 
+  // Codex round 3 [P2]: a reopened editor must see that its document's saves are failing.
+  it("replays a failed save to an editor that attaches later", async () => {
+    const reports: Array<string | null> = [];
+    const first = attachDocumentSaves("doc-failed", {
+      save: () => Promise.reject(new Error("backend said no")),
+    });
+    first.queue.enqueue("lost?");
+    await first.queue.flush();
+    first.detach();
+    const second = attachDocumentSaves("doc-failed", {
+      save: () => Promise.resolve(),
+      report: (e) => reports.push(e),
+    });
+    expect(reports).toEqual(["Error: backend said no"]);
+    await second.queue.flush();
+    expect(reports.at(-1)).toBeNull();
+    expect(second.queue.hasUnsaved()).toBe(false);
+    second.detach();
+  });
+
   it("exposes the value in flight, so its echo is recognised by a new mount", async () => {
     const slow = gate();
     const handle = attachDocumentSaves("doc-flight", { save: () => slow.promise });

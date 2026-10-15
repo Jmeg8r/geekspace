@@ -40,6 +40,9 @@ export function attachDocumentSaves(documentId: string, hooks: DocumentSaveHooks
   entries.set(documentId, entry);
   entry.hooks = hooks;
   entry.mounts += 1;
+  // A save that failed before this editor mounted is still stopped: say so, so it can Retry.
+  const failure = entry.queue.error();
+  if (failure) hooks.report?.(failure);
   return {
     queue: entry.queue,
     detach() {

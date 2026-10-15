@@ -174,3 +174,17 @@ departures from the plan text.
   - Live re-runs: a clean external write applied; a conflict resolved with "Load latest"
     left the server holding the chosen copy; an edit typed just before navigating away
     reached the server.
+- **Codex review round 3 (`3f612af`): GATE FAIL, one [P1] and two [P2], fixed by two
+  structural changes rather than three patches (CLAUDE.md L42 caps fix-review loops):**
+  - One `adopt(value)` path for every "use the server copy" choice. [P1] "Discard" on
+    restored edits now drops the shared queue's pending value (possibly from an earlier
+    mount) and re-saves the server copy when a local save landed meanwhile, exactly as
+    "Load latest" does.
+  - The queue attachment and its debounced saver are created by an effect keyed on
+    `documentId` and cleared on cleanup. [P2] StrictMode's dev remount (on in
+    `src/main.tsx`) now re-attaches instead of reusing a detached handle.
+  - [P2] The save queue records its last error; attaching replays it, so a page reopened
+    after a failed save shows Retry, and "Keep them" also retries a stopped queue.
+    Failing-first test: `expected [] to equal ["Error: backend said no"]`.
+  - Suite 86/86; ESLint clean on the editor. Live, in the StrictMode dev build: a typed
+    edit saved and its draft cleared; a clean external write applied; no console errors.

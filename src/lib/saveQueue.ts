@@ -10,6 +10,7 @@ export function createSaveQueue(
   let sending: string | undefined;
   let active: Promise<void> | undefined;
   let failed = false;
+  let lastError: string | null = null;
   // While held (a conflict is open), nothing is sent, not even by an explicit flush.
   let held = false;
 
@@ -24,12 +25,14 @@ export function createSaveQueue(
         sending = value;
         try {
           await save(value);
+          lastError = null;
           report(null);
         } catch (error) {
           // Keep this value unless a newer edit arrived while it was in flight.
           if (pending === undefined) pending = value;
           failed = true;
-          report(String(error));
+          lastError = String(error);
+          report(lastError);
           break;
         }
       }
@@ -62,5 +65,7 @@ export function createSaveQueue(
     hasUnsaved: () => pending !== undefined || active !== undefined,
     /** The value being sent right now, so its echo from the server can be recognised. */
     inFlight: () => sending,
+    /** The last save error while the queue is stopped on it, else null. */
+    error: () => (failed ? lastError : null),
   };
 }

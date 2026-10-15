@@ -5,7 +5,7 @@ import type { PartialBlock } from "@blocknote/core";
 import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 import { uploadFile } from "../../lib/uploadFile";
-import { debounce } from "../../lib/utils";
+import { debounce, type Debounced } from "../../lib/utils";
 import { attachDocumentSaves } from "../../lib/documentSaves";
 import { acknowledgeDraft, discardDraft, readDraft, retainDraft } from "../../lib/editorDraft";
 import { decideIncoming, mustResave } from "../../lib/incomingContent";
@@ -140,11 +140,20 @@ function EditableDocument({
     contentRef.current = content;
     onSaveRef.current = onSave;
   });
-  // Created on first use from an event or effect, never during render. Shared with any
-  // other mount of this document (see documentSaves.ts).
+  // This document's save queue, shared with any other mount of it (see documentSaves.ts).
+  // Attached by the effect below and cleared on cleanup, so StrictMode's dev remount and a
+  // real reopen both attach afresh.
   const savesRef = useRef<ReturnType<typeof attachDocumentSaves> | null>(null);
-  const queue = () =>
-    (savesRef.current ??= attachDocumentSaves(documentId, {
+  const queue = () => {
+    const handle = savesRef.current;
+    if (!handle) throw new Error(`Save queue for ${documentId} used while detached`);
+    return handle.queue;
+  };
+  // The debounced saver lives exactly as long as the attachment it feeds.
+  const saverRef = useRef<Debounced<[string]> | null>(null);
+
+  useEffect(() => {
+    const handle = attachDocumentSaves(documentId, {
       save: async (json) => {
         const slow = setTimeout(() => setWaiting(true), SLOW_SAVE_MS);
         try {
@@ -165,11 +174,10 @@ function EditableDocument({
         }
       },
       report: setSaveError,
-    })).queue;
-  const saver = useRef(debounce((json: string) => queue().enqueue(json), SAVE_DEBOUNCE_MS));
-
-  useEffect(() => {
-    const pending = saver.current;
+    });
+    savesRef.current = handle;
+    const pending = debounce((json: string) => handle.queue.enqueue(json), SAVE_DEBOUNCE_MS);
+    saverRef.current = pending;
     // Drafts already hold every edit, so leaving only needs to push the last one out; a
     // close prompt here would block quitting the Electron window without a dialog.
     const leave = () => pending.flush();
@@ -180,14 +188,16 @@ function EditableDocument({
         // Leaving with a conflict open: send nothing. The local edit stays in the recovery
         // draft, and reopening the page offers it against the server copy.
         pending.cancel();
-        savesRef.current?.queue.discardPending();
-        savesRef.current?.queue.release();
+        handle.queue.discardPending();
+        handle.queue.release();
       } else {
         pending.flush();
       }
-      savesRef.current?.detach();
+      handle.detach();
+      savesRef.current = null;
+      saverRef.current = null;
     };
-  }, []);
+  }, [documentId]);
 
   function setDocument(blocks: PartialBlock[] | undefined) {
     applying.current = true;
@@ -228,7 +238,7 @@ function EditableDocument({
   // the choice below rewrites whichever version wins after it.
   function openConflict(incoming: string | undefined, readable: boolean) {
     paused.current = true;
-    saver.current.cancel();
+    saverRef.current?.cancel();
     queue().hold();
     setBar({ kind: "conflict", incoming, readable });
   }
@@ -268,21 +278,23 @@ function EditableDocument({
     setBar(null);
   }
 
-  function loadLatest(incoming: string | undefined) {
-    if (!applyServer(incoming)) {
-      setBar({ kind: "conflict", incoming, readable: false });
-      return;
-    }
+  // The user picked the server's copy (Load latest, or Discard on restored edits): show it,
+  // drop any local edit still waiting in the shared queue (possibly from an earlier mount),
+  // and write the copy back if a local save landed meanwhile or is still in flight.
+  function adopt(value: string | undefined): boolean {
+    if (!applyServer(value)) return false;
     paused.current = false;
-    // The held local edit is superseded by the version just loaded.
     queue().discardPending();
     queue().release();
-    // A local save may have landed meanwhile, or still be in flight: write the chosen copy
-    // back unless the server already holds it.
-    if (mustResave({ chosen: incoming, serverNow: contentRef.current, saving: queue().hasUnsaved() })) {
-      queue().enqueue(incoming ?? "");
+    if (mustResave({ chosen: value, serverNow: contentRef.current, saving: queue().hasUnsaved() })) {
+      queue().enqueue(value ?? "");
     }
-    setBar(null);
+    return true;
+  }
+
+  function loadLatest(incoming: string | undefined) {
+    if (adopt(incoming)) setBar(null);
+    else setBar({ kind: "conflict", incoming, readable: false });
   }
 
   return (
@@ -292,8 +304,10 @@ function EditableDocument({
           Restored edits that were not saved last time.
           <NoticeButton
             onClick={() => {
-              saver.current(JSON.stringify(editor.document));
-              saver.current.flush();
+              saverRef.current?.(JSON.stringify(editor.document));
+              saverRef.current?.flush();
+              // Also retries a queue stopped on an earlier failure.
+              void queue().flush();
               setBar(null);
             }}
           >
@@ -301,7 +315,7 @@ function EditableDocument({
           </NoticeButton>
           <NoticeButton
             onClick={() => {
-              if (applyServer(contentRef.current)) setBar(null);
+              if (adopt(contentRef.current)) setBar(null);
             }}
           >
             Discard
@@ -346,7 +360,7 @@ function EditableDocument({
             setSaveError(`could not keep a recovery copy (${String(error)})`);
           }
           setBar((current) => (current?.kind === "restored" ? null : current));
-          if (!paused.current) saver.current(json);
+          if (!paused.current) saverRef.current?.(json);
         }}
       />
     </>
