@@ -107,3 +107,12 @@ departures from the plan text.
   bypasses the writer. Each writes both sides of the relations it sets; left as is.
 - **Noticed, not fixed here:** the database settings popover (gear icon) opens at the
   window's top-left over the sidebar, partly off-screen. Logged for PR 3b.
+- **Codex review round 1 (`27e3279`): GATE PASS, one [P2], fixed** — a regression this
+  change introduced. The date picker moved a range by first sending a new start with the
+  old end (`{start: Oct 10, end: Oct 3}`), which the new validation rejects; the second
+  click then paired with the old start. New `src/lib/dateRange.ts` `pickDay`: a new start
+  collapses the end onto it, and the picker keeps its own pending start for the second
+  click. `emit` also clamps the end to the start, so a later start time on the same day
+  cannot produce a reversed range either. Failing-first test (`Cannot find module`), then
+  3/3; suite 97/97. Live: a range Oct 19–21 moved with two clicks to Oct 26–29, with no
+  rejected mutation.
