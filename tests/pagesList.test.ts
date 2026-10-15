@@ -56,3 +56,25 @@ describe("pages.list", () => {
     expect(restored.find((p) => p.title === "Child")?.favorite).toBe(true);
   });
 });
+
+describe("pages.move", () => {
+  it("reorders top-level pages through the parent index", async () => {
+    const { t, ids } = await tree();
+    await t.mutation(api.pages.move, { pageId: ids.other, index: 0 });
+    const roots = (await t.query(api.pages.list, {}))
+      .filter((p) => !p.parentId)
+      .sort((a, b) => a.order - b.order)
+      .map((p) => p.title);
+    expect(roots).toEqual(["Other", "Root"]);
+  });
+
+  it("moves a page under a new parent", async () => {
+    const { t, ids } = await tree();
+    await t.mutation(api.pages.move, { pageId: ids.other, newParentId: ids.child, index: 0 });
+    const kids = (await t.query(api.pages.list, {}))
+      .filter((p) => p.parentId === ids.child)
+      .sort((a, b) => a.order - b.order)
+      .map((p) => p.title);
+    expect(kids).toEqual(["Other", "Grandchild"]);
+  });
+});

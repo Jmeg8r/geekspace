@@ -8,11 +8,30 @@ import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
 // subtree roots — children of a trashed page become unreachable in the tree
 // (they only render under their parent) and return when the root is restored.
 
+// The page tree the sidebar, Home and MCP read: every page that is not trashed and has
+// no trashed ancestor, without its body. WHY no body: nothing reading the tree uses it,
+// and each autosave would otherwise re-send every page's content to every subscriber.
 export const list = query({
   args: {},
   handler: async (ctx) => {
     const pages = await ctx.db.query("pages").collect();
-    return pages.filter((p) => !p.trashed);
+    const byId = new Map(pages.map((p) => [p._id, p]));
+    const hidden = new Map<Id<"pages">, boolean>();
+    const isHidden = (page: Doc<"pages">, seen = new Set<Id<"pages">>()): boolean => {
+      const known = hidden.get(page._id);
+      if (known !== undefined) return known;
+      if (page.trashed) return true;
+      // A missing parent (deleted forever) or a cycle leaves the page as it was before.
+      const parent = page.parentId ? byId.get(page.parentId) : undefined;
+      if (!parent || seen.has(page._id)) return false;
+      seen.add(page._id);
+      const result = isHidden(parent, seen);
+      hidden.set(page._id, result);
+      return result;
+    };
+    return pages
+      .filter((p) => !isHidden(p))
+      .map(({ content: _content, ...rest }) => rest);
   },
 });
 
@@ -186,9 +205,12 @@ export const move = mutation({
     }
 
     // Destination siblings: same parent, non-trashed, excluding the moved page.
-    const all = await ctx.db.query("pages").collect();
-    const siblings = all
-      .filter((p) => !p.trashed && p._id !== args.pageId && p.parentId === newParentId)
+    const level = await ctx.db
+      .query("pages")
+      .withIndex("by_parent", (q) => q.eq("parentId", newParentId))
+      .collect();
+    const siblings = level
+      .filter((p) => !p.trashed && p._id !== args.pageId)
       .sort((a, b) => a.order - b.order);
 
     const idx = Math.max(0, Math.min(args.index, siblings.length));
