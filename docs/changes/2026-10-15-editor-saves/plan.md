@@ -188,3 +188,13 @@ departures from the plan text.
     Failing-first test: `expected [] to equal ["Error: backend said no"]`.
   - Suite 86/86; ESLint clean on the editor. Live, in the StrictMode dev build: a typed
     edit saved and its draft cleared; a clean external write applied; no console errors.
+- **Codex review round 4 (`386b4ba`): GATE PASS (no P0/P1), two [P2], both fixed.**
+  - [P2] A save finishing after its editor left the page never cleared its recovery draft,
+    because draft acknowledgement lived in the mounted editor's `saved` callback. Live
+    failing first: type, leave immediately, 1 draft left. Acknowledgement moved into the
+    `save` hook, which keeps running after detach. Re-run: saved, 0 drafts.
+  - [P2] When "Load latest" has to re-save the chosen copy, that copy is now the recovery
+    draft (and the editor is dirty) until the repair write lands, so a reload in between
+    still offers it. Exercised by reasoning and the suite only; the gated double-save
+    timing is not reproducible by hand.
+  - Suite 86/86.

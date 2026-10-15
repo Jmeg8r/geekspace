@@ -162,16 +162,18 @@ function EditableDocument({
           clearTimeout(slow);
           setWaiting(false);
         }
-      },
-      saved: (json) => {
-        lastSynced.current = json;
-        if (latestLocal.current === json) dirty.current = false;
+        // Here, not in `saved`: this hook keeps running after the editor detaches, so a
+        // save that finishes after leaving the page still clears its own draft.
         const storage = localDrafts();
         try {
           if (storage) acknowledgeDraft(storage, documentId, json);
         } catch (error) {
           console.warn(`Could not clear the recovery draft for ${documentId}`, error);
         }
+      },
+      saved: (json) => {
+        lastSynced.current = json;
+        if (latestLocal.current === json) dirty.current = false;
       },
       report: setSaveError,
     });
@@ -287,7 +289,18 @@ function EditableDocument({
     queue().discardPending();
     queue().release();
     if (mustResave({ chosen: value, serverNow: contentRef.current, saving: queue().hasUnsaved() })) {
-      queue().enqueue(value ?? "");
+      // Until this repair write lands, the chosen copy is an unsaved edit like any other:
+      // keep it as the recovery draft so a reload before then still offers it.
+      const chosen = value ?? "";
+      latestLocal.current = chosen;
+      dirty.current = true;
+      const storage = localDrafts();
+      try {
+        if (storage) retainDraft(storage, documentId, chosen);
+      } catch (error) {
+        setSaveError(`could not keep a recovery copy (${String(error)})`);
+      }
+      queue().enqueue(chosen);
     }
     return true;
   }
