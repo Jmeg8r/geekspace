@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { ArrowUpRight, EyeOff, Plus, Trash2, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
@@ -214,9 +214,24 @@ function OptionsEditor({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) 
   const updateProperty = useMutation(api.databases.updateProperty);
   const [newName, setNewName] = useState("");
   const options = def.options ?? [];
+  // Names still being typed, by option id. Every save sends the whole options list, so a
+  // colour or group change made before a rename lands must carry the rename too, or it
+  // would write the old name back over it.
+  const pendingNames = useRef(new Map<string, string>());
+  // A pending name is dropped once the server copy shows it, not when it is sent: a save in
+  // between still has to carry it.
+  useEffect(() => {
+    for (const o of options) {
+      if (pendingNames.current.get(o.id) === o.name) pendingNames.current.delete(o.id);
+    }
+  }, [options]);
 
   function save(next: SelectOption[]) {
-    void updateProperty({ databaseId: db._id, propId: def.id, options: next });
+    const withPending = next.map((o) => {
+      const name = pendingNames.current.get(o.id);
+      return name === undefined ? o : { ...o, name };
+    });
+    void updateProperty({ databaseId: db._id, propId: def.id, options: withPending });
   }
 
   function cycleColor(o: SelectOption) {
@@ -237,6 +252,7 @@ function OptionsEditor({ def, db }: { def: PropertyDef; db: Doc<"databases"> }) 
           />
           <DraftInput
             value={o.name}
+            onDraftChange={(name) => pendingNames.current.set(o.id, name)}
             onCommit={(name) => save(options.map((x) => (x.id === o.id ? { ...x, name } : x)))}
             className="min-w-0 flex-1 rounded bg-transparent px-1 py-0.5 text-[13px] outline-none hover:bg-hov focus:bg-hov"
           />

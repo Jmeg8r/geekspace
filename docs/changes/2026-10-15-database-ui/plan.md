@@ -102,3 +102,15 @@ departures from the plan text.
   first frame: popover (495, 270) vs final (502, 273); modal centred at 512 px in both.
   This fixes every popover and keeps the modal, agent panel, doc viewer, context menu and
   recorder unaffected.
+- **Codex review round 1 (`7ea678d`): GATE PASS, four [P2], all fixed and checked live.**
+  - Rename then colour: every options save now carries names still being typed, and a
+    pending name is dropped only once the server copy shows it. My first version dropped it
+    on send, and the live probe (rename, blur, colour click at once) lost the rename;
+    after the fix the server held `Low (later)` in the new colour.
+  - Outside change while focused: `DraftInput` keeps the newest outside value and shows it
+    on blur when nothing was typed. Live: focused, renamed from the CLI, blurred → the
+    input showed the new name.
+  - Resize handle on a clipped bar: shown only when the real end is on screen. Live: the
+    clipped bar had 0 handles, a bar with a visible end had 1.
+  - Today and the jump chips scroll back to the start. Live: 900 px → 0 on Today.
+  - Suite 102/102.

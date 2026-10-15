@@ -79,6 +79,12 @@ export function TimelineView({ db, view, rows }: ViewProps) {
   const later = scheduled.filter((s) => s.startDay > rangeEnd);
   const visible = scheduled.filter((s) => s.endDay >= rangeStart && s.startDay <= rangeEnd);
   const weeksUntil = (day: number) => Math.floor((day - rangeStart) / WEEK_MS);
+  // Today and the jump chips put their target in the window's first weeks, so scroll back to
+  // the start or it can stay hidden behind the title column.
+  function jumpTo(offset: number) {
+    setWeekOffset(offset);
+    scrollRef.current?.scrollTo({ left: 0 });
+  }
 
   // Dependency arrows (Blocked by): blocker bar end → blocked bar start.
   const blockedByPropId = db.taskConfig?.blockedByPropId;
@@ -159,7 +165,7 @@ export function TimelineView({ db, view, rows }: ViewProps) {
           <ChevronLeft size={14} />
         </button>
         <button
-          onClick={() => setWeekOffset(0)}
+          onClick={() => jumpTo(0)}
           className="rounded-md px-2 py-0.5 text-ink-2 hover:bg-hov"
         >
           Today
@@ -173,7 +179,7 @@ export function TimelineView({ db, view, rows }: ViewProps) {
         </button>
         {earlier.length > 0 && (
           <button
-            onClick={() => setWeekOffset((w) => w + weeksUntil(earlier[earlier.length - 1].startDay))}
+            onClick={() => jumpTo(weekOffset + weeksUntil(earlier[earlier.length - 1].startDay))}
             className="rounded-md border border-border px-2 py-0.5 text-ink-2 hover:bg-hov"
           >
             ← {earlier.length} earlier
@@ -181,7 +187,7 @@ export function TimelineView({ db, view, rows }: ViewProps) {
         )}
         {later.length > 0 && (
           <button
-            onClick={() => setWeekOffset((w) => w + weeksUntil(later[0].startDay))}
+            onClick={() => jumpTo(weekOffset + weeksUntil(later[0].startDay))}
             className="rounded-md border border-border px-2 py-0.5 text-ink-2 hover:bg-hov"
           >
             {later.length} later →
@@ -291,10 +297,14 @@ export function TimelineView({ db, view, rows }: ViewProps) {
                       onClick={() => !drag && openRow(row._id)}
                     >
                       {fits && <span className="truncate">{title}</span>}
-                      <span
-                        className="absolute -right-0.5 top-0 h-full w-2.5 cursor-ew-resize rounded-r-md opacity-0 group-hover:opacity-100 group-hover:bg-white/30"
-                        onPointerDown={(ev) => startDrag(ev, row._id, "resize", { startDay, endDay })}
-                      />
+                      {/* Only when the real end is on screen: on a bar clipped at the window edge the
+                          handle would sit at the edge but move the off-screen end. */}
+                      {endDay <= rangeEnd && (
+                        <span
+                          className="absolute -right-0.5 top-0 h-full w-2.5 cursor-ew-resize rounded-r-md opacity-0 group-hover:opacity-100 group-hover:bg-white/30"
+                          onPointerDown={(ev) => startDrag(ev, row._id, "resize", { startDay, endDay })}
+                        />
+                      )}
                     </div>
                     {!fits && (
                       <span className="pointer-events-none whitespace-nowrap pl-1.5 text-[12px] text-ink-2">

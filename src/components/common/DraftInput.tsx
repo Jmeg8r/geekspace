@@ -12,11 +12,17 @@ const SAVE_PAUSE_MS = 400;
 type DraftInputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "onChange"> & {
   value: string;
   onCommit: (value: string) => void;
+  /** Every local change, before it is saved (for siblings that save the same record). */
+  onDraftChange?: (value: string) => void;
 };
 
-export function DraftInput({ value, onCommit, onBlur, onFocus, ...rest }: DraftInputProps) {
+export function DraftInput({ value, onCommit, onDraftChange, onBlur, onFocus, ...rest }: DraftInputProps) {
   const [draft, setDraft] = useState(value);
   const focused = useRef(false);
+  // The newest outside value, kept while focused so blur can show it.
+  const external = useRef(value);
+  // Whether the draft holds a local edit not yet handed to onCommit.
+  const edited = useRef(false);
   const commitRef = useRef(onCommit);
   const lastSent = useRef(value);
   const saver = useRef<Debounced<[string]> | null>(null);
@@ -27,6 +33,7 @@ export function DraftInput({ value, onCommit, onBlur, onFocus, ...rest }: DraftI
 
   // Take outside changes (another window, the agent) only while the user is not typing.
   useEffect(() => {
+    external.current = value;
     if (focused.current) return;
     lastSent.current = value;
     setDraft(value);
@@ -34,6 +41,7 @@ export function DraftInput({ value, onCommit, onBlur, onFocus, ...rest }: DraftI
 
   useEffect(() => {
     const pending = debounce((next: string) => {
+      edited.current = false;
       if (next === lastSent.current) return;
       lastSent.current = next;
       commitRef.current(next);
@@ -50,7 +58,9 @@ export function DraftInput({ value, onCommit, onBlur, onFocus, ...rest }: DraftI
       {...rest}
       value={draft}
       onChange={(e) => {
+        edited.current = true;
         setDraft(e.target.value);
+        onDraftChange?.(e.target.value);
         saver.current?.(e.target.value);
       }}
       onFocus={(e) => {
@@ -59,7 +69,13 @@ export function DraftInput({ value, onCommit, onBlur, onFocus, ...rest }: DraftI
       }}
       onBlur={(e) => {
         focused.current = false;
+        const hadEdit = edited.current;
         saver.current?.flush();
+        // Nothing typed here: show whatever changed elsewhere while it was focused.
+        if (!hadEdit && external.current !== draft) {
+          lastSent.current = external.current;
+          setDraft(external.current);
+        }
         onBlur?.(e);
       }}
     />
