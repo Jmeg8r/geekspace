@@ -7,6 +7,7 @@ export function createSaveQueue(
   report: (error: string | null) => void
 ) {
   let pending: string | undefined;
+  let sending: string | undefined;
   let active: Promise<void> | undefined;
   let failed = false;
   // While held (a conflict is open), nothing is sent, not even by an explicit flush.
@@ -20,6 +21,7 @@ export function createSaveQueue(
       while (pending !== undefined && !held) {
         const value = pending;
         pending = undefined;
+        sending = value;
         try {
           await save(value);
           report(null);
@@ -33,6 +35,7 @@ export function createSaveQueue(
       }
     })().finally(() => {
       active = undefined;
+      sending = undefined;
       if (!failed && !held && pending !== undefined) void flush();
     });
     return active;
@@ -57,5 +60,7 @@ export function createSaveQueue(
       pending = undefined;
     },
     hasUnsaved: () => pending !== undefined || active !== undefined,
+    /** The value being sent right now, so its echo from the server can be recognised. */
+    inFlight: () => sending,
   };
 }

@@ -157,3 +157,20 @@ departures from the plan text.
   - ESLint `react-hooks/set-state-in-effect` is disabled for the one effect that reacts to
     the server copy changing, with the reason in the code.
   - Suite after the fixes: 79/79.
+- **Codex review round 2 (`c19c203`): GATE FAIL, two [P1], both fixed.**
+  - [P1] Each editor mount made its own save queue, and an unmounted editor's queue kept
+    draining: leave mid-save, reopen, type, and an older pending value could land after the
+    newer one. New `src/lib/documentSaves.ts` keeps one queue per document for the life of
+    the window, shared by every mount, reporting to whichever editor is mounted now. The
+    queue exposes `inFlight()`, which replaces the per-mount ref, so a reopened editor also
+    recognises the echo of a save its predecessor sent. Leaving with a conflict open sends
+    nothing (the edit stays in the draft and is offered on reopen).
+  - [P1] "Load latest" re-saved only while a save was outstanding. If a local save had
+    already overwritten the external copy and finished, the button changed the screen only.
+    `mustResave` now re-saves whenever the server copy differs from the chosen one, or a
+    save is in flight.
+  - Failing-first: `tests/documentSaves.test.ts` failed with "Cannot find module"; after
+    the change 85/85.
+  - Live re-runs: a clean external write applied; a conflict resolved with "Load latest"
+    left the server holding the chosen copy; an edit typed just before navigating away
+    reached the server.

@@ -6,9 +6,9 @@ import "@blocknote/core/fonts/inter.css";
 import "@blocknote/mantine/style.css";
 import { uploadFile } from "../../lib/uploadFile";
 import { debounce } from "../../lib/utils";
-import { createSaveQueue } from "../../lib/saveQueue";
+import { attachDocumentSaves } from "../../lib/documentSaves";
 import { acknowledgeDraft, discardDraft, readDraft, retainDraft } from "../../lib/editorDraft";
-import { decideIncoming } from "../../lib/incomingContent";
+import { decideIncoming, mustResave } from "../../lib/incomingContent";
 import { useIsDark } from "../../state/theme";
 
 // WHAT: BlockNote editor wrapper. Mount with key={documentId}. Saves go through a
@@ -114,8 +114,6 @@ function EditableDocument({
 
   // The last server value this editor loaded, saved or chose to override.
   const lastSynced = useRef(content);
-  // The value currently being sent, so its echo from the server is recognised.
-  const inFlight = useRef<string | undefined>(undefined);
   // The newest local edit, and whether it has not reached the server yet.
   const latestLocal = useRef<string | undefined>(restoredDraft ?? undefined);
   const dirty = useRef(restoredDraft !== null);
@@ -142,28 +140,32 @@ function EditableDocument({
     contentRef.current = content;
     onSaveRef.current = onSave;
   });
-  // Created on first use from an event or effect, never during render.
-  const queueRef = useRef<ReturnType<typeof createSaveQueue> | null>(null);
+  // Created on first use from an event or effect, never during render. Shared with any
+  // other mount of this document (see documentSaves.ts).
+  const savesRef = useRef<ReturnType<typeof attachDocumentSaves> | null>(null);
   const queue = () =>
-    (queueRef.current ??= createSaveQueue(async (json) => {
-      inFlight.current = json;
-      const slow = setTimeout(() => setWaiting(true), SLOW_SAVE_MS);
-      try {
-        await onSaveRef.current(json);
-      } finally {
-        clearTimeout(slow);
-        setWaiting(false);
-        inFlight.current = undefined;
-      }
-      lastSynced.current = json;
-      if (latestLocal.current === json) dirty.current = false;
-      const storage = localDrafts();
-      try {
-        if (storage) acknowledgeDraft(storage, documentId, json);
-      } catch (error) {
-        console.warn(`Could not clear the recovery draft for ${documentId}`, error);
-      }
-    }, setSaveError));
+    (savesRef.current ??= attachDocumentSaves(documentId, {
+      save: async (json) => {
+        const slow = setTimeout(() => setWaiting(true), SLOW_SAVE_MS);
+        try {
+          await onSaveRef.current(json);
+        } finally {
+          clearTimeout(slow);
+          setWaiting(false);
+        }
+      },
+      saved: (json) => {
+        lastSynced.current = json;
+        if (latestLocal.current === json) dirty.current = false;
+        const storage = localDrafts();
+        try {
+          if (storage) acknowledgeDraft(storage, documentId, json);
+        } catch (error) {
+          console.warn(`Could not clear the recovery draft for ${documentId}`, error);
+        }
+      },
+      report: setSaveError,
+    })).queue;
   const saver = useRef(debounce((json: string) => queue().enqueue(json), SAVE_DEBOUNCE_MS));
 
   useEffect(() => {
@@ -174,7 +176,16 @@ function EditableDocument({
     window.addEventListener("beforeunload", leave);
     return () => {
       window.removeEventListener("beforeunload", leave);
-      pending.flush();
+      if (paused.current) {
+        // Leaving with a conflict open: send nothing. The local edit stays in the recovery
+        // draft, and reopening the page offers it against the server copy.
+        pending.cancel();
+        savesRef.current?.queue.discardPending();
+        savesRef.current?.queue.release();
+      } else {
+        pending.flush();
+      }
+      savesRef.current?.detach();
     };
   }, []);
 
@@ -226,7 +237,7 @@ function EditableDocument({
   // an outside event, not to state derivable during render.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (content === inFlight.current) {
+    if (content !== undefined && content === queue().inFlight()) {
       lastSynced.current = content;
       return;
     }
@@ -266,8 +277,11 @@ function EditableDocument({
     // The held local edit is superseded by the version just loaded.
     queue().discardPending();
     queue().release();
-    // A save of the old text may still be in flight; write the loaded version after it.
-    if (queue().hasUnsaved() && incoming !== undefined) queue().enqueue(incoming);
+    // A local save may have landed meanwhile, or still be in flight: write the chosen copy
+    // back unless the server already holds it.
+    if (mustResave({ chosen: incoming, serverNow: contentRef.current, saving: queue().hasUnsaved() })) {
+      queue().enqueue(incoming ?? "");
+    }
     setBar(null);
   }
 
