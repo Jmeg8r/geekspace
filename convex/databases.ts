@@ -21,22 +21,70 @@ function defaultStatusOptions(): SelectOption[] {
   ];
 }
 
+// Every type a user may add; "title" is created with the database and never added.
+const addablePropertyType = v.union(
+  v.literal("text"),
+  v.literal("number"),
+  v.literal("select"),
+  v.literal("multiSelect"),
+  v.literal("status"),
+  v.literal("date"),
+  v.literal("checkbox"),
+  v.literal("url"),
+  v.literal("relation"),
+  v.literal("rollup"),
+  v.literal("createdTime"),
+  v.literal("updatedTime")
+);
+
+const selectOption = v.object({
+  id: v.string(),
+  name: v.string(),
+  color: v.string(),
+  group: v.optional(v.union(v.literal("todo"), v.literal("inprogress"), v.literal("complete"))),
+});
+
+const numberFormat = v.union(
+  v.literal("plain"),
+  v.literal("minutes"),
+  v.literal("percent"),
+  v.literal("dollar"),
+  v.literal("progress")
+);
+
+const rollupConfig = v.object({
+  relationPropId: v.string(),
+  targetPropId: v.string(),
+  aggregate: v.union(
+    v.literal("count"),
+    v.literal("countValues"),
+    v.literal("sum"),
+    v.literal("average"),
+    v.literal("min"),
+    v.literal("max"),
+    v.literal("percentComplete")
+  ),
+});
+
 export const addProperty = mutation({
   args: {
     databaseId: v.id("databases"),
-    type: v.string(),
+    type: addablePropertyType,
     name: v.optional(v.string()),
     targetDatabaseId: v.optional(v.id("databases")), // for relation
   },
   handler: async (ctx, args) => {
     const db = await ctx.db.get(args.databaseId);
     if (!db) return null;
+    if (args.type === "relation" && !args.targetDatabaseId) {
+      throw new Error("A relation property needs the database it links to");
+    }
     const props = db.properties as PropertyDef[];
     const propId = makeId();
     const def: PropertyDef = {
       id: propId,
       name: args.name ?? defaultPropName(args.type, props),
-      type: args.type as PropertyDef["type"],
+      type: args.type,
     };
     if (args.type === "select" || args.type === "multiSelect") def.options = [];
     if (args.type === "status") def.options = defaultStatusOptions();
@@ -106,9 +154,9 @@ export const updateProperty = mutation({
     databaseId: v.id("databases"),
     propId: v.string(),
     name: v.optional(v.string()),
-    options: v.optional(v.any()),
-    numberFormat: v.optional(v.string()),
-    rollup: v.optional(v.any()),
+    options: v.optional(v.array(selectOption)),
+    numberFormat: v.optional(numberFormat),
+    rollup: v.optional(rollupConfig),
     includeTime: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -120,7 +168,7 @@ export const updateProperty = mutation({
       if (args.name !== undefined) next.name = args.name;
       if (args.options !== undefined) next.options = args.options;
       if (args.numberFormat !== undefined)
-        next.numberFormat = args.numberFormat as PropertyDef["numberFormat"];
+        next.numberFormat = args.numberFormat;
       if (args.rollup !== undefined) next.rollup = args.rollup;
       if (args.includeTime !== undefined) next.includeTime = args.includeTime;
       return next;
@@ -130,39 +178,46 @@ export const updateProperty = mutation({
 });
 
 export const removeProperty = mutation({
-  args: { databaseId: v.id("databases"), propId: v.string() },
+  args: { databaseId: v.id("databases"), propId: v.string(), tzOffsetMin: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const db = await ctx.db.get(args.databaseId);
     if (!db) return;
     const props = db.properties as PropertyDef[];
     const def = props.find((p) => p.id === args.propId);
     if (!def || def.type === "title") return; // title is permanent
-    await ctx.db.patch(args.databaseId, {
-      properties: props.filter((p) => p.id !== args.propId),
-    });
-    // Clear stored values so stale data doesn't linger.
-    const rows = await ctx.db
-      .query("rows")
-      .withIndex("by_database", (q) => q.eq("databaseId", args.databaseId))
-      .collect();
-    for (const row of rows) {
-      const p = { ...(row.properties ?? {}) };
-      if (args.propId in p) {
-        delete p[args.propId];
-        await ctx.db.patch(row._id, { properties: p });
+    // Which property ids go, per database: this one, plus its synced reverse wherever it
+    // lives, including the same database (Blocked by ⇄ Blocking, Parent task ⇄ Sub-tasks).
+    const removals = new Map<string, Set<string>>([[db._id, new Set([def.id])]]);
+    if (def.relation?.syncedPropId) {
+      const there = removals.get(def.relation.databaseId) ?? new Set<string>();
+      there.add(def.relation.syncedPropId);
+      removals.set(def.relation.databaseId, there);
+    }
+    let touchedTaskSource = false;
+    for (const [rawId, propIds] of removals) {
+      const id = ctx.db.normalizeId("databases", rawId);
+      const target = id ? await ctx.db.get(id) : null;
+      if (!target) continue;
+      if (target.isTaskSource) touchedTaskSource = true;
+      const targetProps: PropertyDef[] = target.properties;
+      await ctx.db.patch(target._id, {
+        properties: targetProps.filter((p) => !propIds.has(p.id)),
+      });
+      // Clear stored values so stale data doesn't linger.
+      const rows = await ctx.db
+        .query("rows")
+        .withIndex("by_database", (q) => q.eq("databaseId", target._id))
+        .collect();
+      for (const row of rows) {
+        const values = { ...row.properties };
+        const had = [...propIds].filter((p) => p in values);
+        if (had.length === 0) continue;
+        for (const p of had) delete values[p];
+        await ctx.db.patch(row._id, { properties: values });
       }
     }
-    // Remove the synced reverse property too.
-    if (def.relation?.syncedPropId && def.relation.databaseId !== args.databaseId) {
-      const target = await ctx.db.get(def.relation.databaseId as typeof args.databaseId);
-      if (target) {
-        await ctx.db.patch(target._id, {
-          properties: (target.properties as PropertyDef[]).filter(
-            (p) => p.id !== def.relation!.syncedPropId
-          ),
-        });
-      }
-    }
+    // A removed dependency or estimate changes what the scheduler may place.
+    if (touchedTaskSource) await runReflow(ctx, args.tzOffsetMin);
   },
 });
 
@@ -189,15 +244,30 @@ export const setTaskSource = mutation({
         datePropId: v.string(),
         estimatePropId: v.string(),
         priorityPropId: v.string(),
+        blockedByPropId: v.optional(v.string()),
+        sprintPropId: v.optional(v.string()),
+        parentPropId: v.optional(v.string()),
       })
     ),
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.databaseId, {
-      isTaskSource: args.isTaskSource,
-      taskConfig: args.taskConfig,
-    });
+    const db = await ctx.db.get(args.databaseId);
+    if (!db) return;
+    // WHY merge: the UI turns task source off with no config and back on with only the
+    // four fields it can auto-detect. Replacing the stored mapping dropped the dependency,
+    // parent and sprint wiring, and dependencies silently stopped shaping the schedule.
+    // Turning it off keeps the mapping; turning it on keeps any field not re-supplied.
+    const taskConfig =
+      args.taskConfig === undefined
+        ? db.taskConfig
+        : {
+            blockedByPropId: db.taskConfig?.blockedByPropId,
+            sprintPropId: db.taskConfig?.sprintPropId,
+            parentPropId: db.taskConfig?.parentPropId,
+            ...args.taskConfig,
+          };
+    await ctx.db.patch(args.databaseId, { isTaskSource: args.isTaskSource, taskConfig });
     await runReflow(ctx, args.tzOffsetMin);
   },
 });

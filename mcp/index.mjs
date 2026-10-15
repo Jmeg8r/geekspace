@@ -331,9 +331,12 @@ tool(
     const got = await convex.query(api.rows.get, { rowId });
     if (!got) throw new Error("Row not found");
     const resolved = resolveProperties(got.database, properties);
-    for (const [propId, value] of Object.entries(resolved)) {
-      await convex.mutation(api.rows.updateProperty, { rowId, propId, value });
-    }
+    // One mutation, so the edit applies whole or not at all. resolveProperties marks a
+    // cleared property as undefined, which Convex drops from objects: send null instead.
+    const changes = Object.fromEntries(
+      Object.entries(resolved).map(([propId, value]) => [propId, value === undefined ? null : value])
+    );
+    await convex.mutation(api.rows.updateProperties, { rowId, changes });
     return `updated ${Object.keys(resolved).length} propert${Object.keys(resolved).length === 1 ? "y" : "ies"}`;
   }
 );

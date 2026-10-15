@@ -36,6 +36,7 @@ export type RollupAggregate =
   | "percentComplete";
 
 export type NumberFormat = "plain" | "minutes" | "percent" | "dollar" | "progress";
+export const NUMBER_FORMATS: readonly NumberFormat[] = ["plain", "minutes", "percent", "dollar", "progress"];
 
 export interface PropertyDef {
   id: string;

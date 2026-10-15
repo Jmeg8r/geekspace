@@ -4,6 +4,7 @@ import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
 import type { PropertyDef } from "../convex/lib/types";
+import { relationIds, type PropertyValue } from "../convex/lib/rowProperties";
 
 // WHAT: row and relation integrity: two-sided relations on create, clean deletes, whole
 // self-relation removal, validated values, task-source wiring that survives a toggle.
@@ -18,6 +19,7 @@ type Seeded = {
   projects: Doc<"databases">;
   prop: (db: Doc<"databases">, name: string) => PropertyDef;
   firstRow: (db: Doc<"databases">) => Promise<Doc<"rows">>;
+  rowsOf: (db: Doc<"databases">) => Promise<Doc<"rows">[]>;
   row: (id: Id<"rows">) => Promise<Doc<"rows"> | null>;
   database: (id: Id<"databases">) => Promise<Doc<"databases"> | null>;
 };
@@ -35,22 +37,24 @@ async function seeded(): Promise<Seeded> {
     if (!found) throw new Error(`no property "${name}" on ${db.name}`);
     return found;
   };
-  const firstRow = async (db: Doc<"databases">) => {
-    const rows = await t.run((ctx) =>
+  const rowsOf = (db: Doc<"databases">) =>
+    t.run((ctx) =>
       ctx.db
         .query("rows")
         .withIndex("by_database", (q) => q.eq("databaseId", db._id))
         .collect()
     );
+  const firstRow = async (db: Doc<"databases">) => {
+    const rows = await rowsOf(db);
     if (!rows[0]) throw new Error(`no rows in ${db.name}`);
     return rows[0];
   };
   const row = (id: Id<"rows">) => t.run((ctx) => ctx.db.get(id));
   const database = (id: Id<"databases">) => t.run((ctx) => ctx.db.get(id));
-  return { t, tasks, projects, prop, firstRow, row, database };
+  return { t, tasks, projects, prop, firstRow, rowsOf, row, database };
 }
 
-const ids = (value: unknown): string[] => (Array.isArray(value) ? value : []);
+const ids = (value: PropertyValue | undefined): string[] => relationIds(value);
 
 describe("rows.create", () => {
   it("syncs the reverse side of relations given at creation", async () => {
@@ -86,12 +90,7 @@ describe("rows.updateProperty / updateProperties", () => {
     const s = await seeded();
     const task = await s.firstRow(s.tasks);
     const otherTask = (
-      await s.t.run((ctx) =>
-        ctx.db
-          .query("rows")
-          .withIndex("by_database", (q) => q.eq("databaseId", s.tasks._id))
-          .collect()
-      )
+      await s.rowsOf(s.tasks)
     )[1];
     const projectProp = s.prop(s.tasks, "Project");
     await expect(
@@ -128,12 +127,7 @@ describe("rows.updateProperty / updateProperties", () => {
         properties: props.filter((p) => p.id !== blockedBy.relation?.syncedPropId),
       });
     });
-    const [a, b] = await s.t.run((ctx) =>
-      ctx.db
-        .query("rows")
-        .withIndex("by_database", (q) => q.eq("databaseId", s.tasks._id))
-        .collect()
-    );
+    const [a, b] = await s.rowsOf(s.tasks);
     await s.t.mutation(api.rows.updateProperty, {
       rowId: a._id,
       propId: blockedBy.id,
@@ -170,12 +164,7 @@ describe("databases.removeProperty", () => {
     const db = await s.database(s.tasks._id);
     const remaining: PropertyDef[] = db?.properties ?? [];
     expect(remaining.map((p) => p.id)).not.toContain(blockingId);
-    const rows = await s.t.run((ctx) =>
-      ctx.db
-        .query("rows")
-        .withIndex("by_database", (q) => q.eq("databaseId", s.tasks._id))
-        .collect()
-    );
+    const rows = await s.rowsOf(s.tasks);
     for (const r of rows) {
       expect(r.properties).not.toHaveProperty(blockedBy.id);
       expect(r.properties).not.toHaveProperty(blockingId);

@@ -71,3 +71,39 @@ linear: pending
   unconditional reflow adds cost to every edit.
 - **Repair half-pairs automatically on read.** Mutating data the user did not touch, from
   a query path; a separate opt-in repair is safer.
+
+## Deviations
+
+Results of the plan's proofs, run 2026-10-15 on the isolated worktree backend, and the
+departures from the plan text.
+
+- **Failing first (`40bb2a9`):** 6 of 8 tests failed for the stated reasons (reverse side
+  not synced on create; a bad status option and an infinite date accepted; a deleted row
+  left in its project's relation; the Blocking half left behind; `blockedByPropId`
+  dropped by the toggle). Two passed on `main`, and why:
+  - the broken-pair test is a guard against #28's throw; `main` does not throw either;
+  - the batch-rollback test passed only because `rows.updateProperties` did not exist yet.
+    After the change it passes on the real behaviour: the failing batch left the row's
+    title unchanged.
+- **Suite:** `npm run verify` 94/94; `npm run build` passes.
+- **`rows.remove` already deleted time blocks on `main`;** the missing part was the inbound
+  relation cleanup, which is what changed.
+- **MCP probe (real stdio server, worktree backend):** `create_row` with a Project, then
+  `update_row` of Status and Priority (one `updateProperties` call). The task appeared
+  under "Home Lab Refresh" in the UI; `rows.remove` then left zero references to its id
+  anywhere (positive control: the project row was still found).
+- **Found while probing:** MCP relation values are row ids. A first probe passed the
+  project's *name*; the new validation rejected it with `"Project" can only link to rows
+  of its related database`. On `main` that name would have been stored as a bogus
+  relation id.
+- **Task-source toggle (UI):** off kept all seven `taskConfig` fields (on `main` it wiped
+  them); on again kept them, and 12 time blocks were rescheduled.
+- **Self-relation removal:** covered by the unit test only, to keep the demo workspace's
+  dependencies intact for the video.
+- **Typecheck-driven UI fixes:** `TableView`'s number-format `<select>` now matches its
+  value against `NUMBER_FORMATS` (new export in `convex/lib/types.ts`) instead of passing
+  a raw string, and the add-property menu's list excludes `title`.
+- **Server code that inserts rows directly** (`seed.ts`, `templates.ts`, `pm.ts`) still
+  bypasses the writer. Each writes both sides of the relations it sets; left as is.
+- **Noticed, not fixed here:** the database settings popover (gear icon) opens at the
+  window's top-left over the sidebar, partly off-screen. Logged for PR 3b.

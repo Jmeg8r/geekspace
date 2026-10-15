@@ -10,7 +10,7 @@ import type {
   SelectOption,
   StatusGroup,
 } from "../../../convex/lib/types";
-import { makeId, OPTION_COLOR_IDS } from "../../../convex/lib/types";
+import { makeId, NUMBER_FORMATS, OPTION_COLOR_IDS } from "../../../convex/lib/types";
 import { useUI } from "../../state/ui";
 import { cn, tzOffsetMin } from "../../lib/utils";
 import { nextOptionColor, swatchClass } from "../../lib/optionColors";
@@ -157,9 +157,10 @@ function PropertyMenu({
           <span className="text-ink-2">Format</span>
           <select
             value={def.numberFormat ?? "plain"}
-            onChange={(e) =>
-              void updateProperty({ databaseId: db._id, propId: def.id, numberFormat: e.target.value })
-            }
+            onChange={(e) => {
+              const format = NUMBER_FORMATS.find((f) => f === e.target.value);
+              if (format) void updateProperty({ databaseId: db._id, propId: def.id, numberFormat: format });
+            }}
             className="rounded border border-border bg-surface px-1 py-0.5 text-[12px] outline-none"
           >
             <option value="plain">Plain</option>
@@ -365,7 +366,7 @@ function AddPropertyButton({ db }: { db: Doc<"databases"> }) {
   const allDbs = useQuery(api.databases.listAll) ?? [];
   const [mode, setMode] = useState<"types" | "relationTarget">("types");
 
-  const types: PropertyType[] = [
+  const types: Exclude<PropertyType, "title">[] = [
     "text", "number", "select", "multiSelect", "status", "date",
     "checkbox", "url", "relation", "rollup", "createdTime", "updatedTime",
   ];
