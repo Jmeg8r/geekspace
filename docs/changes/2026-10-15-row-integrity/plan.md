@@ -129,3 +129,12 @@ departures from the plan text.
   now removes deleted option ids from stored values (multi-select drops the id; select and
   status are cleared) and reflows a task source. Two failing-first tests (`expected
   ['keep','drop'] to equal ['keep']`), then 10/10; suite 99/99.
+- **Codex review round 4 (`bc2e583`): GATE PASS, one [P2], fixed.** An end time changed
+  between the two date clicks was overwritten by the end time remembered from before the
+  first click. An explicit end-time edit now updates the remembered value. Live: Oct 19,
+  end time set to 12:00 mid-selection, then Oct 21 → stored Oct 19 09:00 → Oct 21 12:00.
+  Suite 99/99.
+- **Review loop stopped here** (CLAUDE.md L42: 3–4 rounds). No round raised a P0/P1; each
+  P2 was a real edge case in code this PR touched and was fixed with a test or a live
+  check. The round-4 fix was not sent back to Codex; it is covered by the suite, the live
+  check above and the forge ai-review gate on the PR head.

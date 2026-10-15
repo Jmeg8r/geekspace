@@ -168,7 +168,14 @@ export function DatePicker({
             {rangeMode && endCal !== undefined && (
               <>
                 <span className="text-[11px] text-ink-3">→</span>
-                <TimeSelect value={endMin} onChange={(m) => emit(undefined, undefined, true, undefined, m)} />
+                <TimeSelect
+                  value={endMin}
+                  onChange={(m) => {
+                    // An explicit end time wins over the one remembered across a range pick.
+                    if (pendingEndMin !== undefined) setPendingEndMin(m);
+                    emit(undefined, undefined, true, undefined, m);
+                  }}
+                />
               </>
             )}
           </div>
