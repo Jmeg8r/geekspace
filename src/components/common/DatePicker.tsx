@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { DateValue } from "../../../convex/lib/types";
 import { epochToCalendarMs, calendarToEpochMs, todayCalendarMs } from "../../lib/dates";
 import { cn } from "../../lib/utils";
+import { pickDay } from "../../lib/dateRange";
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 const MONTH_NAMES = [
@@ -40,6 +41,13 @@ export function DatePicker({
   });
   const [rangeMode, setRangeMode] = useState(endCal !== undefined);
   const [pickingEnd, setPickingEnd] = useState(false);
+  // The start the user just clicked, until the end is picked: the server copy in `value`
+  // may not have caught up yet when the second click lands.
+  const [pendingStart, setPendingStart] = useState<number | undefined>(undefined);
+  // The end time before that start was picked: collapsing the range onto one day must not
+  // overwrite it, or a timed range ending earlier in the day than it starts would come
+  // back with the start time as its deadline.
+  const [pendingEndMin, setPendingEndMin] = useState<number | undefined>(undefined);
 
   const includeTime = value?.includeTime === true;
   const startMin = includeTime && value ? minutesOfDay(value.start) : 9 * 60;
@@ -58,16 +66,21 @@ export function DatePicker({
     }
     const it = nextIncludeTime ?? includeTime;
     const ec = nextEndCal !== undefined ? nextEndCal : rangeMode ? endCal : undefined;
+    // The server rejects a range that ends before it starts, so whatever edit got us here
+    // (a later start day, a later start time), the end never falls before the start.
+    const notBefore = (end: number | undefined, start: number) =>
+      end === undefined ? undefined : Math.max(end, start);
     if (it) {
       const sm = nextStartMin ?? startMin;
       const em = nextEndMin ?? endMin;
+      const start = calendarToEpochMs(sc, sm);
       onChange({
-        start: calendarToEpochMs(sc, sm),
-        end: ec !== undefined ? calendarToEpochMs(ec, em) : undefined,
+        start,
+        end: notBefore(ec !== undefined ? calendarToEpochMs(ec, em) : undefined, start),
         includeTime: true,
       });
     } else {
-      onChange({ start: sc, end: ec, includeTime: undefined });
+      onChange({ start: sc, end: notBefore(ec, sc), includeTime: undefined });
     }
   }
 
@@ -84,13 +97,14 @@ export function DatePicker({
   ];
 
   function clickDay(dayMs: number) {
-    if (rangeMode && pickingEnd && startCal !== undefined && dayMs >= startCal) {
-      emit(undefined, dayMs);
-      setPickingEnd(false);
-    } else {
-      emit(dayMs, rangeMode ? undefined : undefined);
-      if (rangeMode) setPickingEnd(true);
-    }
+    const next = pickDay({ day: dayMs, rangeMode, pickingEnd, start: pendingStart ?? startCal });
+    const originalEndMin = pendingEndMin ?? endMin;
+    // On one day, the end time must not fall before the start time either.
+    const emitEndMin = next.end === next.start ? Math.max(startMin, originalEndMin) : originalEndMin;
+    emit(next.start, next.end, undefined, undefined, emitEndMin);
+    setPickingEnd(next.pickingEnd);
+    setPendingStart(next.pickingEnd ? next.start : undefined);
+    setPendingEndMin(next.pickingEnd ? originalEndMin : undefined);
   }
 
   return (
@@ -154,7 +168,14 @@ export function DatePicker({
             {rangeMode && endCal !== undefined && (
               <>
                 <span className="text-[11px] text-ink-3">→</span>
-                <TimeSelect value={endMin} onChange={(m) => emit(undefined, undefined, true, undefined, m)} />
+                <TimeSelect
+                  value={endMin}
+                  onChange={(m) => {
+                    // An explicit end time wins over the one remembered across a range pick.
+                    if (pendingEndMin !== undefined) setPendingEndMin(m);
+                    emit(undefined, undefined, true, undefined, m);
+                  }}
+                />
               </>
             )}
           </div>

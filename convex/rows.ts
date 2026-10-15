@@ -4,6 +4,13 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { PropertyDef } from "./lib/types";
 import { isString } from "./lib/predicates";
 import { runReflow } from "./scheduling";
+import {
+  changeProperties,
+  deleteRowAndReferences,
+  propertyBag,
+  propertyValue,
+  type PropertyBag,
+} from "./lib/rowProperties";
 
 // WHAT: Database rows — every row is also a page (it can hold BlockNote content).
 // Rollups are computed server-side at read time; relation titles ship alongside
@@ -141,99 +148,67 @@ export const get = query({
   },
 });
 
-async function reflowIfTaskSource(
-  ctx: MutationCtx,
-  db: Doc<"databases"> | null,
-  tzOffsetMin?: number
-) {
-  if (db?.isTaskSource) await runReflow(ctx, tzOffsetMin);
-}
-
 export const create = mutation({
   args: {
     databaseId: v.id("databases"),
-    properties: v.optional(v.any()),
+    properties: v.optional(propertyBag),
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const db = await ctx.db.get(args.databaseId);
     if (!db) return null;
-    const properties = args.properties ?? {};
     const now = Date.now();
     const rowId = await ctx.db.insert("rows", {
       databaseId: args.databaseId,
-      title: String(properties.title ?? ""),
-      properties,
+      title: "",
+      properties: {},
       order: now,
       updatedAt: now,
     });
-    await reflowIfTaskSource(ctx, db, args.tzOffsetMin);
+    const row = await ctx.db.get(rowId);
+    if (!row) throw new Error(`Row ${rowId} vanished right after it was created`);
+    // Through the writer, so relations given at creation are synced on both sides.
+    const { touchedTaskSource } = await changeProperties(ctx, row, db, args.properties ?? {});
+    if (touchedTaskSource) await runReflow(ctx, args.tzOffsetMin);
     return rowId;
   },
 });
+
+async function updateRowProperties(
+  ctx: MutationCtx,
+  rowId: Id<"rows">,
+  changes: PropertyBag,
+  tzOffsetMin: number | undefined
+) {
+  const row = await ctx.db.get(rowId);
+  if (!row) return;
+  const db = await ctx.db.get(row.databaseId);
+  if (!db) return;
+  const { touchedTaskSource } = await changeProperties(ctx, row, db, changes);
+  if (touchedTaskSource) await runReflow(ctx, tzOffsetMin);
+}
 
 export const updateProperty = mutation({
   args: {
     rowId: v.id("rows"),
     propId: v.string(),
-    value: v.optional(v.any()),
+    value: v.optional(propertyValue),
     tzOffsetMin: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const row = await ctx.db.get(args.rowId);
-    if (!row) return;
-    const db = await ctx.db.get(row.databaseId);
-    if (!db) return;
-    const props = db.properties as PropertyDef[];
-    const def = props.find((p) => p.id === args.propId);
-    if (!def) return;
+    await updateRowProperties(ctx, args.rowId, { [args.propId]: args.value ?? null }, args.tzOffsetMin);
+  },
+});
 
-    const oldProperties = (row.properties ?? {}) as Record<string, unknown>;
-    const newProperties = { ...oldProperties };
-    if (args.value === undefined || args.value === null) {
-      delete newProperties[args.propId];
-    } else {
-      newProperties[args.propId] = args.value;
-    }
-
-    const patch: Partial<Doc<"rows">> = {
-      properties: newProperties,
-      updatedAt: Date.now(),
-    };
-    if (args.propId === "title") patch.title = String(args.value ?? "");
-    await ctx.db.patch(args.rowId, patch);
-
-    // Two-way relation sync (Notion-style synced properties).
-    if (def.type === "relation" && def.relation?.syncedPropId) {
-      const syncedId = def.relation.syncedPropId;
-      const newIds = (args.value ?? []) as string[];
-      const oldIds = (oldProperties[args.propId] ?? []) as string[];
-      const added = newIds.filter((x) => !oldIds.includes(x));
-      const removed = oldIds.filter((x) => !newIds.includes(x));
-      for (const id of added) {
-        const target = await ctx.db.get(id as Id<"rows">);
-        if (!target) continue;
-        const arr = ((target.properties?.[syncedId] ?? []) as string[]).slice();
-        if (!arr.includes(args.rowId)) {
-          arr.push(args.rowId);
-          await ctx.db.patch(target._id, {
-            properties: { ...(target.properties ?? {}), [syncedId]: arr },
-          });
-        }
-      }
-      for (const id of removed) {
-        const target = await ctx.db.get(id as Id<"rows">);
-        if (!target) continue;
-        const arr = ((target.properties?.[syncedId] ?? []) as string[]).filter(
-          (x) => x !== args.rowId
-        );
-        await ctx.db.patch(target._id, {
-          properties: { ...(target.properties ?? {}), [syncedId]: arr },
-        });
-      }
-    }
-
-    await reflowIfTaskSource(ctx, db, args.tzOffsetMin);
+// Several properties of one row in one transaction: all apply, or none do.
+export const updateProperties = mutation({
+  args: {
+    rowId: v.id("rows"),
+    changes: propertyBag,
+    tzOffsetMin: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await updateRowProperties(ctx, args.rowId, args.changes, args.tzOffsetMin);
   },
 });
 
@@ -247,15 +222,7 @@ export const setContent = mutation({
 export const remove = mutation({
   args: { rowId: v.id("rows"), tzOffsetMin: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const row = await ctx.db.get(args.rowId);
-    if (!row) return;
-    const db = await ctx.db.get(row.databaseId);
-    const blocks = await ctx.db
-      .query("timeBlocks")
-      .withIndex("by_task", (q) => q.eq("taskRowId", args.rowId))
-      .collect();
-    for (const b of blocks) await ctx.db.delete(b._id);
-    await ctx.db.delete(args.rowId);
-    await reflowIfTaskSource(ctx, db, args.tzOffsetMin);
+    const { touchedTaskSource } = await deleteRowAndReferences(ctx, args.rowId);
+    if (touchedTaskSource) await runReflow(ctx, args.tzOffsetMin);
   },
 });
