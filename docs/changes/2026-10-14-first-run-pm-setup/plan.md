@@ -73,3 +73,32 @@ linear: pending
   workspaces that deliberately skipped it, and adds a startup write.
 - **Fold the upgrade's steps into `seed.ts` directly.** Duplicates ~280 lines that must
   stay in sync with the upgrade path for older workspaces.
+
+## Deviations
+
+Results of the plan's proofs, run 2026-10-14 on a fresh anonymous backend in the
+worktree, and the departures from the plan text.
+
+- **Failing first:** on `b7e0cf1` (test only), 2 of 3 tests failed for the intended
+  reasons: `expected +0 to be 1` for the Sprints database, and `applyPmUpgrade` returning
+  `upgraded: dependencies, sub-tasks, sprints (8 tasks in Sprint 1), sprint-board-view,
+  backlog-view, table-decluttered, user-guide, templates (4)` instead of
+  `already-up-to-date`. The idempotency case passed, showing the harness works.
+- **After the fix:** 3/3; `npm run verify` 65/65 (main now has 62, not the 44 the plan
+  quoted from 2026-10-11); `npm run build` passes.
+- **Old-workspace path:** seeded with `main`'s `pm.ts`/`seed.ts` (`convex data databases`
+  showed Tasks, the positive control, and no Sprints), then redeployed the fix:
+  `pm:applyPmUpgrade` returned the full `upgraded: ...` string, and `already-up-to-date`
+  on a second run.
+- **Fresh path:** empty database → `npm run seed` → `"seeded"`; again → `"already-seeded"`;
+  `pm:applyPmUpgrade` → `"already-up-to-date"`. The UI showed Sprints and User Guide in
+  the sidebar and the Sprint Board and Backlog tabs on Tasks, with no console errors.
+- **`vitest.config.ts` unchanged:** `convex-test` ran under the existing `node`
+  environment.
+- **Audit expectation corrected:** the plan said "0 vulnerabilities". `npm audit` reports
+  8 moderate advisories (`sprintf-js` via `electron-builder`), identical on `main`; the CI
+  gate fails only on high/critical, and `convex-test` adds none.
+- **`applyPmUpgradeImpl`'s body was re-indented** one level when it moved out of
+  `handler`; `git diff -w` shows the substantive change.
+- **`seed.ts` no longer imports `runReflow`:** the upgrade helper ends with the same
+  reflow, so the seed's own call was removed rather than run twice.
