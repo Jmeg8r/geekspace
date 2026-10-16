@@ -1,6 +1,8 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc, Id } from "./_generated/dataModel";
 import type { PropertyDef } from "./lib/types";
+import { isPageHidden } from "./lib/pageTree";
 import { runReflow } from "./scheduling";
 import { DAY_MS } from "./lib/scheduler";
 
@@ -10,17 +12,32 @@ import { DAY_MS } from "./lib/scheduler";
 export const listRange = query({
   args: { start: v.number(), end: v.number() },
   handler: async (ctx, args) => {
-    const blocks = await ctx.db
+    // Bounded on both ends: a block runs at most two days, and nothing starting after the
+    // range can overlap it. (This used to read every future block.)
+    const visible = await ctx.db
       .query("timeBlocks")
-      .withIndex("by_start", (q) => q.gte("start", args.start - 2 * DAY_MS))
-      .collect();
-    const visible = blocks.filter((b) => b.start < args.end && b.end > args.start);
+      .withIndex("by_start", (q) => q.gte("start", args.start - 2 * DAY_MS).lt("start", args.end))
+      .collect()
+      .then((blocks) => blocks.filter((b) => b.end > args.start));
+
+    // One read per database, and one hidden-page check per database, not two reads per block.
+    const dbCache = new Map<string, { db: Doc<"databases"> | null; hidden: boolean }>();
+    const databaseFor = async (id: Id<"databases">) => {
+      const cached = dbCache.get(id);
+      if (cached) return cached;
+      const db = await ctx.db.get(id);
+      const entry = { db, hidden: Boolean(db?.pageId && (await isPageHidden(ctx.db, db.pageId))) };
+      dbCache.set(id, entry);
+      return entry;
+    };
 
     const out = [];
     for (const b of visible) {
+      const { db, hidden } = await databaseFor(b.databaseId);
+      // A task database in the trash keeps its history, but it is out of sight.
+      if (hidden) continue;
       const task = await ctx.db.get(b.taskRowId);
       if (!task) continue;
-      const db = await ctx.db.get(b.databaseId);
       let done = false;
       if (db?.taskConfig) {
         const statusProp = (db.properties as PropertyDef[]).find(

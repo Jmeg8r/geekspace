@@ -22,6 +22,10 @@ import { isNumber } from "./lib/predicates";
 // events, blocks, or settings calls runReflow so the whole plan stays
 // consistent without the user ever asking for it.
 
+// Longest a block can run: chunks are capped at a day (validateSchedulerConfig), and a
+// dragged block keeps its length. Two days back finds every block still running.
+const RUNNING_LOOKBACK_MS = 2 * DAY_MS;
+
 export async function getMergedSettings(ctx: { db: QueryCtx["db"] }) {
   const doc = await ctx.db
     .query("settings")
@@ -68,34 +72,32 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     .filter((e) => !e.allDay && e.start < horizonEnd)
     .map((e) => ({ start: Math.max(e.start, now), end: e.end }));
 
-  // --- Existing blocks: freeze the past, keep locks, clear the rest.
-  // Started/past blocks are history and count as worked (option A). A locked future block is
-  // a promise the engine keeps: it reserves its time AND counts toward the estimate, or the
-  // next reflow would book the whole estimate again around it.
-  const allBlocks = await ctx.db.query("timeBlocks").collect();
-  const loggedMin = new Map<string, number>();
-  const pastMin = new Map<string, number>();
+  // --- Existing blocks. Started/past blocks are history and count as worked (option A). A
+  // locked future block is a promise the engine keeps: it reserves its time AND counts toward
+  // the estimate. Unlocked future blocks are the engine's to redo; they are reused below when
+  // the new plan has the same block, so ids stay stable.
+  // WHY bounded reads: the table only grows. Only blocks still running or ahead are read here
+  // (a block never runs longer than RUNNING_LOOKBACK_MS); each open task's history is read
+  // through by_task in the task loop. See docs/changes/2026-10-15-scheduler-dst-perf/.
+  const current = await ctx.db
+    .query("timeBlocks")
+    .withIndex("by_start", (q) => q.gte("start", now - RUNNING_LOOKBACK_MS))
+    .collect();
+  const replaceable: Doc<"timeBlocks">[] = [];
   const hasFutureBlock = new Set<string>();
   const reservedEnd = new Map<string, number>();
   // Locked blocks still ahead, per task: kept as placed, but their deadline is still checked.
   const lockedAhead = new Map<string, Doc<"timeBlocks">[]>();
-  const add = (m: Map<string, number>, id: string, n: number) => m.set(id, (m.get(id) ?? 0) + n);
-  for (const b of allBlocks) {
-    const minutes = (b.end - b.start) / MIN_MS;
-    if (b.start <= now || b.locked) {
-      add(loggedMin, b.taskRowId, minutes);
-      reservedEnd.set(b.taskRowId, Math.max(reservedEnd.get(b.taskRowId) ?? 0, b.end));
-      if (b.start <= now) add(pastMin, b.taskRowId, minutes);
-      if (b.end > now) {
-        busy.push({ start: Math.max(now, b.start), end: b.end });
-        hasFutureBlock.add(b.taskRowId);
-      }
-      if (b.locked && b.start > now) {
-        lockedAhead.set(b.taskRowId, [...(lockedAhead.get(b.taskRowId) ?? []), b]);
-      }
-    } else {
-      await ctx.db.delete(b._id);
+  for (const b of current) {
+    if (b.end <= now) continue; // finished: history, counted per task below
+    if (b.start > now && !b.locked) {
+      replaceable.push(b);
+      continue;
     }
+    busy.push({ start: Math.max(now, b.start), end: b.end });
+    hasFutureBlock.add(b.taskRowId);
+    reservedEnd.set(b.taskRowId, Math.max(reservedEnd.get(b.taskRowId) ?? 0, b.end));
+    if (b.start > now) lockedAhead.set(b.taskRowId, [...(lockedAhead.get(b.taskRowId) ?? []), b]);
   }
   const usedUp: SchedulerWarning[] = [];
   // Open tasks with a locked block after their due date, by id → title.
@@ -141,11 +143,23 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
         if (late) lateLocked.set(row._id, row.title);
       }
 
-      const remaining = estimate - (loggedMin.get(row._id) ?? 0);
+      // Minutes already worked (every started block) plus minutes promised by locked blocks.
+      const history = await ctx.db
+        .query("timeBlocks")
+        .withIndex("by_task", (q) => q.eq("taskRowId", row._id))
+        .collect();
+      const pastMinutes = history
+        .filter((b) => b.start <= now)
+        .reduce((sum, b) => sum + (b.end - b.start) / MIN_MS, 0);
+      const lockedMinutes = (lockedAhead.get(row._id) ?? []).reduce(
+        (sum, b) => sum + (b.end - b.start) / MIN_MS,
+        0
+      );
+      const remaining = estimate - pastMinutes - lockedMinutes;
       // Every planned minute has passed and the task is still open: say so, rather than let
       // it drop off the plan silently (option A).
       if (remaining <= 0 && !hasFutureBlock.has(row._id)) {
-        if ((pastMin.get(row._id) ?? 0) >= estimate) {
+        if (pastMinutes >= estimate) {
           usedUp.push({ taskId: row._id, title: row.title, unscheduledMin: 0, reason: "time_used_up" });
         }
         continue;
@@ -181,16 +195,30 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     .filter(([taskId]) => !warned.has(taskId))
     .map(([taskId, title]) => ({ taskId, title, unscheduledMin: 0, reason: "past_due" }));
   const warnings = [...result.warnings, ...lateLockedWarnings, ...usedUp];
+  // In place: keep a block the new plan repeats exactly, insert what is new, delete the rest.
+  // The result is the block set a full rewrite would leave, without churning ids.
+  const placement = (taskId: string, start: number, end: number) => `${taskId}|${start}|${end}`;
+  const reusable = new Map(replaceable.map((b) => [placement(b.taskRowId, b.start, b.end), b]));
   for (const b of result.blocks) {
+    const databaseId = taskDb.get(b.taskId)!;
+    const same = reusable.get(placement(b.taskId, b.start, b.end));
+    if (same) {
+      reusable.delete(placement(b.taskId, b.start, b.end));
+      if (same.pastDue !== b.pastDue || same.databaseId !== databaseId) {
+        await ctx.db.patch(same._id, { pastDue: b.pastDue, databaseId });
+      }
+      continue;
+    }
     await ctx.db.insert("timeBlocks", {
       taskRowId: b.taskId as Id<"rows">,
-      databaseId: taskDb.get(b.taskId)!,
+      databaseId,
       start: b.start,
       end: b.end,
       locked: false,
       pastDue: b.pastDue,
     });
   }
+  for (const stale of reusable.values()) await ctx.db.delete(stale._id);
 
   const state = await ctx.db
     .query("schedulerState")
@@ -222,6 +250,16 @@ export const getWarnings = query({
       .query("schedulerState")
       .withIndex("by_key", (q) => q.eq("key", "global"))
       .unique();
-    return state ?? { warnings: [], lastRun: 0 };
+    if (!state) return { warnings: [], lastRun: 0 };
+    // Titles come from the rows now, so renaming a task needs no re-plan to show up here.
+    const stored: SchedulerWarning[] = state.warnings;
+    const warnings = await Promise.all(
+      stored.map(async (w) => {
+        const rowId = ctx.db.normalizeId("rows", w.taskId);
+        const row = rowId ? await ctx.db.get(rowId) : null;
+        return row ? { ...w, title: row.title } : w;
+      })
+    );
+    return { ...state, warnings };
   },
 });

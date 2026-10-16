@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atMinuteOfDay, nextDay, weekDays } from "../src/lib/dates";
+import { atMinuteOfDay, nextDay, wallMinuteOn, weekDays } from "../src/lib/dates";
 
 // WHAT: week-grid date arithmetic across a DST change. The next US change is Sunday
 // 2026-11-01 (clocks go back at 02:00, so that day has 25 hours).
@@ -28,6 +28,13 @@ describe("DST week arithmetic (America/New_York)", () => {
     expect(new Date(atMinuteOfDay(sun, 9 * 60)).getHours()).toBe(9);
     expect(new Date(atMinuteOfDay(mon, 9 * 60)).getHours()).toBe(9);
     expect(new Date(atMinuteOfDay(mon, 17 * 60 + 30)).getMinutes()).toBe(30);
+  });
+
+  it("wallMinuteOn reads wall-clock minutes on the 25-hour day", () => {
+    const nineAm = new Date(2026, 10, 1, 9).getTime();
+    expect(wallMinuteOn(sundayNov1, nineAm)).toBe(9 * 60);
+    expect(wallMinuteOn(sundayNov1, sundayNov1 - HOUR_MS)).toBe(0);
+    expect(wallMinuteOn(sundayNov1, nextDay(sundayNov1) + HOUR_MS)).toBe(24 * 60);
   });
 
   it("nextDay spans the 25-hour fall-back day", () => {

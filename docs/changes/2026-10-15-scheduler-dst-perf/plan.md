@@ -69,3 +69,33 @@ linear: pending
   cost without either.
 - **Storing logged minutes on each row**: a schema change and a second copy of truth;
   per-task `by_task` reads are enough at personal scale.
+
+## Deviations
+
+Results of the plan's proofs, run 2026-10-15 on the isolated worktree backend, and the
+departures from the plan text.
+
+- **Failing first (`64556f7`):** 7 of 10 failed for the stated reasons (helpers missing; a
+  title edit and a no-op reflow replaced every block id; a 40-day-old event missing from
+  `events.listRange`; a trashed database's block still listed). The timezone control
+  passed, so `America/New_York` was in effect. Two cases guard the change: a status edit
+  already re-planned, and warning titles were current only because every title edit
+  re-planned.
+- **Wider than planned in the week grid:** item positions used elapsed minutes since
+  midnight (`(start − day) / 1 min`), so on the 25-hour day a 9:00 event would also draw
+  in the 10:00 row even with correct columns. Added `wallMinuteOn` (tested) and used it
+  for positions; the drag preview uses `atMinuteOfDay`. The now-line already used wall
+  time.
+- **`useDayStart`** (new `src/lib/useDayStart.ts`) refreshes at midnight and on focus or
+  visibility change; not exercised live (needs a real midnight), reviewed by reading.
+- **Suite 126/126; build passes.** ESLint errors left in `WeekGrid.tsx` and `HomeView.tsx`
+  are the same ones `main` has (impure `Date.now()` in render, an unused `_e`, a mutated
+  drag state); not introduced here.
+- **Live:**
+  - Nov 1 week, event at Mon Nov 2 09:00 local (this Mac is on US Eastern): rendered in
+    the 9:00 row (`top: 469px` = 9 × 52 + 1). The old arithmetic started Monday's column
+    at Sun 23:00 and would have drawn it in the 10:00 row (computed under the same zone).
+  - Three title edits and then a no-op reflow: the block-id fingerprint was identical
+    before and after.
+- **Not changed:** `events.syncExternal`'s 35-day look-back (macOS Calendar mirrors) is
+  PR 7's.

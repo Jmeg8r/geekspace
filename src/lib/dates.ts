@@ -1,4 +1,4 @@
-import { format } from "date-fns";
+import { addDays, format } from "date-fns";
 import type { DateValue } from "../../convex/lib/types";
 
 // WHAT: Date display + calendar-date conversion helpers.
@@ -66,4 +66,37 @@ export function minOfDayLabel(min: number): string {
   const ampm = h < 12 ? "am" : "pm";
   const hh = h % 12 === 0 ? 12 : h % 12;
   return m === 0 ? `${hh} ${ampm}` : `${hh}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+// --- Local-day arithmetic for the week grid ---------------------------------------------
+// WHY: a day is not always 24 hours. Stepping by a fixed 86,400,000 ms put every column
+// after a DST change an hour off (the next US change is 2026-11-01, a 25-hour day). These
+// work in local calendar terms instead. See docs/changes/2026-10-15-scheduler-dst-perf/.
+
+/** The local midnights of the seven days starting at `weekStartMs` (itself a midnight). */
+export function weekDays(weekStartMs: number): number[] {
+  return Array.from({ length: 7 }, (_, i) => addDays(weekStartMs, i).getTime());
+}
+
+/** The local midnight after `dayMs`: 23, 24 or 25 hours later. */
+export function nextDay(dayMs: number): number {
+  return addDays(dayMs, 1).getTime();
+}
+
+/** Wall-clock `minute` (from midnight) on the local date of `dayMs`. */
+export function atMinuteOfDay(dayMs: number, minute: number): number {
+  const d = new Date(dayMs);
+  d.setHours(0, minute, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * Where `ms` falls on the local day starting at `dayMs`, in wall-clock minutes (0–1440):
+ * 0 if before the day, 1440 if after it. 9:00 is 540 even on a 23- or 25-hour day.
+ */
+export function wallMinuteOn(dayMs: number, ms: number): number {
+  if (ms <= dayMs) return 0;
+  if (ms >= nextDay(dayMs)) return 24 * 60;
+  const d = new Date(ms);
+  return d.getHours() * 60 + d.getMinutes();
 }

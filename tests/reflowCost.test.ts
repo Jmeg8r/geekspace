@@ -57,8 +57,8 @@ describe("in-place reflow", () => {
     await s.t.mutation(api.scheduling.reflowNow, {});
     const after = await s.blocks();
     expect(after.map((b) => b._id).sort()).toEqual(before.map((b) => b._id).sort());
-    const shape = (bs: typeof before) => bs.map((b) => `${b.taskRowId}:${b.start}:${b.end}`).sort();
-    expect(shape(after)).toEqual(shape(before));
+    const placements = (bs: typeof before) => bs.map((b) => `${b.taskRowId}:${b.start}:${b.end}`).sort();
+    expect(placements(after)).toEqual(placements(before));
   });
 });
 

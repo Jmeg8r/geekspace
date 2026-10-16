@@ -10,12 +10,13 @@ import { DAY_MS } from "./lib/scheduler";
 export const listRange = query({
   args: { start: v.number(), end: v.number() },
   handler: async (ctx, args) => {
-    // Pull a little earlier than `start` to catch multi-day events that overlap.
+    // Every event still running at `start`, however long ago it began (the old 35-day
+    // look-back dropped long events from the grid), via the end-time index.
     const events = await ctx.db
       .query("events")
-      .withIndex("by_start", (q) => q.gte("start", args.start - 35 * DAY_MS))
+      .withIndex("by_end", (q) => q.gt("end", args.start))
       .collect();
-    return events.filter((e) => e.start < args.end && e.end > args.start);
+    return events.filter((e) => e.start < args.end);
   },
 });
 

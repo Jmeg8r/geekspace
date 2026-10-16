@@ -16,7 +16,8 @@ import { api } from "../../../convex/_generated/api";
 import type { SchedulerWarning } from "../../../convex/lib/scheduler";
 import { useUI } from "../../state/ui";
 import { cn, tzOffsetMin } from "../../lib/utils";
-import { fmtDuration, fmtTime, fmtDateValue, todayCalendarMs, epochToCalendarMs } from "../../lib/dates";
+import { fmtDuration, fmtTime, fmtDateValue, todayCalendarMs, epochToCalendarMs, nextDay } from "../../lib/dates";
+import { useDayStart } from "../../lib/useDayStart";
 import {
   integrationsAvailable,
   macFetchInbox,
@@ -27,7 +28,6 @@ import {
 } from "../../lib/integrations";
 import { Chip } from "../common/bits";
 
-const DAY_MS = 86_400_000;
 
 export function HomeView() {
   const navigate = useUI((s) => s.navigate);
@@ -122,13 +122,10 @@ function WarningsBanner() {
 }
 
 function TodayAgenda() {
-  const dayStart = useMemo(() => {
-    const d = new Date();
-    d.setHours(0, 0, 0, 0);
-    return d.getTime();
-  }, []);
-  const events = useQuery(api.events.listRange, { start: dayStart, end: dayStart + DAY_MS }) ?? [];
-  const blocks = useQuery(api.timeBlocks.listRange, { start: dayStart, end: dayStart + DAY_MS }) ?? [];
+  const dayStart = useDayStart();
+  const dayEnd = nextDay(dayStart);
+  const events = useQuery(api.events.listRange, { start: dayStart, end: dayEnd }) ?? [];
+  const blocks = useQuery(api.timeBlocks.listRange, { start: dayStart, end: dayEnd }) ?? [];
   const openRow = useUI((s) => s.openRow);
   const now = Date.now();
 
