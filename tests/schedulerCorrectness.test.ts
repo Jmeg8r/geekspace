@@ -3,7 +3,14 @@ import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
 import type { Doc, Id } from "../convex/_generated/dataModel";
-import { computeSchedule, MIN_MS, type SchedulerConfig, type SchedulerTask } from "../convex/lib/scheduler";
+import {
+  computeSchedule,
+  MIN_MS,
+  type SchedulerConfig,
+  type SchedulerTask,
+  type SchedulerWarning,
+} from "../convex/lib/scheduler";
+import { isNumber } from "../convex/lib/predicates";
 
 // WHAT: the auto-scheduler books each task once, around everything it should.
 // See docs/changes/2026-10-15-scheduler-correctness/.
@@ -78,7 +85,7 @@ async function seeded() {
     (await blocks()).filter((b) => b.taskRowId === rowId).reduce((sum, b) => sum + (b.end - b.start) / MIN_MS, 0);
   const estimateOf = async (row: Doc<"rows">) => {
     const value = row.properties[tasks.taskConfig?.estimatePropId ?? ""];
-    if (typeof value !== "number") throw new Error(`${row.title} has no estimate`);
+    if (!isNumber(value)) throw new Error(`${row.title} has no estimate`);
     return value;
   };
   return { t, tasks, blocks, minutesFor, estimateOf };
@@ -132,7 +139,9 @@ describe("runReflow", () => {
       }
     });
     await s.t.mutation(api.scheduling.reflowNow, {});
-    const { warnings } = await s.t.query(api.scheduling.getWarnings, {});
+    const state = await s.t.query(api.scheduling.getWarnings, {});
+    // Stored as v.any(): name the shape the reflow writes.
+    const warnings: SchedulerWarning[] = state.warnings;
     expect(warnings.find((w) => w.taskId === block.taskRowId)?.reason).toBe("time_used_up");
   });
 });

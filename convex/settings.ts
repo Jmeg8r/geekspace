@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
+import { validateSchedulerConfig } from "./lib/validation";
 import { getMergedSettings, runReflow } from "./scheduling";
 
 export const get = query({
@@ -57,6 +58,10 @@ export const update = mutation({
       .query("settings")
       .withIndex("by_key", (q) => q.eq("key", "global"))
       .unique();
+    // Validate what the settings will become, before saving: the UI clamps its inputs, but
+    // MCP and other callers reach this mutation too.
+    const merged = { ...DEFAULT_SETTINGS, ...(existing ?? {}), ...patch };
+    validateSchedulerConfig(merged);
     if (existing) {
       await ctx.db.patch(existing._id, patch);
     } else {

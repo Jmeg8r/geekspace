@@ -14,6 +14,20 @@ import { EventModal, type EventDraft } from "./EventModal";
 
 // WHAT: The calendar page — week planner + month overview, schedule warnings,
 // and manual reflow. This is where the auto-scheduling engine becomes visible.
+// What each schedule warning means, in the user's words.
+function warningText(w: SchedulerWarning): string {
+  switch (w.reason) {
+    case "no_capacity":
+      return `${fmtDuration(w.unscheduledMin)} won't fit before the horizon`;
+    case "past_due":
+      return "Scheduled past its due date";
+    case "dependency_cycle":
+      return "Dependency cycle: tasks block each other";
+    case "time_used_up":
+      return "Planned time used up, not done";
+  }
+}
+
 export function CalendarView() {
   const calMode = useUI((s) => s.calMode);
   const setCalMode = useUI((s) => s.setCalMode);
@@ -154,7 +168,7 @@ function WarningsButton() {
               </div>
               {warnings.map((w) => (
                 <button
-                  key={w.taskId}
+                  key={`${w.taskId}:${w.reason}`}
                   onClick={() => {
                     close();
                     openRow(w.taskId);
@@ -165,9 +179,7 @@ function WarningsButton() {
                   <span className="min-w-0">
                     <span className="block truncate text-[13px] font-medium">{w.title}</span>
                     <span className="block text-[12px] text-ink-2">
-                      {w.reason === "no_capacity"
-                        ? `${fmtDuration(w.unscheduledMin)} won't fit before the horizon`
-                        : "Scheduled past its due date"}
+                      {warningText(w)}
                     </span>
                   </span>
                 </button>

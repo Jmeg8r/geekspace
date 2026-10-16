@@ -1,6 +1,7 @@
 import { query } from "./_generated/server";
 import type { DateValue, PropertyDef } from "./lib/types";
 import { isNumber } from "./lib/predicates";
+import { isPageHidden } from "./lib/pageTree";
 
 // WHAT: Read models for the calendar + home dashboard — database rows with
 // dates (Notion Calendar-style "connected databases") and the cross-database
@@ -20,6 +21,7 @@ export const listForCalendar = query({
     }> = [];
     for (const db of dbs) {
       if (!db.showOnCalendar || !db.calendarDatePropId) continue;
+      if (db.pageId && (await isPageHidden(ctx.db, db.pageId))) continue;
       const props = db.properties as PropertyDef[];
       const statusPropId =
         db.taskConfig?.statusPropId ?? props.find((p) => p.type === "status")?.id;
@@ -67,6 +69,7 @@ export const myTasks = query({
     }> = [];
     for (const db of dbs) {
       if (!db.isTaskSource || !db.taskConfig) continue;
+      if (db.pageId && (await isPageHidden(ctx.db, db.pageId))) continue;
       const props = db.properties as PropertyDef[];
       const statusProp = props.find((p) => p.id === db.taskConfig!.statusPropId);
       const priorityProp = props.find((p) => p.id === db.taskConfig!.priorityPropId);

@@ -87,7 +87,10 @@ export default defineSchema({
     source: v.optional(v.string()), // "macos"
     externalId: v.optional(v.string()),
     calendarName: v.optional(v.string()),
-  }).index("by_start", ["start"]),
+  })
+    .index("by_start", ["start"])
+    // Busy time is every event still running, however long ago it began.
+    .index("by_end", ["end"]),
 
   timeBlocks: defineTable({
     taskRowId: v.id("rows"),
