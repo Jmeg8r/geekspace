@@ -95,3 +95,46 @@ linear: pending
 - Merge request quality on very long meetings depends on the local model. The test proves
   every section reaches the model; quality is checked by eye on one long synthetic
   transcript.
+
+## Deviations
+
+- **Test-only commit `65fb50b`:** 14 tests failed for the stated reasons (missing exports,
+  transcript in the list, no reconcile, an unknown status accepted, an edited page
+  overwritten, the microphone left open). The in-place rebuild test passed on `main`; it
+  is the control showing an untouched page is still updated in place.
+- **Wording:** the button is labelled "Re-run AI", so messages say "use Re-run AI"
+  instead of "Reprocess". The reconcile test now matches that wording.
+- **Added:** the status chip shows summary progress per section, and the model check is
+  cached by inode, size and mtime. Hashing the 148 MB model takes 124 ms; the cached
+  check takes 1 ms, measured against the installed model.
+- **Conservative choice:** a meeting from before `generatedContent` existed gets a new
+  notes page on Re-run AI, never an overwrite, because the app can't tell whether that
+  page was edited.
+- **Not unit-tested:** the shared in-flight `ensureModel` download (reviewed by reading),
+  the "Quit Anyway" branch after a failed save, and the window-close path. The close path
+  runs the same function as quit.
+- **Suite 150/150; verify and typecheck pass.** The `convex/_generated` changes in the
+  worktree come from the running `convex dev`'s codegen and are not committed.
+- **Live, Electron window on the worktree backend.** Chromium's fake audio device couldn't
+  read the synthetic wav (its audio sandbox blocks the path; the log suggests
+  `--no-sandbox`). It recorded silence, so speech was supplied by uploading the same wav
+  as a meeting's audio and running Re-run AI. Renderer steps were driven over CDP using
+  the app's own module instances.
+  - Silent capture: 38 s recorded at −91 dB failed loud ("No audio captured… peak
+    −91.0 dB"), with the audio already uploaded.
+  - Reload mid-recording: on the next load, reconcile marked the meeting "recording was
+    lost". The list row carried 7 fields and no transcript.
+  - Re-run AI from audio: whisper plus `qwen2.5:7b-instruct` in 6.2 s, with an accurate
+    transcript, one decision, two action items, and the notes page written with
+    `generatedContent`.
+  - Ollama unreachable (`127.0.0.1:9`): status error "Summary failed: Ollama not
+    reachable…", with the 399-character transcript kept. After the URL was restored, Re-run
+    AI finished in 1.3 s with no transcribing phase, and the transcript was unchanged.
+  - Edited notes page plus Re-run AI: the edited page was untouched and a new page was
+    created.
+  - Quit mid-recording (Quit Geekspace from the menu): the native dialog appeared.
+    - First answer: the recording continued and the app stayed open (Keep Recording).
+    - Second answer: the app quit after saving. The meeting holds 63 s of audio and
+      "Saved when the app quit. Use Re-run AI…", and the backend stayed up.
+    - My automated clicks on both dialogs were refused by the desktop tool, so each was
+      answered outside the tool. The recorded state is the evidence.
