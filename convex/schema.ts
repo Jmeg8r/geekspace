@@ -174,6 +174,7 @@ export default defineSchema({
     error: v.optional(v.string()),
     progress: v.optional(v.number()), // 0-100 while transcribing
     pageId: v.optional(v.id("pages")), // generated notes page
+    generatedContent: v.optional(v.string()), // what the app last wrote to that page; a mismatch means you edited it
     eventId: v.optional(v.id("events")), // linked calendar event
   }).index("by_startedAt", ["startedAt"]),
 });

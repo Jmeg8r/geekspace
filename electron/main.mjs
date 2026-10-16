@@ -16,6 +16,7 @@ import {
 import {
   checkOllama,
   ensureModel,
+  notesFromTranscript,
   processMeeting,
   toolStatus,
 } from "./meetingProcessor.mjs";
@@ -111,6 +112,24 @@ function createWindow() {
   });
 
   win.once("ready-to-show", () => win.show());
+
+  // A reload or a crashed renderer takes any live recording with it, so stop guarding.
+  win.webContents.on("did-navigate", () => {
+    recordingActive = false;
+  });
+  win.webContents.on("render-process-gone", () => {
+    recordingActive = false;
+  });
+  win.on("close", (event) => {
+    // While the save handshake runs, nothing may close the window under it.
+    if (guarding) {
+      event.preventDefault();
+      return;
+    }
+    if (!recordingActive || leaveApproved) return;
+    event.preventDefault();
+    void confirmLeaveWhileRecording(win);
+  });
 
   // WHY: external links must open in the user's browser, never inside the app shell.
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -213,6 +232,98 @@ ipcMain.handle("gs:meeting:process", async (event, args) => {
     return { ok: false, error: String(err?.message ?? err) };
   }
 });
+
+ipcMain.handle("gs:meeting:summarize", async (event, args) => {
+  try {
+    if (typeof args?.transcript !== "string" || !args.transcript.trim()) {
+      throw new Error("No transcript to summarise");
+    }
+    const result = await notesFromTranscript(
+      args.transcript,
+      typeof args.meetingType === "string" ? args.meetingType : "general",
+      args.ollamaUrl,
+      args.ollamaModel,
+      (pct) => event.sender.send("gs:meeting:progress", { meetingId: args.meetingId, phase: "summarizing", pct })
+    );
+    return { ok: true, data: result };
+  } catch (err) {
+    return { ok: false, error: String(err?.message ?? err) };
+  }
+});
+
+// ----- Quit guard: never discard a live meeting recording -----
+// WHY: the audio lives in renderer memory until Stop, so quitting or closing the window
+// mid-meeting used to throw it away. The renderer reports when it is recording; leaving
+// then asks first, and Save has the renderer stop and upload before anything shuts down
+// (the upload goes to the local backend, which before-quit stops).
+const SAVE_ON_QUIT_TIMEOUT_MS = 2 * 60 * 1000;
+let recordingActive = false;
+let leaveApproved = false;
+let guarding = false;
+let pendingSave = null;
+
+handle("gs:recorder:setActive", ({ active }) => {
+  recordingActive = active === true;
+  // A new recording after an approved-but-unfinished quit must be guarded again.
+  if (recordingActive && !guarding) leaveApproved = false;
+});
+handle("gs:recorder:saveDone", ({ ok, error }) => {
+  pendingSave?.({ ok: ok === true, error: typeof error === "string" ? error : "Unknown error" });
+});
+
+function requestSave(win) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingSave = null;
+      resolve({ ok: false, error: "Saving the recording took longer than 2 minutes." });
+    }, SAVE_ON_QUIT_TIMEOUT_MS);
+    pendingSave = (result) => {
+      clearTimeout(timer);
+      pendingSave = null;
+      resolve(result);
+    };
+    win.webContents.send("gs:recorder:saveRequest");
+  });
+}
+
+async function confirmLeaveWhileRecording(win) {
+  if (guarding) return;
+  guarding = true;
+  let approved = false;
+  try {
+    const choice = await dialog.showMessageBox(win, {
+      type: "warning",
+      message: "A meeting is still recording.",
+      detail: "Save the recording before quitting? It's uploaded now and you can process it next time.",
+      buttons: ["Save Recording and Quit", "Keep Recording"],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (choice.response !== 0) return;
+    const result = await requestSave(win);
+    if (!result.ok) {
+      const again = await dialog.showMessageBox(win, {
+        type: "error",
+        message: "The recording couldn't be saved.",
+        detail: `${result.error}\n\nQuitting now loses it.`,
+        buttons: ["Keep App Open", "Quit Anyway"],
+        defaultId: 0,
+        cancelId: 0,
+      });
+      if (again.response !== 1) return;
+    }
+    approved = true;
+  } finally {
+    guarding = false;
+  }
+  // WHY after the finally: app.quit() re-enters before-quit, which holds any quit while
+  // `guarding` is set; the approved quit must not be cancelled by its own guard.
+  if (approved) {
+    recordingActive = false;
+    leaveApproved = true;
+    app.quit();
+  }
+}
 
 // ----- Docs: open a stored file with the default macOS app -----
 handle("gs:docs:quickLook", async ({ url, name }) => {
@@ -329,6 +440,18 @@ app.on("window-all-closed", () => {
 // settles, so defer the real quit until SIGTERM completes.
 let shuttingDown = false;
 app.on("before-quit", (event) => {
+  // The recording guard runs first: saving needs the backend still up. While the save
+  // handshake runs, a second quit is held back too (the recorder is idle by then).
+  if (guarding) {
+    event.preventDefault();
+    return;
+  }
+  const win = BrowserWindow.getAllWindows()[0];
+  if (recordingActive && !leaveApproved && win) {
+    event.preventDefault();
+    void confirmLeaveWhileRecording(win);
+    return;
+  }
   if (shuttingDown || !convexManaged()) return;
   event.preventDefault();
   shuttingDown = true;

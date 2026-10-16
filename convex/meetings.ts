@@ -6,12 +6,59 @@ import type { Doc, Id } from "./_generated/dataModel";
 // Electron main process transcribes (whisper.cpp) and summarizes (local
 // Ollama); these functions track pipeline state and build the notes page.
 
+const STATUSES = ["recording", "uploading", "transcribing", "summarizing", "done", "error"] as const;
+const statusValidator = v.union(...STATUSES.map((s) => v.literal(s)));
+// Statuses a meeting can only hold while this app session is driving it.
+const IN_FLIGHT = new Set<string>(["recording", "uploading", "transcribing", "summarizing"]);
+
+/** What the list shows. Transcripts and notes stay on `get`, so progress ticks re-send only this. */
+export type MeetingListItem = Pick<
+  Doc<"meetings">,
+  "_id" | "_creationTime" | "title" | "meetingType" | "status" | "startedAt" | "endedAt" | "durationSec" | "progress" | "error" | "pageId"
+>;
+
 export const list = query({
   args: {},
-  handler: async (ctx) => {
-    const meetings = await ctx.db.query("meetings").withIndex("by_startedAt").collect();
-    meetings.sort((a, b) => b.startedAt - a.startedAt);
-    return meetings;
+  handler: async (ctx): Promise<MeetingListItem[]> => {
+    const meetings = await ctx.db.query("meetings").withIndex("by_startedAt").order("desc").collect();
+    return meetings.map((m) => ({
+      _id: m._id,
+      _creationTime: m._creationTime,
+      title: m.title,
+      meetingType: m.meetingType,
+      status: m.status,
+      startedAt: m.startedAt,
+      endedAt: m.endedAt,
+      durationSec: m.durationSec,
+      progress: m.progress,
+      error: m.error,
+      pageId: m.pageId,
+    }));
+  },
+});
+
+/**
+ * On launch: a meeting still "in flight" from before this launch was interrupted (the app
+ * quit or the window reloaded). Mark it failed so it stops spinning and offers Reprocess
+ * when its audio was saved.
+ */
+export const reconcileInterrupted = mutation({
+  args: { before: v.number() },
+  handler: async (ctx, args) => {
+    const stale = await ctx.db
+      .query("meetings")
+      .withIndex("by_startedAt", (q) => q.lt("startedAt", args.before))
+      .collect();
+    for (const m of stale) {
+      if (!IN_FLIGHT.has(m.status)) continue;
+      await ctx.db.patch(m._id, {
+        status: "error",
+        progress: undefined,
+        error: m.audioStorageId
+          ? "Interrupted when the app closed. The audio was saved; use Re-run AI."
+          : "The recording was lost when the app closed before it was saved.",
+      });
+    }
   },
 });
 
@@ -58,13 +105,15 @@ export const rename = mutation({
 export const setStatus = mutation({
   args: {
     meetingId: v.id("meetings"),
-    status: v.string(),
+    status: statusValidator,
     progress: v.optional(v.number()),
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const patch: Partial<Doc<"meetings">> = { status: args.status };
     if (args.progress !== undefined) patch.progress = args.progress;
+    // WHY: a meeting leaving the error state (Reprocess) must not keep showing the old error.
+    if (args.status !== "error") patch.error = undefined;
     if (args.error !== undefined) patch.error = args.error;
     await ctx.db.patch(args.meetingId, patch);
   },
@@ -230,9 +279,14 @@ async function buildNotesPage(
   }
 
   const content = JSON.stringify(blocks);
+  const previous = meeting.generatedContent;
+  await ctx.db.patch(meeting._id, { generatedContent: content });
   if (meeting.pageId) {
     const page = await ctx.db.get(meeting.pageId);
-    if (page && !page.trashed) {
+    // WHY the content check: rebuild in place only while the page still holds exactly what
+    // the app wrote. Once you've edited it (or for a meeting from before this was tracked),
+    // Reprocess writes a new page instead of overwriting your notes.
+    if (page && !page.trashed && previous !== undefined && page.content === previous) {
       await ctx.db.patch(meeting.pageId, { content, updatedAt: Date.now() });
       return meeting.pageId;
     }

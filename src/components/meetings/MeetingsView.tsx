@@ -19,6 +19,7 @@ import { useUI } from "../../state/ui";
 import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
 import { listMicrophones, recorder, resolveMicChoice, type MicDevice } from "../../lib/recorder";
+import { discardHeldAudio, pendingAudio, retrySave } from "../../lib/meetingPipeline";
 import {
   meetingAskMic,
   meetingsAvailable,
@@ -157,7 +158,7 @@ function Banner({ children, tone }: { children: React.ReactNode; tone?: "accent"
   );
 }
 
-function StatusChip({ meeting }: { meeting: Doc<"meetings"> }) {
+function StatusChip({ meeting }: { meeting: Pick<Doc<"meetings">, "status" | "progress"> }) {
   const s = meeting.status;
   if (s === "done") {
     return (
@@ -185,7 +186,7 @@ function StatusChip({ meeting }: { meeting: Doc<"meetings"> }) {
       ? "Saving audio"
       : s === "transcribing"
         ? `Transcribing${meeting.progress ? ` ${meeting.progress}%` : "…"}`
-        : "Summarizing…";
+        : `Summarizing${meeting.progress ? ` ${meeting.progress}%` : "…"}`;
   return (
     <span className="flex items-center gap-1.5 text-[12px] font-medium text-accent">
       <Loader2 size={13} className="animate-spin" /> {label}
@@ -384,6 +385,9 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
   const dbs = useQuery(api.databases.listAll) ?? [];
   const taskDb = dbs.find((d) => d.isTaskSource);
   const [reprocessing, setReprocessing] = useState(false);
+  // Audio whose upload failed is still in memory: offer to store it again.
+  const unsavedHere = useSyncExternalStore(pendingAudio.subscribe, () => pendingAudio.has(meetingId));
+  const savingHere = useSyncExternalStore(pendingAudio.subscribe, () => pendingAudio.saving(meetingId));
   const [title, setTitle] = useState<string | null>(null);
   const [saveTitle] = useState(() =>
     debounce((id: Id<"meetings">, value: string) => void rename({ meetingId: id, title: value }), 400)
@@ -428,6 +432,7 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
             onClick={() => {
               if (confirm("Delete this meeting and its audio? The notes page stays.")) {
                 onBack();
+                discardHeldAudio(meetingId);
                 void removeMeeting({ meetingId });
               }
             }}
@@ -445,9 +450,20 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
         <div className="flex items-center gap-3 pb-4">
           <StatusChip meeting={meeting} />
           {meeting.status === "error" && meeting.error && (
-            <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--pal-red)]">{meeting.error}</span>
+            <span title={meeting.error} className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--pal-red)]">
+              {meeting.error}
+            </span>
           )}
-          {(meeting.status === "error" || meeting.status === "done") && meeting.audioUrl && (
+          {unsavedHere && (
+            <button
+              disabled={savingHere}
+              onClick={() => void retrySave(meetingId)}
+              className="flex items-center gap-1 rounded-md border border-accent/50 px-2 py-1 text-[12px] text-accent hover:bg-hov disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={cn(savingHere && "animate-spin")} /> {savingHere ? "Saving…" : "Retry save"}
+            </button>
+          )}
+          {(meeting.status === "error" || meeting.status === "done") && (meeting.audioUrl || meeting.transcript) && (
             <button
               disabled={reprocessing}
               onClick={async () => {
@@ -455,6 +471,9 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
                 try {
                   const { reprocessMeeting } = await import("../../lib/meetingPipeline");
                   await reprocessMeeting(meetingId);
+                } catch (err) {
+                  // The failure is already on the meeting as its error; logged for debugging.
+                  console.warn("Re-run AI failed", err);
                 } finally {
                   setReprocessing(false);
                 }

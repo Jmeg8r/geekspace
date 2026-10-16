@@ -43,11 +43,22 @@ const api = {
     askMic: () => invoke("gs:meeting:askMic"),
     ensureModel: () => invoke("gs:meeting:ensureModel"),
     process: (payload) => invoke("gs:meeting:process", payload),
+    summarize: (payload) => invoke("gs:meeting:summarize", payload),
     onProgress: (cb) => {
       const listener = (_event, data) => cb(data);
       ipcRenderer.on("gs:meeting:progress", listener);
       return () => ipcRenderer.removeListener("gs:meeting:progress", listener);
     },
+  },
+  // Quit guard handshake (electron/main.mjs): report recording state, answer save requests.
+  recorder: {
+    setActive: (active) => invoke("gs:recorder:setActive", { active: active === true }),
+    onSaveRequest: (cb) => {
+      const listener = () => cb();
+      ipcRenderer.on("gs:recorder:saveRequest", listener);
+      return () => ipcRenderer.removeListener("gs:recorder:saveRequest", listener);
+    },
+    saveDone: (ok, error) => invoke("gs:recorder:saveDone", { ok: ok === true, error }),
   },
   chrome: {
     setOverlay: (color, symbolColor) => invoke("gs:chrome:setOverlay", { color, symbolColor }),

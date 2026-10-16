@@ -57,6 +57,10 @@ let audioCtx: AudioContext | null = null;
 let levelTimer: ReturnType<typeof setInterval> | null = null;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let accumulatedSec = 0; // completed run time before the current segment
+// WHY: the permission prompt can sit open for seconds. `starting` blocks a second start
+// meanwhile, and `startToken` lets cancel() void a start whose grant arrives later.
+let starting = false;
+let startToken = 0;
 let segmentStart = 0;
 // WHY a timestamp and not a tick counter: browsers throttle setInterval to ~1Hz
 // in background/occluded windows, so accumulating a fixed 120ms per tick
@@ -146,6 +150,60 @@ function currentElapsed(): number {
   return Math.floor(accumulatedSec + active);
 }
 
+/** Wire an opened stream into MediaRecorder + the level meter and enter "recording". */
+function beginCapture(opened: MediaStream, opts: { meetingId: string; title: string; meetingType: string }) {
+  stream = opened;
+  chunks = [];
+  accumulatedSec = 0;
+  segmentStart = Date.now();
+  lastSignalAt = Date.now();
+  const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+    ? "audio/webm;codecs=opus"
+    : "audio/webm";
+  mediaRecorder = new MediaRecorder(opened, { mimeType: mime });
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data.size > 0) chunks.push(e.data);
+  };
+  mediaRecorder.start(1000);
+
+  // Level meter
+  audioCtx = new AudioContext();
+  const source = audioCtx.createMediaStreamSource(opened);
+  const analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  const buf = new Uint8Array(analyser.fftSize);
+  levelTimer = setInterval(() => {
+    if (state.status !== "recording") return;
+    analyser.getByteTimeDomainData(buf);
+    let sum = 0;
+    for (let i = 0; i < buf.length; i++) {
+      const x = (buf[i] - 128) / 128;
+      sum += x * x;
+    }
+    const rms = Math.sqrt(sum / buf.length);
+    const level = Math.min(1, rms * 3.5);
+    // WHY track this: the level was already computed for the meter and then
+    // discarded — it is the only in-flight evidence that the chosen input is
+    // dead, and surfacing it turns a lost meeting into a 25-second warning.
+    if (level > SILENCE_LEVEL) lastSignalAt = Date.now();
+    set({ level, silentSec: Math.floor((Date.now() - lastSignalAt) / 1000) });
+  }, LEVEL_INTERVAL_MS);
+  tickTimer = setInterval(() => set({ elapsedSec: currentElapsed() }), 1000);
+
+  set({
+    status: "recording",
+    meetingId: opts.meetingId,
+    title: opts.title,
+    meetingType: opts.meetingType,
+    startedAt: Date.now(),
+    elapsedSec: 0,
+    level: 0,
+    deviceLabel: opened.getAudioTracks()[0]?.label || "System default",
+    silentSec: 0,
+  });
+}
+
 export const recorder = {
   getState: (): RecorderState => state,
   subscribe(listener: () => void): () => void {
@@ -159,57 +217,26 @@ export const recorder = {
     meetingType: string;
     deviceId?: string;
   }) {
-    if (state.status !== "idle") throw new Error("Already recording");
-    stream = await openStream(opts.deviceId);
-    chunks = [];
-    accumulatedSec = 0;
-    segmentStart = Date.now();
-    lastSignalAt = Date.now();
-    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : "audio/webm";
-    mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    mediaRecorder.start(1000);
-
-    // Level meter
-    audioCtx = new AudioContext();
-    const source = audioCtx.createMediaStreamSource(stream);
-    const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 512;
-    source.connect(analyser);
-    const buf = new Uint8Array(analyser.fftSize);
-    levelTimer = setInterval(() => {
-      if (state.status !== "recording") return;
-      analyser.getByteTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) {
-        const x = (buf[i] - 128) / 128;
-        sum += x * x;
-      }
-      const rms = Math.sqrt(sum / buf.length);
-      const level = Math.min(1, rms * 3.5);
-      // WHY track this: the level was already computed for the meter and then
-      // discarded — it is the only in-flight evidence that the chosen input is
-      // dead, and surfacing it turns a lost meeting into a 25-second warning.
-      if (level > SILENCE_LEVEL) lastSignalAt = Date.now();
-      set({ level, silentSec: Math.floor((Date.now() - lastSignalAt) / 1000) });
-    }, LEVEL_INTERVAL_MS);
-    tickTimer = setInterval(() => set({ elapsedSec: currentElapsed() }), 1000);
-
-    set({
-      status: "recording",
-      meetingId: opts.meetingId,
-      title: opts.title,
-      meetingType: opts.meetingType,
-      startedAt: Date.now(),
-      elapsedSec: 0,
-      level: 0,
-      deviceLabel: stream.getAudioTracks()[0]?.label || "System default",
-      silentSec: 0,
-    });
+    if (state.status !== "idle" || starting) throw new Error("Already recording");
+    starting = true;
+    const token = ++startToken;
+    let opened: MediaStream;
+    try {
+      opened = await openStream(opts.deviceId);
+    } finally {
+      if (token === startToken) starting = false;
+    }
+    if (token !== startToken) {
+      opened.getTracks().forEach((t) => t.stop());
+      throw new Error("Recording start cancelled");
+    }
+    try {
+      beginCapture(opened, opts);
+    } catch (err) {
+      cleanupHardware();
+      set({ ...idleState });
+      throw err;
+    }
   },
 
   pause() {
@@ -253,6 +280,9 @@ export const recorder = {
   /** Discard the recording entirely. */
   cancel(): string | null {
     const meetingId = state.meetingId;
+    // Void any start still waiting on the permission prompt; its late grant is released.
+    startToken++;
+    starting = false;
     try {
       mediaRecorder?.stop();
     } catch {

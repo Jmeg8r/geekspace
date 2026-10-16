@@ -7,7 +7,14 @@ import { ThemeProvider } from "./state/theme";
 import { isWinDesktop, tzOffsetMin } from "./lib/utils";
 import { integrationsAvailable } from "./lib/integrations";
 import { syncMacCalendar } from "./lib/macSync";
-import { onMeetingProgress } from "./lib/meetingsBridge";
+import {
+  meetingsAvailable,
+  onMeetingProgress,
+  onSaveRecordingRequest,
+  reportRecordingActive,
+} from "./lib/meetingsBridge";
+import { recorder } from "./lib/recorder";
+import { pendingAudio, saveRecordingBeforeQuit } from "./lib/meetingPipeline";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { HomeView } from "./components/home/HomeView";
 import { CalendarView } from "./components/calendar/CalendarView";
@@ -35,6 +42,7 @@ export default function App() {
   const createPage = useMutation(api.pages.create);
   const reflow = useMutation(api.scheduling.reflowNow);
   const setMeetingStatus = useMutation(api.meetings.setStatus);
+  const reconcileMeetings = useMutation(api.meetings.reconcileInterrupted);
 
   // Pipe meeting-pipeline progress (whisper/model/LLM) into Convex so every
   // surface shows live status. Deduped — model downloads fire rapidly.
@@ -42,7 +50,7 @@ export default function App() {
   useEffect(() => {
     return onMeetingProgress((p) => {
       if (!p.meetingId) return;
-      const pct = p.phase === "summarizing" ? undefined : p.pct;
+      const pct = p.pct;
       const key = `${p.meetingId}:${p.phase}:${pct !== undefined ? Math.floor(pct / 4) : "-"}`;
       if (key === lastProgress.current) return;
       lastProgress.current = key;
@@ -53,6 +61,38 @@ export default function App() {
       }).catch(() => {});
     });
   }, [setMeetingStatus]);
+
+  // Meetings left mid-pipeline by a previous run stop spinning and offer Re-run AI.
+  // WHY desktop only: a browser tab opened beside the desktop window must not fail a
+  // recording that window is still making.
+  const launchedAt = useRef(Date.now());
+  useEffect(() => {
+    if (!meetingsAvailable()) return;
+    void reconcileMeetings({ before: launchedAt.current }).catch((err) =>
+      console.warn("Could not recover interrupted meetings", err)
+    );
+  }, [reconcileMeetings]);
+
+  // Quit guard handshake: tell the main process while there is audio it must not lose
+  // (a live recording, a save in flight, or stopped audio not yet stored), and save it
+  // when the user chooses "Save Recording and Quit".
+  useEffect(() => {
+    const hasAudioAtRisk = () => recorder.getState().status !== "idle" || pendingAudio.busy();
+    let active = hasAudioAtRisk();
+    reportRecordingActive(active);
+    const update = () => {
+      const now = hasAudioAtRisk();
+      if (now !== active) reportRecordingActive((active = now));
+    };
+    const offRecorder = recorder.subscribe(update);
+    const offPending = pendingAudio.subscribe(update);
+    const offSave = onSaveRecordingRequest(saveRecordingBeforeQuit);
+    return () => {
+      offRecorder();
+      offPending();
+      offSave();
+    };
+  }, []);
 
   // WHY: reflow on launch — the schedule depends on "now", so a fresh open
   // re-plans around whatever happened since the last session.
