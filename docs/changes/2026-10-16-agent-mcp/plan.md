@@ -61,3 +61,28 @@ linear: pending
   through. Without that turn this stays unproven, and the PR will say so.
 - **Trimming loses older context in very long chats.** That's intended: the alternative
   is Ollama dropping the system prompt silently.
+
+## Deviations
+
+- **Test-only commit `49d5013`:** both new test files failed for the stated reasons (the
+  `agentShared` module was missing; `architectOptions` didn't exist).
+- **Added:** `architect.d.mts`, so the lockdown test typechecks against the SDK's own
+  `Options` type. The local lane's round limit reads `GEEKSPACE_LOCAL_MAX_TOOL_ROUNDS`
+  (default 12), alongside the existing `GEEKSPACE_LOCAL_NUM_CTX` setting, so the error
+  path could be forced live.
+- **Turn gate:** `oneTurnAtATime` lives in `agentShared` so it can be unit-tested; main
+  wraps both lanes with it.
+- **Suite 175/175; verify and typecheck pass.**
+- **Live, worktree backend:**
+  - SDK `init` with the new options, aborted before any model call: 0 built-in tools,
+    14 `mcp__geekspace__*` tools, only `geekspace` connected, permission mode `dontAsk`,
+    0 plugins. Before the change: 32 built-ins, about 30 MCP servers, 8 plugins,
+    `bypassPermissions`.
+  - One real Claude-lane turn (approved by James), 4.9 s: it called `query_schema`,
+    listed Projects, Tasks and Sprints, and when asked to run `echo hello` said it has no
+    shell. No shell tool exists for it now.
+  - Local lane (`qwen3-coder-next:q8_0`), 55 s: the first `create_row` returned an error
+    and the model retried. The backend holds exactly one new row, "Probe 6: local lane
+    row".
+  - Panel with the round limit forced to 1: "⚠️ Stopped after 1 tool rounds without a
+    final answer." appeared in the conversation. Before, error frames were dropped.
