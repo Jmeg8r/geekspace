@@ -81,6 +81,22 @@ function validate(def: PropertyDef, value: PropertyValue) {
   if (!ok) throw new Error(`Invalid value for "${def.name}" (${def.type})`);
 }
 
+/**
+ * The properties of a task-source database that the scheduler reads. An edit to anything
+ * else (a title, a note, a tag) cannot change the plan, so it does not reflow.
+ * WHY a list: if the scheduler starts reading another property, add it here, or edits to
+ * it will not re-plan. See docs/changes/2026-10-15-scheduler-dst-perf/.
+ */
+export function scheduleFields(db: Doc<"databases">): Set<string> {
+  const c = db.isTaskSource ? db.taskConfig : undefined;
+  if (!c) return new Set();
+  return new Set(
+    [c.statusPropId, c.datePropId, c.estimatePropId, c.priorityPropId, c.blockedByPropId].filter(
+      (id): id is string => Boolean(id)
+    )
+  );
+}
+
 async function isTaskSourceDb(ctx: MutationCtx, rawId: string): Promise<boolean> {
   const id = ctx.db.normalizeId("databases", rawId);
   const db = id ? await ctx.db.get(id) : null;
@@ -97,7 +113,7 @@ export async function changeProperties(
   row: Doc<"rows">,
   db: Doc<"databases">,
   changes: PropertyBag
-): Promise<{ touchedTaskSource: boolean }> {
+): Promise<{ touchedTaskSource: boolean; affectsSchedule: boolean }> {
   const defs: PropertyDef[] = db.properties;
   const defFor = (id: string) => {
     const def = defs.find((p) => p.id === id);
@@ -134,6 +150,8 @@ export async function changeProperties(
 
   // 3. Reverse sides, read fresh so self-links and same-database pairs see step 2.
   let touchedTaskSource = Boolean(db.isTaskSource);
+  const ownFields = scheduleFields(db);
+  let affectsSchedule = Object.keys(changes).some((id) => ownFields.has(id));
   for (const [id, value] of Object.entries(changes)) {
     const def = defFor(id);
     const reverseId = def.relation?.syncedPropId;
@@ -153,12 +171,15 @@ export async function changeProperties(
       // WHY not throw: older builds left half-pairs behind when one side of a
       // self-relation was deleted, and throwing would lock every edit to those rows. The
       // forward side is already written; the broken pair is named so it can be repaired.
+      // (The reverse side cannot be updated, so it cannot affect the schedule either.)
       console.warn(
         `Synced relation "${def.name}" (${db._id}/${id}) has no matching reverse ${reverseId} ` +
           `on database ${def.relation.databaseId}; updated row ${row._id} on this side only`
       );
       continue;
     }
+    // Editing "Blocking" on one task changes "Blocked by" on others.
+    if (targetDb && scheduleFields(targetDb).has(reverseId)) affectsSchedule = true;
     for (const rawId of new Set([...oldIds, ...newIds])) {
       const targetId = ctx.db.normalizeId("rows", rawId);
       const target = targetId ? await ctx.db.get(targetId) : null;
@@ -174,7 +195,7 @@ export async function changeProperties(
       });
     }
   }
-  return { touchedTaskSource };
+  return { touchedTaskSource, affectsSchedule };
 }
 
 /**

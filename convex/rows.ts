@@ -208,8 +208,9 @@ async function updateRowProperties(
   if (!row) return;
   const db = await ctx.db.get(row.databaseId);
   if (!db) return;
-  const { touchedTaskSource } = await changeProperties(ctx, row, db, changes);
-  if (touchedTaskSource) await runReflow(ctx, tzOffsetMin);
+  // Only edits to what the scheduler reads re-plan: typing a task title no longer does.
+  const { affectsSchedule } = await changeProperties(ctx, row, db, changes);
+  if (affectsSchedule) await runReflow(ctx, tzOffsetMin);
 }
 
 export const updateProperty = mutation({

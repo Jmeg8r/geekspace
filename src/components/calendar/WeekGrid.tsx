@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
-import { format, isSameDay, startOfWeek } from "date-fns";
+import { addDays, format, isSameDay, startOfWeek } from "date-fns";
 import { CircleCheck, Lock, LockOpen, SquarePen, Zap } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
 import { clamp, cn, tzOffsetMin } from "../../lib/utils";
-import { fmtTime, epochToCalendarMs } from "../../lib/dates";
+import { atMinuteOfDay, epochToCalendarMs, fmtTime, nextDay, wallSpanOn, weekDays } from "../../lib/dates";
 import { colorVarClass } from "../../lib/optionColors";
+import { layoutBySpan } from "../../lib/dayLayout";
 import { ContextMenuOverlay, useContextMenu } from "../common/ContextMenu";
 
 export const HOUR_H = 52;
@@ -45,7 +46,8 @@ export function WeekGrid({
   onEditEvent: (event: EventDoc) => void;
 }) {
   const weekStart = useMemo(() => startOfWeek(anchor).getTime(), [anchor]);
-  const weekEnd = weekStart + 7 * DAY_MS;
+  // Calendar arithmetic, not 24-hour steps: weeks with a DST change are 167 or 169 hours.
+  const weekEnd = addDays(weekStart, 7).getTime();
   const events = useQuery(api.events.listRange, { start: weekStart, end: weekEnd }) ?? [];
   const blocks = useQuery(api.timeBlocks.listRange, { start: weekStart, end: weekEnd }) ?? [];
   const settings = useQuery(api.settings.get);
@@ -73,7 +75,7 @@ export function WeekGrid({
     scrollRef.current?.scrollTo({ top: 7.5 * HOUR_H });
   }, []);
 
-  const days = Array.from({ length: 7 }, (_, i) => weekStart + i * DAY_MS);
+  const days = weekDays(weekStart);
   const now = Date.now();
 
   const items: GridItem[] = [
@@ -93,7 +95,7 @@ export function WeekGrid({
   }
 
   function dayMinToMs(dayIdx: number, minute: number): number {
-    return days[dayIdx] + minute * MIN_MS;
+    return atMinuteOfDay(days[dayIdx], minute);
   }
 
   // ---------- drag handlers ----------
@@ -369,7 +371,7 @@ export function WeekGrid({
 }
 
 function AllDayLane({ day, events }: { day: number; events: EventDoc[] }) {
-  const dayEnd = day + DAY_MS;
+  const dayEnd = nextDay(day);
   const allDay = events.filter((e) => e.allDay && e.start < dayEnd && e.end > day);
   const dueItems = useQuery(api.calendarData.listForCalendar) ?? [];
   const dayCal = epochToCalendarMs(day + DAY_MS / 2);
@@ -427,23 +429,6 @@ function NowLine({ days, now }: { days: number[]; now: number }) {
 }
 
 /** Greedy interval-graph column assignment so overlapping items sit side by side. */
-function layoutDay(items: GridItem[]): Array<{ item: GridItem; col: number; cols: number }> {
-  const sorted = [...items].sort((a, b) => a.start - b.start || b.end - a.end);
-  const colEnds: number[] = [];
-  const placed = sorted.map((item) => {
-    let col = colEnds.findIndex((end) => end <= item.start);
-    if (col === -1) {
-      col = colEnds.length;
-      colEnds.push(item.end);
-    } else {
-      colEnds[col] = item.end;
-    }
-    return { item, col, cols: 1 };
-  });
-  const total = colEnds.length || 1;
-  return placed.map((p) => ({ ...p, cols: total }));
-}
-
 function DayItems({
   day,
   dayIdx,
@@ -463,9 +448,9 @@ function DayItems({
   onResizePointerDown: (e: React.PointerEvent, item: GridItem) => void;
   onBlockContextMenu: (e: React.MouseEvent, b: BlockItem) => void;
 }) {
-  const dayEnd = day + DAY_MS;
+  const dayEnd = nextDay(day);
   const dayItems = items.filter((it) => it.start < dayEnd && it.end > day);
-  const laidOut = layoutDay(dayItems);
+  const laidOut = layoutBySpan(dayItems, (item) => wallSpanOn(day, item.start, item.end));
 
   return (
     <>
@@ -475,14 +460,14 @@ function DayItems({
         let start = item.start;
         let end = item.end;
         if (isDragged && drag.mode === "move" && drag.moved) {
-          start = day + drag.startMin * MIN_MS; // visual only; day comes from drag.dayIdx
+          start = atMinuteOfDay(day, drag.startMin); // visual only; day comes from drag.dayIdx
           end = start + drag.durMin * MIN_MS;
           if (drag.dayIdx !== dayIdx) return null;
         } else if (isDragged && drag.mode === "resize") {
-          end = day + drag.endMin * MIN_MS;
+          end = atMinuteOfDay(day, drag.endMin);
         }
-        const startMin = Math.max(0, (start - day) / MIN_MS);
-        const endMin = Math.min(24 * 60, (end - day) / MIN_MS);
+        // Wall-clock minutes, so 9:00 sits in the 9:00 row on a 23- or 25-hour day too.
+        const [startMin, endMin] = wallSpanOn(day, start, end);
         if (endMin <= startMin) return null;
 
         const width = 100 / 7 / cols;
