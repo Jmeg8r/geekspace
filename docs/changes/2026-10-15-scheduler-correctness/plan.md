@@ -111,3 +111,11 @@ departures from the plan text.
   - Suite 112/112.
 - **Follow-up, not fixed here:** a trashed task's locked or past blocks still render on the
   week grid; `timeBlocks.listRange` could hide blocks of hidden databases.
+- **Codex review round 2 (`d404780`): GATE PASS, one [P2], fixed.** A task whose whole
+  estimate sat in locked blocks skipped the deadline check, so locking an overdue task's
+  block cleared its `past_due` warning (and `timeBlocks.move` cleared the stripe). The
+  reflow now checks every locked future block against the current due date, keeps its
+  `pastDue` stripe in step, and adds a `past_due` warning when the engine did not.
+  Failing-first test (warning gone after lock), then 11/11; suite 113/113. Live: the
+  locked "Record demo video" went striped with a `past_due` warning when its due date
+  moved to yesterday, and back to clean when restored.

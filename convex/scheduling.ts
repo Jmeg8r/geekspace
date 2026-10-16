@@ -1,6 +1,6 @@
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   computeSchedule,
   calendarDateToLocalMs,
@@ -77,6 +77,8 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   const pastMin = new Map<string, number>();
   const hasFutureBlock = new Set<string>();
   const reservedEnd = new Map<string, number>();
+  // Locked blocks still ahead, per task: kept as placed, but their deadline is still checked.
+  const lockedAhead = new Map<string, Doc<"timeBlocks">[]>();
   const add = (m: Map<string, number>, id: string, n: number) => m.set(id, (m.get(id) ?? 0) + n);
   for (const b of allBlocks) {
     const minutes = (b.end - b.start) / MIN_MS;
@@ -88,6 +90,9 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
         busy.push({ start: Math.max(now, b.start), end: b.end });
         hasFutureBlock.add(b.taskRowId);
       }
+      if (b.locked && b.start > now) {
+        lockedAhead.set(b.taskRowId, [...(lockedAhead.get(b.taskRowId) ?? []), b]);
+      }
     } else {
       await ctx.db.delete(b._id);
     }
@@ -95,6 +100,8 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   const usedUp: SchedulerWarning[] = [];
   // Tasks marked done: their leftover reservations must not hold anyone up.
   const doneIds = new Set<string>();
+  // Open tasks with a locked block after their due date, by id → title.
+  const lateLocked = new Map<string, string>();
 
   // --- Tasks from every task-source database
   const dbs = await ctx.db.query("databases").collect();
@@ -122,6 +129,22 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       }
       const estimate = p[db.taskConfig.estimatePropId];
       if (!isNumber(estimate) || estimate <= 0) continue;
+      const dateVal = p[db.taskConfig.datePropId] as DateValue | undefined;
+      let dueMs: number | undefined;
+      if (dateVal && isNumber(dateVal.start)) {
+        dueMs = dateVal.includeTime
+          ? (dateVal.end ?? dateVal.start)
+          : calendarDateToLocalMs(dateVal.end ?? dateVal.start, tz, s.dayEndMin);
+      }
+      // Locked blocks are not re-planned, so check their deadline here: keep each block's
+      // past-due stripe true to the current due date, and warn if any lands after it, even
+      // when locked blocks cover the whole estimate and the engine never sees the task.
+      for (const b of lockedAhead.get(row._id) ?? []) {
+        const late = dueMs !== undefined && b.end > dueMs;
+        if (late !== b.pastDue) await ctx.db.patch(b._id, { pastDue: late });
+        if (late) lateLocked.set(row._id, row.title);
+      }
+
       const remaining = estimate - (loggedMin.get(row._id) ?? 0);
       if (remaining <= 0) {
         // Every planned minute has passed and the task is still open: say so, rather than
@@ -130,14 +153,6 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
           usedUp.push({ taskId: row._id, title: row.title, unscheduledMin: 0, reason: "time_used_up" });
         }
         continue;
-      }
-
-      const dateVal = p[db.taskConfig.datePropId] as DateValue | undefined;
-      let dueMs: number | undefined;
-      if (dateVal && isNumber(dateVal.start)) {
-        dueMs = dateVal.includeTime
-          ? (dateVal.end ?? dateVal.start)
-          : calendarDateToLocalMs(dateVal.end ?? dateVal.start, tz, s.dayEndMin);
       }
 
       let priority = 2; // medium default
@@ -168,7 +183,11 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     t.earliestMs = Math.max(now, ...holding.map((id) => reservedEnd.get(id) ?? now));
   }
   const result = computeSchedule(now, tasks, busy, cfg);
-  const warnings = [...result.warnings, ...usedUp];
+  const warned = new Set(result.warnings.map((w) => w.taskId));
+  const lateLockedWarnings: SchedulerWarning[] = [...lateLocked]
+    .filter(([taskId]) => !warned.has(taskId))
+    .map(([taskId, title]) => ({ taskId, title, unscheduledMin: 0, reason: "past_due" }));
+  const warnings = [...result.warnings, ...lateLockedWarnings, ...usedUp];
   for (const b of result.blocks) {
     await ctx.db.insert("timeBlocks", {
       taskRowId: b.taskId as Id<"rows">,

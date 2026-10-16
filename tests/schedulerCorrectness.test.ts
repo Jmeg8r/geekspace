@@ -196,6 +196,36 @@ describe("runReflow — Codex review of PR #54", () => {
     await s.t.mutation(api.pages.restore, { pageId: s.tasks.pageId });
     expect((await s.blocks()).length).toBe(before);
   });
+
+  // Round 2: a task whose whole estimate sits in locked blocks must keep its deadline check.
+  it("keeps the past-due warning and stripe when an overdue task's block is locked", async () => {
+    const s = await seeded();
+    const wiring = s.tasks.taskConfig;
+    if (!wiring) throw new Error("no task wiring");
+    const task = (await s.t.run((ctx) =>
+      ctx.db
+        .query("rows")
+        .withIndex("by_database", (q) => q.eq("databaseId", s.tasks._id))
+        .collect()
+    )).find((r) => r.title === "Design app icon");
+    if (!task) throw new Error("seed task missing");
+    // Due yesterday (a calendar date, stored as UTC midnight): whatever is planned is late.
+    const yesterday = Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()) - DAY_MS;
+    await s.t.mutation(api.rows.updateProperty, { rowId: task._id, propId: wiring.datePropId, value: { start: yesterday } });
+    const reasonFor = async () => {
+      const state = await s.t.query(api.scheduling.getWarnings, {});
+      const warnings: SchedulerWarning[] = state.warnings;
+      return warnings.find((w) => w.taskId === task._id)?.reason;
+    };
+    expect(await reasonFor()).toBe("past_due");
+    const [block] = (await s.blocks()).filter((b) => b.taskRowId === task._id);
+    // Lock it where it is, as a drag in place would.
+    await s.t.mutation(api.timeBlocks.move, { blockId: block._id, start: block.start, end: block.end });
+    expect(await reasonFor()).toBe("past_due");
+    const [locked] = (await s.blocks()).filter((b) => b.taskRowId === task._id);
+    expect(locked.locked).toBe(true);
+    expect(locked.pastDue).toBe(true);
+  });
 });
 
 describe("settings.update", () => {
