@@ -80,7 +80,7 @@ export function DocsPage() {
     return undefined;
   }, [allDbs]);
   const projectRows = useQuery(
-    api.rows.list,
+    api.rows.listTitles,
     projectsDb ? { databaseId: projectsDb._id } : "skip"
   );
 
@@ -134,14 +134,14 @@ export function DocsPage() {
           <h1 className="flex flex-1 items-center gap-2 text-[28px] font-extrabold tracking-tight">
             <Folder size={24} className="text-accent" /> Docs
           </h1>
-          {projectRows && projectRows.rows.length > 0 && (
+          {projectRows && projectRows.length > 0 && (
             <select
               value={projectFilter}
               onChange={(e) => setProjectFilter(e.target.value)}
               className="rounded-md border border-border bg-surface px-2 py-1.5 text-[13px] outline-none"
             >
               <option value="">All files</option>
-              {projectRows.rows.map((r) => (
+              {projectRows.map((r) => (
                 <option key={r._id} value={r._id}>
                   {r.title || "Untitled"}
                 </option>
@@ -185,7 +185,7 @@ export function DocsPage() {
           <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">
             {docs.map((d) => {
               const Icon = mimeIcon(d.mime);
-              const project = projectRows?.rows.find((r) => r._id === d.projectRowId);
+              const project = projectRows?.find((r) => r._id === d.projectRowId);
               return (
                 <button
                   key={d._id}
@@ -229,7 +229,7 @@ export function DocsPage() {
       {viewing && (
         <DocViewer
           doc={viewing}
-          projectRows={projectRows?.rows ?? []}
+          projectRows={projectRows ?? []}
           onClose={() => setViewing(null)}
         />
       )}

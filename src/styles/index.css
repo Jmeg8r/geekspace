@@ -248,14 +248,18 @@ button {
 .fade-in {
   animation: fade-in 0.14s ease-out;
 }
+/* WHY only opacity and scale: popovers are positioned by an inline `transform` (Floating UI)
+   and the modal centres itself with Tailwind's `translate`. Animating either property
+   replaced it for the length of the animation, so popovers flashed at the window's
+   top-left. `scale` composes with both, and nothing that fades in sets it. */
 @keyframes fade-in {
   from {
     opacity: 0;
-    transform: translateY(2px) scale(0.99);
+    scale: 0.98;
   }
   to {
     opacity: 1;
-    transform: none;
+    scale: none;
   }
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState, type MouseEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
   ArrowUpDown,
@@ -30,6 +30,7 @@ import { cn, tzOffsetMin } from "../../lib/utils";
 import { swatchClass } from "../../lib/optionColors";
 import { useUI } from "../../state/ui";
 import { Popover } from "../common/Popover";
+import { DraftInput } from "../common/DraftInput";
 import { MenuItem, MenuLabel, MenuList, MenuSeparator } from "../common/Menu";
 import { VIEW_ICONS } from "../common/bits";
 import { TableView } from "./TableView";
@@ -180,7 +181,7 @@ export function DatabaseContainer({ databaseId }: { databaseId: Id<"databases"> 
           </Popover>
         </div>
 
-        <FilterMenu db={db} view={activeView} count={filterCount} />
+        <FilterMenu key={activeView._id} db={db} view={activeView} count={filterCount} />
         <SortMenu db={db} view={activeView} count={sortCount} />
         <PropsMenu db={db} view={activeView} />
         <DbConfigMenu db={db} />
@@ -282,9 +283,23 @@ function FilterMenu({ db, view, count }: { db: Doc<"databases">; view: Doc<"view
   const updateView = useMutation(api.views.update);
   const props = db.properties as PropertyDef[];
   const filters = (view.filters as FilterConfig | undefined) ?? { conjunction: "and", rules: [] };
+  // WHY: every change sends the whole filter config, so a value still being typed (or sent
+  // but not yet back from the server) must be carried by any other change made meanwhile,
+  // or that change would write the old value back. A typed value is dropped once the server
+  // copy shows it. This menu is keyed by view, so nothing carries across views.
+  const typing = useRef(new Map<number, FilterRule["value"]>());
+  useEffect(() => {
+    filters.rules.forEach((r, j) => {
+      if (typing.current.get(j) === r.value) typing.current.delete(j);
+    });
+  }, [filters]);
 
-  function save(next: FilterConfig) {
-    void updateView({ viewId: view._id, filters: next });
+  function save(change: (config: FilterConfig) => FilterConfig) {
+    const withTyping = {
+      ...filters,
+      rules: filters.rules.map((r, j) => (typing.current.has(j) ? { ...r, value: typing.current.get(j) } : r)),
+    };
+    void updateView({ viewId: view._id, filters: change(withTyping) });
   }
 
   return (
@@ -299,7 +314,10 @@ function FilterMenu({ db, view, count }: { db: Doc<"databases">; view: Doc<"view
               Match
               <select
                 value={filters.conjunction}
-                onChange={(e) => save({ ...filters, conjunction: e.target.value as "and" | "or" })}
+                onChange={(e) => {
+                  const conjunction = e.target.value === "or" ? "or" : "and";
+                  save((c) => ({ ...c, conjunction }));
+                }}
                 className="rounded border border-border bg-surface px-1 py-0.5 outline-none"
               >
                 <option value="and">all (and)</option>
@@ -313,17 +331,16 @@ function FilterMenu({ db, view, count }: { db: Doc<"databases">; view: Doc<"view
               key={i}
               rule={rule}
               props={props}
-              onChange={(next) =>
-                save({ ...filters, rules: filters.rules.map((r, j) => (j === i ? next : r)) })
-              }
-              onRemove={() => save({ ...filters, rules: filters.rules.filter((_, j) => j !== i) })}
+              onChange={(next) => save((c) => ({ ...c, rules: c.rules.map((r, j) => (j === i ? next : r)) }))}
+              onTyping={(value) => typing.current.set(i, value)}
+              onRemove={() => save((c) => ({ ...c, rules: c.rules.filter((_, j) => j !== i) }))}
             />
           ))}
           <button
             onClick={() => {
               const prop = props.find((p) => p.type !== "rollup") ?? props[0];
               const firstOp = opsForType(prop.type)[0]?.op ?? "isNotEmpty";
-              save({ ...filters, rules: [...filters.rules, { propId: prop.id, op: firstOp }] });
+              save((c) => ({ ...c, rules: [...c.rules, { propId: prop.id, op: firstOp }] }));
             }}
             className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[13px] text-ink-2 hover:bg-hov"
           >
@@ -339,11 +356,13 @@ function FilterRuleRow({
   rule,
   props,
   onChange,
+  onTyping,
   onRemove,
 }: {
   rule: FilterRule;
   props: PropertyDef[];
   onChange: (rule: FilterRule) => void;
+  onTyping: (value: string) => void;
   onRemove: () => void;
 }) {
   const def = props.find((p) => p.id === rule.propId);
@@ -375,7 +394,12 @@ function FilterRuleRow({
         ))}
       </select>
       {needsValue && def && (
-        <FilterValueInput def={def} value={rule.value} onChange={(v) => onChange({ ...rule, value: v })} />
+        <FilterValueInput
+          def={def}
+          value={rule.value}
+          onChange={(v) => onChange({ ...rule, value: v })}
+          onTyping={onTyping}
+        />
       )}
       <button onClick={onRemove} className="rounded p-1 text-ink-3 hover:bg-hov hover:text-ink">
         <X size={13} />
@@ -388,10 +412,12 @@ function FilterValueInput({
   def,
   value,
   onChange,
+  onTyping,
 }: {
   def: PropertyDef;
   value: string | number | undefined;
   onChange: (v: string | number | undefined) => void;
+  onTyping: (value: string) => void;
 }) {
   if (def.type === "relation" && def.relation) {
     return <RelationValueSelect def={def} value={value} onChange={onChange} />;
@@ -436,9 +462,10 @@ function FilterValueInput({
     );
   }
   return (
-    <input
+    <DraftInput
       value={String(value ?? "")}
-      onChange={(e) => onChange(e.target.value)}
+      onCommit={onChange}
+      onDraftChange={onTyping}
       placeholder="Value"
       className="flex-1 rounded border border-border bg-surface px-1.5 py-1 text-[12px] outline-none"
     />
@@ -454,7 +481,7 @@ function RelationValueSelect({
   value: string | number | undefined;
   onChange: (v: string | number | undefined) => void;
 }) {
-  const data = useQuery(api.rows.list, {
+  const titles = useQuery(api.rows.listTitles, {
     databaseId: def.relation!.databaseId as Id<"databases">,
   });
   return (
@@ -464,7 +491,7 @@ function RelationValueSelect({
       className="flex-1 rounded border border-border bg-surface px-1 py-1 text-[12px] outline-none"
     >
       <option value="">Choose…</option>
-      {(data?.rows ?? []).map((r) => (
+      {(titles ?? []).map((r) => (
         <option key={r._id} value={r._id}>
           {r.title || "Untitled"}
         </option>

@@ -15,6 +15,8 @@ import { isNumber, isString } from "../../convex/lib/predicates";
 // view switching instant.
 
 export type RowDoc = Doc<"rows"> & { computed?: Record<string, number | null> };
+/** What a relation picker or project list needs: rows.listTitles. */
+export type RowTitle = Pick<Doc<"rows">, "_id" | "title">;
 
 function numberValue(row: RowDoc, def: PropertyDef): number | null {
   if (def.type === "rollup") return row.computed?.[def.id] ?? null;
