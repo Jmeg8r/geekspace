@@ -16,7 +16,7 @@ let dir = "";
 const dest = () => path.join(dir, "model.bin");
 const leftovers = async () => (await fs.readdir(dir)).filter((f) => f !== "model.bin");
 
-function serve(body: Uint8Array, status = 200, headers: Record<string, string> = {}) {
+function serve(body: Uint8Array<ArrayBuffer>, status = 200, headers: Record<string, string> = {}) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => new Response(status >= 300 && status < 400 ? null : body, { status, headers }))

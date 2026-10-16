@@ -64,6 +64,7 @@ describe("meetings.setStatus", () => {
   it("rejects an unknown status", async () => {
     const t = convexTest(schema, modules);
     const id = await meeting(t);
+    // @ts-expect-error -- an invalid status is the point: the validator must reject it at runtime.
     await expect(t.mutation(api.meetings.setStatus, { meetingId: id, status: "exploded" })).rejects.toThrow();
   });
 
