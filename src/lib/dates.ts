@@ -100,3 +100,19 @@ export function wallMinuteOn(dayMs: number, ms: number): number {
   const d = new Date(ms);
   return d.getHours() * 60 + d.getMinutes();
 }
+
+/**
+ * Where an item spanning `start`–`end` sits on the local day starting at `dayMs`, as
+ * wall-clock minutes [startMin, endMin]. On a fall-back day an item inside the repeated hour
+ * can end at an earlier wall time than it starts (01:45 EDT → 01:15 EST is 30 minutes); it
+ * is then drawn with its real duration from its start instead of vanishing.
+ */
+export function wallSpanOn(dayMs: number, start: number, end: number): [number, number] {
+  const startMin = wallMinuteOn(dayMs, start);
+  let endMin = wallMinuteOn(dayMs, end);
+  if (endMin <= startMin && end > start) {
+    const visibleFrom = Math.max(start, dayMs);
+    endMin = Math.min(24 * 60, startMin + (end - visibleFrom) / 60_000);
+  }
+  return [startMin, endMin];
+}

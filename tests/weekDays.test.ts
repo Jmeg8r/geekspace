@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { atMinuteOfDay, nextDay, wallMinuteOn, weekDays } from "../src/lib/dates";
+import { atMinuteOfDay, nextDay, wallMinuteOn, wallSpanOn, weekDays } from "../src/lib/dates";
 
 // WHAT: week-grid date arithmetic across a DST change. The next US change is Sunday
 // 2026-11-01 (clocks go back at 02:00, so that day has 25 hours).
@@ -35,6 +35,22 @@ describe("DST week arithmetic (America/New_York)", () => {
     expect(wallMinuteOn(sundayNov1, nineAm)).toBe(9 * 60);
     expect(wallMinuteOn(sundayNov1, sundayNov1 - HOUR_MS)).toBe(0);
     expect(wallMinuteOn(sundayNov1, nextDay(sundayNov1) + HOUR_MS)).toBe(24 * 60);
+  });
+
+  // Codex review of PR #55: an item inside the repeated hour must not vanish.
+  it("wallSpanOn keeps an item crossing the repeated hour visible, at its real length", () => {
+    const start = Date.parse("2026-11-01T01:45:00-04:00"); // 01:45 EDT
+    const end = Date.parse("2026-11-01T01:15:00-05:00"); // 01:15 EST, 30 minutes later
+    expect(end - start).toBe(30 * 60_000);
+    const [startMin, endMin] = wallSpanOn(sundayNov1, start, end);
+    expect(startMin).toBe(105);
+    expect(endMin - startMin).toBe(30);
+  });
+
+  it("wallSpanOn leaves ordinary items as plain wall-clock spans", () => {
+    expect(wallSpanOn(sundayNov1, new Date(2026, 10, 1, 9).getTime(), new Date(2026, 10, 1, 10, 30).getTime())).toEqual([
+      540, 630,
+    ]);
   });
 
   it("nextDay spans the 25-hour fall-back day", () => {

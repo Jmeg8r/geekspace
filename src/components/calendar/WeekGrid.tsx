@@ -6,7 +6,7 @@ import { api } from "../../../convex/_generated/api";
 import type { Doc } from "../../../convex/_generated/dataModel";
 import { useUI } from "../../state/ui";
 import { clamp, cn, tzOffsetMin } from "../../lib/utils";
-import { atMinuteOfDay, epochToCalendarMs, fmtTime, nextDay, wallMinuteOn, weekDays } from "../../lib/dates";
+import { atMinuteOfDay, epochToCalendarMs, fmtTime, nextDay, wallSpanOn, weekDays } from "../../lib/dates";
 import { colorVarClass } from "../../lib/optionColors";
 import { ContextMenuOverlay, useContextMenu } from "../common/ContextMenu";
 
@@ -483,8 +483,7 @@ function DayItems({
           end = atMinuteOfDay(day, drag.endMin);
         }
         // Wall-clock minutes, so 9:00 sits in the 9:00 row on a 23- or 25-hour day too.
-        const startMin = wallMinuteOn(day, start);
-        const endMin = wallMinuteOn(day, end);
+        const [startMin, endMin] = wallSpanOn(day, start, end);
         if (endMin <= startMin) return null;
 
         const width = 100 / 7 / cols;

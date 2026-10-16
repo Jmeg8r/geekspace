@@ -99,3 +99,8 @@ departures from the plan text.
     before and after.
 - **Not changed:** `events.syncExternal`'s 35-day look-back (macOS Calendar mirrors) is
   PR 7's.
+- **Codex review round 1 (`7b3991d`): GATE PASS, one [P2], fixed.** On the fall-back day an
+  item inside the repeated hour can end at an earlier wall-clock minute than it starts
+  (01:45 EDT → 01:15 EST is 30 minutes); the two `wallMinuteOn` calls gave (105, 75) and
+  the grid hid it (shown by running the previous code under `America/New_York`). New
+  `wallSpanOn` falls back to the real duration from the start; two tests. Suite 128/128.
