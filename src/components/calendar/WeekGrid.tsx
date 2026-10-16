@@ -8,6 +8,7 @@ import { useUI } from "../../state/ui";
 import { clamp, cn, tzOffsetMin } from "../../lib/utils";
 import { atMinuteOfDay, epochToCalendarMs, fmtTime, nextDay, wallSpanOn, weekDays } from "../../lib/dates";
 import { colorVarClass } from "../../lib/optionColors";
+import { layoutBySpan } from "../../lib/dayLayout";
 import { ContextMenuOverlay, useContextMenu } from "../common/ContextMenu";
 
 export const HOUR_H = 52;
@@ -428,23 +429,6 @@ function NowLine({ days, now }: { days: number[]; now: number }) {
 }
 
 /** Greedy interval-graph column assignment so overlapping items sit side by side. */
-function layoutDay(items: GridItem[]): Array<{ item: GridItem; col: number; cols: number }> {
-  const sorted = [...items].sort((a, b) => a.start - b.start || b.end - a.end);
-  const colEnds: number[] = [];
-  const placed = sorted.map((item) => {
-    let col = colEnds.findIndex((end) => end <= item.start);
-    if (col === -1) {
-      col = colEnds.length;
-      colEnds.push(item.end);
-    } else {
-      colEnds[col] = item.end;
-    }
-    return { item, col, cols: 1 };
-  });
-  const total = colEnds.length || 1;
-  return placed.map((p) => ({ ...p, cols: total }));
-}
-
 function DayItems({
   day,
   dayIdx,
@@ -466,7 +450,7 @@ function DayItems({
 }) {
   const dayEnd = nextDay(day);
   const dayItems = items.filter((it) => it.start < dayEnd && it.end > day);
-  const laidOut = layoutDay(dayItems);
+  const laidOut = layoutBySpan(dayItems, (item) => wallSpanOn(day, item.start, item.end));
 
   return (
     <>

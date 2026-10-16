@@ -104,3 +104,8 @@ departures from the plan text.
   (01:45 EDT → 01:15 EST is 30 minutes); the two `wallMinuteOn` calls gave (105, 75) and
   the grid hid it (shown by running the previous code under `America/New_York`). New
   `wallSpanOn` falls back to the real duration from the start; two tests. Suite 128/128.
+- **Codex review round 2 (`f4921f4`): GATE PASS, one [P2], fixed.** Columns were still
+  assigned by real timestamps, so 01:00–01:30 EDT and 01:00–01:30 EST (no overlap in real
+  time, same drawn slot) stacked on top of each other. Column assignment moved to
+  `src/lib/dayLayout.ts` `layoutBySpan`, which judges overlap on the drawn spans; test
+  added. Suite 129/129.

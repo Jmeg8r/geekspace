@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { atMinuteOfDay, nextDay, wallMinuteOn, wallSpanOn, weekDays } from "../src/lib/dates";
+import { layoutBySpan } from "../src/lib/dayLayout";
 
 // WHAT: week-grid date arithmetic across a DST change. The next US change is Sunday
 // 2026-11-01 (clocks go back at 02:00, so that day has 25 hours).
@@ -51,6 +52,15 @@ describe("DST week arithmetic (America/New_York)", () => {
     expect(wallSpanOn(sundayNov1, new Date(2026, 10, 1, 9).getTime(), new Date(2026, 10, 1, 10, 30).getTime())).toEqual([
       540, 630,
     ]);
+  });
+
+  // Codex review of PR #55, round 2: overlap is judged on the spans as drawn.
+  it("puts the two 01:00 hours of Nov 1 in separate columns", () => {
+    const edt = { start: Date.parse("2026-11-01T01:00:00-04:00"), end: Date.parse("2026-11-01T01:30:00-04:00") };
+    const est = { start: Date.parse("2026-11-01T01:00:00-05:00"), end: Date.parse("2026-11-01T01:30:00-05:00") };
+    expect(edt.end).toBeLessThan(est.start); // no overlap in real time
+    const laid = layoutBySpan([edt, est], (i) => wallSpanOn(sundayNov1, i.start, i.end));
+    expect(new Set(laid.map((l) => l.col)).size).toBe(2);
   });
 
   it("nextDay spans the 25-hour fall-back day", () => {
