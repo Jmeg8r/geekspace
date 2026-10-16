@@ -156,3 +156,21 @@ linear: pending
     same cases failed 3/3 on the pre-fix code. Suite 154/154.
   - Live: a simulated upload outage left the audio held with "Couldn't save the audio…
     use Retry save". Retry save then stored it (17 s).
+- **Codex review round 2 (`6392615`): GATE FAIL, two [P1], both fixed.**
+  - [P1] My round-1 guard cancelled its own approved quit: `app.quit()` re-entered
+    `before-quit` while `guarding` was still set. The earlier live Save probe ran before
+    that check existed, so it couldn't catch this. The quit now happens after the guard is
+    released, and `leaveApproved` resets when a new recording starts.
+  - [P1] Held audio was a single slot, so a second stopped recording (or a Retry save
+    during one) replaced the first meeting's audio. `audioSaver` now holds audio per
+    meeting:
+    - a duplicate save joins the one in flight;
+    - quit saves every held recording plus the live one, trying them all before
+      reporting failures;
+    - Retry save is scoped to its own meeting.
+  - Tests: 7 cases (two meetings held, saveAll partial failure, joined saves, busy in
+    flight). They fail on the round-1 saver, but only because its API differs, so this is
+    not discriminating evidence for the two-meeting case. Suite 157/157.
+  - Live: one meeting's audio was held after a simulated outage and a second meeting was
+    recording. Quit, then my click on "Save Recording and Quit" (accepted by the desktop
+    tool this time): both meetings were stored (4 s and 10 s) and the app exited.

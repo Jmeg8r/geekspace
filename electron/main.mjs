@@ -264,6 +264,8 @@ let pendingSave = null;
 
 handle("gs:recorder:setActive", ({ active }) => {
   recordingActive = active === true;
+  // A new recording after an approved-but-unfinished quit must be guarded again.
+  if (recordingActive && !guarding) leaveApproved = false;
 });
 handle("gs:recorder:saveDone", ({ ok, error }) => {
   pendingSave?.({ ok: ok === true, error: typeof error === "string" ? error : "Unknown error" });
@@ -287,6 +289,7 @@ function requestSave(win) {
 async function confirmLeaveWhileRecording(win) {
   if (guarding) return;
   guarding = true;
+  let approved = false;
   try {
     const choice = await dialog.showMessageBox(win, {
       type: "warning",
@@ -309,11 +312,16 @@ async function confirmLeaveWhileRecording(win) {
       });
       if (again.response !== 1) return;
     }
+    approved = true;
+  } finally {
+    guarding = false;
+  }
+  // WHY after the finally: app.quit() re-enters before-quit, which holds any quit while
+  // `guarding` is set; the approved quit must not be cancelled by its own guard.
+  if (approved) {
     recordingActive = false;
     leaveApproved = true;
     app.quit();
-  } finally {
-    guarding = false;
   }
 }
 

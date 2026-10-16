@@ -19,7 +19,7 @@ import { useUI } from "../../state/ui";
 import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
 import { listMicrophones, recorder, resolveMicChoice, type MicDevice } from "../../lib/recorder";
-import { finishRecording, pendingAudio } from "../../lib/meetingPipeline";
+import { pendingAudio, retrySave } from "../../lib/meetingPipeline";
 import {
   meetingAskMic,
   meetingsAvailable,
@@ -454,7 +454,7 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
           )}
           {unsavedHere && (
             <button
-              onClick={() => void finishRecording()}
+              onClick={() => void retrySave(meetingId)}
               className="flex items-center gap-1 rounded-md border border-accent/50 px-2 py-1 text-[12px] text-accent hover:bg-hov"
             >
               <RefreshCw size={12} /> Retry save

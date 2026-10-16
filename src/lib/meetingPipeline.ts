@@ -2,7 +2,7 @@ import { convex } from "./convex";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { recorder } from "./recorder";
-import { createAudioSaver } from "./audioSaver";
+import { createAudioSaver, type StoppedRecording } from "./audioSaver";
 import { meetingProcess, meetingSummarize, type MeetingProcessResult } from "./meetingsBridge";
 
 // WHAT: Orchestrates stop → upload audio → transcribe+summarize → persist.
@@ -88,38 +88,52 @@ const saver = createAudioSaver({
 /** Audio that is stopped but not yet stored, for the Retry save button and the quit guard. */
 export const pendingAudio = saver.pending;
 
-/** Stop the live recording (if any) and store its audio; on failure it is kept for a retry. */
-async function saveRecording() {
-  const recording = await saver.save();
-  return { id: recording.meetingId as Id<"meetings">, blob: recording.blob, meetingType: recording.meetingType };
+/** Run transcription + summary on audio that was just stored; failures land on the meeting. */
+async function processStored(recording: StoppedRecording) {
+  const meetingId = recording.meetingId as Id<"meetings">;
+  try {
+    await runAi(meetingId, await recording.blob.arrayBuffer(), recording.meetingType);
+  } catch (err) {
+    await markFailed(meetingId, err instanceof Error ? err.message : String(err));
+  }
 }
 
-/** Stop the live recording (or retry a failed save) and run the whole pipeline. */
+/** Stop the live recording and run the whole pipeline. */
 export async function finishRecording(): Promise<void> {
-  let saved: Awaited<ReturnType<typeof saveRecording>>;
+  let recording: StoppedRecording;
   try {
-    saved = await saveRecording();
+    recording = await saver.stopAndSave();
   } catch (err) {
     // Already shown on the meeting as its error, with the audio kept for Retry save.
     console.warn("Saving the recording failed", err);
     return;
   }
-  try {
-    await runAi(saved.id, await saved.blob.arrayBuffer(), saved.meetingType);
-  } catch (err) {
-    await markFailed(saved.id, err instanceof Error ? err.message : String(err));
-  }
+  await processStored(recording);
 }
 
-/** Quit guard: store the live (or unsaved) recording's audio, no AI, so it survives the app closing. */
+/** Retry storing one meeting's held audio, then process it. */
+export async function retrySave(meetingId: Id<"meetings">): Promise<void> {
+  let recording: StoppedRecording;
+  try {
+    recording = await saver.retry(meetingId);
+  } catch (err) {
+    console.warn("Retry save failed", err);
+    return;
+  }
+  await processStored(recording);
+}
+
+/** Quit guard: store the live recording and all held audio (no AI) so it survives the app closing. */
 export async function saveRecordingBeforeQuit(): Promise<void> {
   if (!saver.hasWork()) return;
-  const { id } = await saveRecording();
-  await convex.mutation(api.meetings.setStatus, {
-    meetingId: id,
-    status: "error",
-    error: "Saved when the app quit. Use Re-run AI to transcribe and summarise it.",
-  });
+  const { stored } = await saver.saveAll();
+  for (const recording of stored) {
+    await convex.mutation(api.meetings.setStatus, {
+      meetingId: recording.meetingId as Id<"meetings">,
+      status: "error",
+      error: "Saved when the app quit. Use Re-run AI to transcribe and summarise it.",
+    });
+  }
 }
 
 /**
