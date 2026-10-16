@@ -1,6 +1,6 @@
 ---
 change: 2026-10-15-scheduler-dst-perf
-status: draft
+status: accepted
 track: T2
 intent: ./intent.md
 linear: pending

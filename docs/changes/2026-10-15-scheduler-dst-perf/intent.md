@@ -1,9 +1,9 @@
 ---
 change: 2026-10-15-scheduler-dst-perf
-status: draft
+status: accepted
 track: T2
 author: claude
-accepted_by: pending
+accepted_by: james
 linear: pending
 source: conversation
 ---
