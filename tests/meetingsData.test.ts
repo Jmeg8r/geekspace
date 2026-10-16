@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
-import type { Id } from "../convex/_generated/dataModel";
+import type { Doc, Id } from "../convex/_generated/dataModel";
 
 // WHAT: the meetings data layer: slim list, interrupted-meeting recovery, status
 // validation, and a notes page that survives Reprocess once you've edited it.
@@ -18,7 +18,7 @@ const SUMMARY = {
   modelUsed: "gemma3:12b",
 };
 
-async function meeting(t: ReturnType<typeof convexTest>, fields: Record<string, unknown> = {}) {
+async function meeting(t: ReturnType<typeof convexTest>, fields: Partial<Doc<"meetings">> = {}) {
   return t.run((ctx) =>
     ctx.db.insert("meetings", {
       title: "Standup",
@@ -53,7 +53,7 @@ describe("meetings.reconcileInterrupted", () => {
     await t.mutation(api.meetings.reconcileInterrupted, { before: 5_000 });
 
     const get = (id: Id<"meetings">) => t.run((ctx) => ctx.db.get(id));
-    expect(await get(saved)).toMatchObject({ status: "error", error: expect.stringMatching(/reprocess/i) });
+    expect(await get(saved)).toMatchObject({ status: "error", error: expect.stringMatching(/re-run ai/i) });
     expect(await get(lost)).toMatchObject({ status: "error", error: expect.stringMatching(/lost/i) });
     expect((await get(done))?.status).toBe("done");
     expect((await get(fresh))?.status).toBe("recording");

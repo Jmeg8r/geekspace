@@ -55,7 +55,7 @@ export const reconcileInterrupted = mutation({
         status: "error",
         progress: undefined,
         error: m.audioStorageId
-          ? "Interrupted when the app closed. The audio was saved; use Reprocess."
+          ? "Interrupted when the app closed. The audio was saved; use Re-run AI."
           : "The recording was lost when the app closed before it was saved.",
       });
     }
