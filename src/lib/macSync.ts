@@ -2,6 +2,7 @@ import { convex } from "./convex";
 import { api } from "../../convex/_generated/api";
 import { tzOffsetMin } from "./utils";
 import { integrationsAvailable, macFetchEvents, macIsRunning } from "./integrations";
+import { incompleteReadNote } from "./calendarSyncStatus";
 
 const DAY_MS = 86_400_000;
 
@@ -42,12 +43,9 @@ export async function syncMacCalendar(calendarNames: string[]): Promise<SyncOutc
     tzOffsetMin: tzOffsetMin(),
   });
   const changes = result.created + result.updated + result.removed;
-  // Calendars that didn't read cleanly kept their events; say so rather than pass silently.
-  const wanted = calendarNames.length > 0 ? calendarNames : null;
-  const partial = wanted ? wanted.filter((n) => !events.data.complete.includes(n)) : [];
-  const note = partial.length > 0 ? ` · couldn't fully read ${partial.join(", ")}; kept its events` : "";
+  const note = incompleteReadNote(calendarNames, events.data);
   return {
-    ok: partial.length === 0,
+    ok: note === "",
     message:
       (changes === 0
         ? `Up to date (${result.total} events)`

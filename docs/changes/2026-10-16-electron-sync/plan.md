@@ -126,3 +126,8 @@ linear: pending
     Windows or for root. `seedDataDirectory` now takes an injectable `copy`, and the test
     uses a copy that writes one file and then throws. Portable.
   - Suite 196/196.
+- **Codex review round 2 (`3b2b0aa`): GATE PASS, one [P2], fixed.** In "all calendars" mode
+  the status note compared completeness against an empty selection, so a failed read
+  showed "Up to date". `incompleteReadNote` (new `src/lib/calendarSyncStatus.ts`, pure)
+  scopes the check to the selection, or to every listed calendar, and treats a partial
+  calendar list as incomplete. 4 tests. Suite 200/200.
