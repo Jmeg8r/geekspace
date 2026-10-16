@@ -70,3 +70,48 @@ linear: pending
   different origin than expected (for example `127.0.0.1` versus `localhost`). The rule
   takes its dev origin from `VITE_DEV_SERVER_URL`, and the live click-through exercises
   every bridge.
+
+## Deviations
+
+- **Mail is dropped from this PR.**
+  - The approved timing probe found James's unified inbox holds **263,971 messages**,
+    and the current widget's script fails on it twice in a row (`-1741` after ~10 s).
+    The Home Mail widget can't work today.
+  - The planned fix doesn't work either at that size:
+    - reading all dates in bulk works (8.7 s);
+    - fetching messages by index timed out (`-1712`);
+    - a date-filtered `whose` timed out at 120 s for both 2 and 7 days;
+    - per-account inbox counts timed out.
+  - AppleScript can't serve this inbox. A fix needs another data source, such as Mail's
+    Envelope Index, which needs Full Disk Access, or a provider API. That's its own change,
+    proposed as a follow-up. Nothing gets worse here.
+  - Only counts, timings and booleans were printed; no message content.
+- **Recurring events:** no change. James confirmed they appear every week.
+- **Test-only commit `c177439`:**
+  - The calendar tests first failed on the new argument's validator. A temporary copy
+    without that argument then failed on the old behaviour itself: an unread calendar
+    lost an event, the long event was deleted, and the 60-day event was duplicated. The
+    "still removes vanished events" control passed.
+  - The boundary and seeding modules didn't exist yet, so those tests failed on the
+    missing modules. They can't run against the old inline prefix checks.
+- **Seeding:**
+  - An interrupted copy is simulated with an unreadable seed file, so the copy fails
+    partway.
+  - Added: a half-seeded directory left by the old code (no `config.json`) is moved aside
+    as `convex.incomplete-<time>`, never deleted, and seeded fresh.
+- **`gs:openExternal`** now reports a refusal as an error. Live, a `file:` link first
+  came back `ok: true` despite being refused.
+- **Calendar sync** reports calendars it couldn't fully read in its status message
+  ("kept its events") rather than passing silently. It isn't run live: that would mirror
+  James's real calendar into the test backend. It's covered by the convex-test cases.
+- **Not live-tested:** an IPC call from a foreign frame. The rule is the tested
+  `isAppUrl`, and all 5 `ipcMain.handle` entry points are wired to it.
+- **Suite 193/193; verify and typecheck pass.**
+- **Live, sandboxed (`sandbox: true`) on the worktree backend:**
+  - no Node in the renderer;
+  - the meetings, agent, recorder and calendar bridges all answer;
+  - Calendar, Meetings, Docs, Reader and Home all render;
+  - Quick Look refuses `http://127.0.0.1@evil.com/x.command`;
+  - navigating to `file:///etc/hosts` is blocked;
+  - `openExternal("file:///Applications/Calculator.app")` is refused with "Only web and
+    mail links can be opened".
