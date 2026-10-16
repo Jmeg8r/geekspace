@@ -38,11 +38,34 @@ describe("seedDataDirectory", () => {
   });
 
   it("an interrupted copy leaves no data directory, so the next launch retries", () => {
-    // Simulate a copy that dies partway: the seed is missing its database file.
+    // A copy that dies partway: one blob in the seed can't be read, so cpSync throws
+    // after it has already copied some files.
+    const locked = path.join(seed(), "storage", "zz-locked");
+    fs.writeFileSync(locked, "unreadable");
+    fs.chmodSync(locked, 0o000);
+    try {
+      expect(() => seedDataDirectory(seed(), dest())).toThrow(/EACCES|permission/i);
+      expect(fs.existsSync(dest())).toBe(false);
+      expect(leftovers()).toEqual([]);
+    } finally {
+      fs.chmodSync(locked, 0o600);
+    }
+  });
+
+  it("refuses a seed without its database file", () => {
     fs.rmSync(path.join(seed(), "convex_local_backend.sqlite3"));
     expect(() => seedDataDirectory(seed(), dest())).toThrow(/sqlite3/);
     expect(fs.existsSync(dest())).toBe(false);
-    expect(leftovers()).toEqual([]);
+  });
+
+  it("moves a half-seeded directory from the old copy aside, then seeds fresh", () => {
+    fs.mkdirSync(dest(), { recursive: true });
+    fs.writeFileSync(path.join(dest(), "convex_local_backend.sqlite3"), "partial");
+    expect(seedDataDirectory(seed(), dest())).toBe(true);
+    expect(fs.existsSync(path.join(dest(), "config.json"))).toBe(true);
+    const aside = leftovers().filter((n) => n.startsWith("convex.incomplete-"));
+    expect(aside).toHaveLength(1);
+    expect(fs.readFileSync(path.join(path.dirname(dest()), aside[0], "convex_local_backend.sqlite3"), "utf8")).toBe("partial");
   });
 
   it("refuses a seed without config.json", () => {

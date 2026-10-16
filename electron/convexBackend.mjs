@@ -12,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { seedDataDirectory } from "./dataDirectory.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -151,15 +152,8 @@ function readConfig() {
  * overwritten.
  */
 function ensureDataDir() {
-  if (fs.existsSync(path.join(DATA_DIR, "config.json"))) return;
   const src = seedDir();
-  if (!fs.existsSync(path.join(src, "config.json"))) {
-    throw new Error(`No Convex data and no bundled seed found at ${src}`);
-  }
-  fs.mkdirSync(path.dirname(DATA_DIR), { recursive: true });
-  // cpSync preserves the relative layout the SQLite blob store relies on.
-  fs.cpSync(src, DATA_DIR, { recursive: true });
-  log(`Seeded fresh data dir from ${src}`);
+  if (seedDataDirectory(src, DATA_DIR)) log(`Seeded fresh data dir from ${src}`);
 }
 
 // --- start / stop --------------------------------------------------------
