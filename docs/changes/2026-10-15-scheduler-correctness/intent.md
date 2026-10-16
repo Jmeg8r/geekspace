@@ -1,9 +1,9 @@
 ---
 change: 2026-10-15-scheduler-correctness
-status: draft
+status: accepted
 track: T1
 author: claude
-accepted_by: pending
+accepted_by: james
 linear: pending
 source: conversation
 ---
@@ -72,7 +72,9 @@ PR #28 fixes 1, 2 (partially), 3 and 5. It does not fix 4 or 6.
 
 ## Open questions
 
-**Missed blocks (James to decide).** Today any block whose start time has passed counts
+None. **Missed blocks: James chose option A on 2026-10-15** ("accept 4a, option A").
+
+**Missed blocks (decided).** Today any block whose start time has passed counts
 as work done, whether or not it was worked, so a skipped two-hour block silently uses up
 two hours of the estimate and the task may never be planned again. The README documents
 this as intended ("frozen history"). Options:
