@@ -19,6 +19,7 @@ import { useUI } from "../../state/ui";
 import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
 import { listMicrophones, recorder, resolveMicChoice, type MicDevice } from "../../lib/recorder";
+import { finishRecording, pendingAudio } from "../../lib/meetingPipeline";
 import {
   meetingAskMic,
   meetingsAvailable,
@@ -384,6 +385,8 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
   const dbs = useQuery(api.databases.listAll) ?? [];
   const taskDb = dbs.find((d) => d.isTaskSource);
   const [reprocessing, setReprocessing] = useState(false);
+  // Audio whose upload failed is still in memory: offer to store it again.
+  const unsavedHere = useSyncExternalStore(pendingAudio.subscribe, () => pendingAudio.has(meetingId));
   const [title, setTitle] = useState<string | null>(null);
   const [saveTitle] = useState(() =>
     debounce((id: Id<"meetings">, value: string) => void rename({ meetingId: id, title: value }), 400)
@@ -448,6 +451,14 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
             <span title={meeting.error} className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--pal-red)]">
               {meeting.error}
             </span>
+          )}
+          {unsavedHere && (
+            <button
+              onClick={() => void finishRecording()}
+              className="flex items-center gap-1 rounded-md border border-accent/50 px-2 py-1 text-[12px] text-accent hover:bg-hov"
+            >
+              <RefreshCw size={12} /> Retry save
+            </button>
           )}
           {(meeting.status === "error" || meeting.status === "done") && (meeting.audioUrl || meeting.transcript) && (
             <button

@@ -14,7 +14,7 @@ import {
   reportRecordingActive,
 } from "./lib/meetingsBridge";
 import { recorder } from "./lib/recorder";
-import { saveRecordingBeforeQuit } from "./lib/meetingPipeline";
+import { pendingAudio, saveRecordingBeforeQuit } from "./lib/meetingPipeline";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { HomeView } from "./components/home/HomeView";
 import { CalendarView } from "./components/calendar/CalendarView";
@@ -73,18 +73,23 @@ export default function App() {
     );
   }, [reconcileMeetings]);
 
-  // Quit guard handshake: tell the main process when a recording is live, and save it
+  // Quit guard handshake: tell the main process while there is audio it must not lose
+  // (a live recording, a save in flight, or stopped audio not yet stored), and save it
   // when the user chooses "Save Recording and Quit".
   useEffect(() => {
-    let active = recorder.getState().status !== "idle";
+    const hasAudioAtRisk = () => recorder.getState().status !== "idle" || pendingAudio.busy();
+    let active = hasAudioAtRisk();
     reportRecordingActive(active);
-    const unsubscribe = recorder.subscribe(() => {
-      const now = recorder.getState().status !== "idle";
+    const update = () => {
+      const now = hasAudioAtRisk();
       if (now !== active) reportRecordingActive((active = now));
-    });
+    };
+    const offRecorder = recorder.subscribe(update);
+    const offPending = pendingAudio.subscribe(update);
     const offSave = onSaveRecordingRequest(saveRecordingBeforeQuit);
     return () => {
-      unsubscribe();
+      offRecorder();
+      offPending();
       offSave();
     };
   }, []);

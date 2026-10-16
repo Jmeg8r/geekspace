@@ -121,6 +121,11 @@ function createWindow() {
     recordingActive = false;
   });
   win.on("close", (event) => {
+    // While the save handshake runs, nothing may close the window under it.
+    if (guarding) {
+      event.preventDefault();
+      return;
+    }
     if (!recordingActive || leaveApproved) return;
     event.preventDefault();
     void confirmLeaveWhileRecording(win);
@@ -427,7 +432,12 @@ app.on("window-all-closed", () => {
 // settles, so defer the real quit until SIGTERM completes.
 let shuttingDown = false;
 app.on("before-quit", (event) => {
-  // The recording guard runs first: saving needs the backend still up.
+  // The recording guard runs first: saving needs the backend still up. While the save
+  // handshake runs, a second quit is held back too (the recorder is idle by then).
+  if (guarding) {
+    event.preventDefault();
+    return;
+  }
   const win = BrowserWindow.getAllWindows()[0];
   if (recordingActive && !leaveApproved && win) {
     event.preventDefault();

@@ -138,3 +138,21 @@ linear: pending
       "Saved when the app quit. Use Re-run AI…", and the backend stayed up.
     - My automated clicks on both dialogs were refused by the desktop tool, so each was
       answered outside the tool. The recorded state is the evidence.
+- **Codex review round 1 (`86bdb21`): GATE FAIL, one [P1] and one [P2], fixed together.**
+  Both had one cause: after `recorder.stop()` the audio existed only inside one in-flight
+  save.
+  - [P1] A failed save on quit discarded the audio, so "Keep App Open" kept nothing. The
+    same loss already happened on `main` when a normal Stop's upload failed.
+  - [P2] During the upload the renderer reported "not recording", so a second Cmd-Q
+    skipped the guard and stopped the backend mid-upload.
+  - Fix, for the whole class:
+    - New `src/lib/audioSaver.ts` holds the stopped recording until it is attached and
+      refuses a concurrent save. Its dependencies are injected, because the project lint
+      bans module mocks.
+    - The meeting detail offers **Retry save**.
+    - The quit guard counts a save in flight or unsaved audio as active.
+    - Main blocks quit and window close while its own save handshake runs.
+  - Tests: 4 in `tests/meetingPipeline.test.ts`. An earlier module-mock version of the
+    same cases failed 3/3 on the pre-fix code. Suite 154/154.
+  - Live: a simulated upload outage left the audio held with "Couldn't save the audio…
+    use Retry save". Retry save then stored it (17 s).

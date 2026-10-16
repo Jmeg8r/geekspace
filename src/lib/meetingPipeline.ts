@@ -2,6 +2,7 @@ import { convex } from "./convex";
 import { api } from "../../convex/_generated/api";
 import type { Id } from "../../convex/_generated/dataModel";
 import { recorder } from "./recorder";
+import { createAudioSaver } from "./audioSaver";
 import { meetingProcess, meetingSummarize, type MeetingProcessResult } from "./meetingsBridge";
 
 // WHAT: Orchestrates stop → upload audio → transcribe+summarize → persist.
@@ -63,32 +64,43 @@ async function runAi(meetingId: Id<"meetings">, audio: ArrayBuffer, meetingType:
   await applyResult(meetingId, result.data);
 }
 
-/** Stop the live recording and store its audio. Marks the meeting failed (and rethrows) if that fails. */
-async function saveRecording() {
-  const { blob, durationSec, meetingId, meetingType } = await recorder.stop();
-  const id = meetingId as Id<"meetings">;
-  try {
-    await convex.mutation(api.meetings.setStatus, { meetingId: id, status: "uploading" });
-    const storageId = await uploadAudio(blob);
+// Holds a stopped recording until it is attached, so a failed upload can be retried.
+const saver = createAudioSaver({
+  isRecording: () => recorder.getState().status !== "idle",
+  stop: () => recorder.stop(),
+  store: async (recording) => {
+    const meetingId = recording.meetingId as Id<"meetings">;
+    await convex.mutation(api.meetings.setStatus, { meetingId, status: "uploading" });
+    const storageId = await uploadAudio(recording.blob);
     await convex.mutation(api.meetings.attachAudio, {
-      meetingId: id,
+      meetingId,
       storageId: storageId as Id<"_storage">,
-      durationSec,
+      durationSec: recording.durationSec,
     });
-  } catch (err) {
-    await markFailed(id, err instanceof Error ? err.message : String(err));
-    throw err;
-  }
-  return { id, blob, meetingType };
+  },
+  reportFailure: (recording, message) =>
+    markFailed(
+      recording.meetingId as Id<"meetings">,
+      `Couldn't save the audio: ${message}. It's kept until you close the app; use Retry save.`
+    ),
+});
+
+/** Audio that is stopped but not yet stored, for the Retry save button and the quit guard. */
+export const pendingAudio = saver.pending;
+
+/** Stop the live recording (if any) and store its audio; on failure it is kept for a retry. */
+async function saveRecording() {
+  const recording = await saver.save();
+  return { id: recording.meetingId as Id<"meetings">, blob: recording.blob, meetingType: recording.meetingType };
 }
 
-/** Stop the live recording and run the whole pipeline. */
+/** Stop the live recording (or retry a failed save) and run the whole pipeline. */
 export async function finishRecording(): Promise<void> {
   let saved: Awaited<ReturnType<typeof saveRecording>>;
   try {
     saved = await saveRecording();
   } catch (err) {
-    // Already shown on the meeting as its error; logged for debugging.
+    // Already shown on the meeting as its error, with the audio kept for Retry save.
     console.warn("Saving the recording failed", err);
     return;
   }
@@ -99,9 +111,9 @@ export async function finishRecording(): Promise<void> {
   }
 }
 
-/** Quit guard: store the live recording's audio (no AI) so it survives the app closing. */
+/** Quit guard: store the live (or unsaved) recording's audio, no AI, so it survives the app closing. */
 export async function saveRecordingBeforeQuit(): Promise<void> {
-  if (recorder.getState().status === "idle") return;
+  if (!saver.hasWork()) return;
   const { id } = await saveRecording();
   await convex.mutation(api.meetings.setStatus, {
     meetingId: id,
