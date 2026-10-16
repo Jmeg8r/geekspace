@@ -66,6 +66,30 @@ describe("computeSchedule", () => {
     expect([...perTask.values()].flat()).toContain("dependency_cycle");
   });
 
+  // Codex review of PR #54, round 3: a task whose estimate is fully reserved (locked or
+  // started blocks) still belongs to the dependency graph.
+  it("keeps a fully reserved task in cycle detection", () => {
+    const tasks = [
+      task({ id: "a", blockedBy: ["b"], remainingMin: 0, reservedUntilMs: MON_8AM + 3 * 3_600_000 }),
+      task({ id: "b", blockedBy: ["a"] }),
+    ];
+    const { warnings, blocks } = computeSchedule(MON_8AM, tasks, [], cfg);
+    expect(warnings.map((w) => w.reason)).toContain("dependency_cycle");
+    expect(blocks.filter((b) => b.taskId === "a")).toEqual([]);
+  });
+
+  it("starts a dependent only after a fully reserved blocker's reserved work ends", () => {
+    const reservedUntil = Date.UTC(2026, 5, 8, 14);
+    const tasks = [
+      task({ id: "blocker", remainingMin: 0, reservedUntilMs: reservedUntil }),
+      task({ id: "dependent", blockedBy: ["blocker"] }),
+    ];
+    const { blocks } = computeSchedule(MON_8AM, tasks, [], cfg);
+    const starts = blocks.filter((b) => b.taskId === "dependent").map((b) => b.start);
+    expect(starts.length).toBeGreaterThan(0);
+    expect(Math.min(...starts)).toBeGreaterThanOrEqual(reservedUntil);
+  });
+
   it("rejects settings that would stall the engine", () => {
     expect(() => computeSchedule(MON_8AM, [task({ id: "a" })], [], { ...cfg, maxChunkMin: 0 })).toThrow();
   });

@@ -39,6 +39,12 @@ export interface SchedulerTask {
   noSplit?: boolean;
   /** Task ids that must finish before this one starts (dependencies). */
   blockedBy?: string[];
+  /**
+   * When work already reserved for this task (started or locked blocks) ends. A task with
+   * remainingMin 0 and this set is reserved-only: it places nothing, but stays in the
+   * dependency graph (cycle detection, and dependents wait until it ends).
+   */
+  reservedUntilMs?: number;
 }
 
 export interface Interval {
@@ -193,7 +199,7 @@ export function computeSchedule(
   const blocks: ScheduledBlock[] = [];
   const warnings: SchedulerWarning[] = [];
   const ordered = [...tasks]
-    .filter((t) => t.remainingMin > 0)
+    .filter((t) => t.remainingMin > 0 || t.reservedUntilMs !== undefined)
     .sort(compareTasks);
 
   // Topological processing: among tasks whose blockers are all satisfied, keep
@@ -225,7 +231,8 @@ export function computeSchedule(
       .map((b) => finishedAt.get(b)!);
     const depEarliestMs = blockerEnds.length > 0 ? Math.max(...blockerEnds) : 0;
 
-    let rem = Math.max(task.remainingMin, MIN_BLOCK_FLOOR_MIN);
+    // Reserved-only tasks have nothing left to place.
+    let rem = task.remainingMin > 0 ? Math.max(task.remainingMin, MIN_BLOCK_FLOOR_MIN) : 0;
     const earliest = ceilTo(
       Math.max(task.earliestMs ?? 0, depEarliestMs),
       cfg.granularityMin
@@ -291,7 +298,7 @@ export function computeSchedule(
     }
     // Unplaced work is still a blocker: a partial (or empty) placement is not completion, so
     // dependents wait for it rather than starting after the last piece that did fit.
-    finishedAt.set(task.id, rem > 0 ? Infinity : lastEnd);
+    finishedAt.set(task.id, rem > 0 ? Infinity : Math.max(lastEnd, task.reservedUntilMs ?? 0));
   }
 
   blocks.sort((a, b) => a.start - b.start);

@@ -98,8 +98,6 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     }
   }
   const usedUp: SchedulerWarning[] = [];
-  // Tasks marked done: their leftover reservations must not hold anyone up.
-  const doneIds = new Set<string>();
   // Open tasks with a locked block after their due date, by id → title.
   const lateLocked = new Map<string, string>();
 
@@ -123,10 +121,8 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       const statusVal = p[db.taskConfig.statusPropId];
       const group =
         statusProp?.options?.find((o) => o.id === statusVal)?.group ?? "todo";
-      if (group === "complete") {
-        doneIds.add(row._id);
-        continue;
-      }
+      // Done tasks stay out of the engine, so they hold nobody up whatever they still reserve.
+      if (group === "complete") continue;
       const estimate = p[db.taskConfig.estimatePropId];
       if (!isNumber(estimate) || estimate <= 0) continue;
       const dateVal = p[db.taskConfig.datePropId] as DateValue | undefined;
@@ -146,10 +142,10 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       }
 
       const remaining = estimate - (loggedMin.get(row._id) ?? 0);
-      if (remaining <= 0) {
-        // Every planned minute has passed and the task is still open: say so, rather than
-        // let it drop off the plan silently (option A).
-        if ((pastMin.get(row._id) ?? 0) >= estimate && !hasFutureBlock.has(row._id)) {
+      // Every planned minute has passed and the task is still open: say so, rather than let
+      // it drop off the plan silently (option A).
+      if (remaining <= 0 && !hasFutureBlock.has(row._id)) {
+        if ((pastMin.get(row._id) ?? 0) >= estimate) {
           usedUp.push({ taskId: row._id, title: row.title, unscheduledMin: 0, reason: "time_used_up" });
         }
         continue;
@@ -167,7 +163,10 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       tasks.push({
         id: row._id,
         title: row.title,
-        remainingMin: remaining,
+        // Fully reserved tasks (locked or running blocks cover the estimate) go in with 0:
+        // they place nothing but stay in the dependency graph.
+        remainingMin: Math.max(remaining, 0),
+        reservedUntilMs: reservedEnd.get(row._id),
         dueMs,
         priority,
         blockedBy,
@@ -176,12 +175,6 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     }
   }
 
-  // Not before an unfinished blocker's started or locked work ends, even when it has nothing
-  // left to plan. A blocker marked done holds nobody, whatever it still has reserved.
-  for (const t of tasks) {
-    const holding = (t.blockedBy ?? []).filter((id) => !doneIds.has(id));
-    t.earliestMs = Math.max(now, ...holding.map((id) => reservedEnd.get(id) ?? now));
-  }
   const result = computeSchedule(now, tasks, busy, cfg);
   const warned = new Set(result.warnings.map((w) => w.taskId));
   const lateLockedWarnings: SchedulerWarning[] = [...lateLocked]

@@ -119,3 +119,15 @@ departures from the plan text.
   Failing-first test (warning gone after lock), then 11/11; suite 113/113. Live: the
   locked "Record demo video" went striped with a `past_due` warning when its due date
   moved to yesterday, and back to clean when restored.
+- **Codex review round 3 (`2d562cc`): GATE PASS, one [P2] — same class as round 2, fixed at
+  the class.** The reflow dropped fully reserved tasks before the engine, so anything the
+  engine does over the dependency graph lost them; this time cycle detection (locking one
+  task of a cycle cleared its warning). Fully reserved tasks now go to the engine as
+  **reserved-only** participants (`remainingMin: 0`, new `reservedUntilMs`): they place
+  nothing, take part in ordering and cycle detection, and count as finished when their
+  reserved work ends. That also replaced round 1's reflow-side `earliestMs` workaround,
+  which is removed. Two failing-first engine tests; 34/34 scheduler tests; suite 115/115.
+  Live: A ⇄ B cycle, then lock A's block → the `dependency_cycle` warning stayed.
+- **Review loop stopped here** (CLAUDE.md L42): three rounds, all GATE PASS, no P0/P1.
+  The round-3 fix is covered by the suite, the live check and the forge ai-review gate on
+  the PR head.
