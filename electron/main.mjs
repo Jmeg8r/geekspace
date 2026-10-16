@@ -37,6 +37,7 @@ import {
 } from "./readerMcp.mjs";
 import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { oneTurnAtATime } from "./agentShared.mjs";
+import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import {
   getUrl as convexUrl,
@@ -48,6 +49,9 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
+const INDEX_FILE = path.join(__dirname, "../dist/index.html");
+// The only pages that are "the app": the dev server's exact origin, or the built index.
+const APP_PAGES = { devServerUrl, indexFile: INDEX_FILE };
 
 // WHY: Vite injects .env.local into the renderer only; the main process needs
 // the same secrets (ASTGL_API_KEY, CLAUDECLAW_TOKEN) for its integrations.
@@ -107,6 +111,9 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
+      // The preload uses only contextBridge, ipcRenderer and process.platform, all of
+      // which a sandboxed preload keeps; the renderer gets no Node at all.
+      sandbox: true,
       nodeIntegration: false,
       spellcheck: true,
     },
@@ -132,30 +139,43 @@ function createWindow() {
     void confirmLeaveWhileRecording(win);
   });
 
-  // WHY: external links must open in the user's browser, never inside the app shell.
+  // WHY: external links must open in the user's browser, never inside the app shell —
+  // and only web/mail links: other schemes (file:, smb:, app schemes) can launch programs.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    openExternalSafely(url);
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (event, url) => {
-    const isInternal =
-      (devServerUrl && url.startsWith(devServerUrl)) || url.startsWith("file://");
-    if (!isInternal) {
-      event.preventDefault();
-      shell.openExternal(url);
-    }
+    if (isAppUrl(url, APP_PAGES)) return;
+    event.preventDefault();
+    openExternalSafely(url);
   });
 
   if (devServerUrl) {
     win.loadURL(devServerUrl);
   } else {
-    win.loadFile(path.join(__dirname, "../dist/index.html"));
+    win.loadFile(INDEX_FILE);
   }
 }
 
+function openExternalSafely(url) {
+  if (isSafeExternalUrl(url)) {
+    shell.openExternal(url).catch((err) => console.warn("Could not open external link", err));
+  } else {
+    console.warn(`Refused to open a non-web link: ${String(url).slice(0, 80)}`);
+  }
+}
+
+/** True when an IPC call comes from the app's own page (not another origin or file). */
+function fromApp(event) {
+  return isAppUrl(event?.senderFrame?.url ?? "", APP_PAGES);
+}
+const REFUSED = { ok: false, error: "Refused: the request did not come from the Geekspace window" };
+
 // IPC: every handler returns { ok, data?, error? } so the renderer never throws.
 function handle(channel, fn) {
-  ipcMain.handle(channel, async (_event, args) => {
+  ipcMain.handle(channel, async (event, args) => {
+    if (!fromApp(event)) return REFUSED;
     try {
       return { ok: true, data: await fn(args ?? {}) };
     } catch (err) {
@@ -207,6 +227,7 @@ handle("gs:meeting:askMic", async () => {
   return systemPreferences.askForMediaAccess("microphone");
 });
 ipcMain.handle("gs:meeting:ensureModel", async (event) => {
+  if (!fromApp(event)) return REFUSED;
   try {
     await ensureModel((pct) =>
       event.sender.send("gs:meeting:progress", { phase: "model", pct })
@@ -217,6 +238,7 @@ ipcMain.handle("gs:meeting:ensureModel", async (event) => {
   }
 });
 ipcMain.handle("gs:meeting:process", async (event, args) => {
+  if (!fromApp(event)) return REFUSED;
   try {
     const result = await processMeeting(
       {
@@ -235,6 +257,7 @@ ipcMain.handle("gs:meeting:process", async (event, args) => {
 });
 
 ipcMain.handle("gs:meeting:summarize", async (event, args) => {
+  if (!fromApp(event)) return REFUSED;
   try {
     if (typeof args?.transcript !== "string" || !args.transcript.trim()) {
       throw new Error("No transcript to summarise");
@@ -328,8 +351,8 @@ async function confirmLeaveWhileRecording(win) {
 
 // ----- Docs: open a stored file with the default macOS app -----
 handle("gs:docs:quickLook", async ({ url, name }) => {
-  if (typeof url !== "string" || !url.startsWith("http://127.0.0.1")) {
-    throw new Error("Only local storage URLs can be opened");
+  if (!isLocalStorageUrl(url, Number(new URL(convexUrl()).port))) {
+    throw new Error("Only files from Geekspace's own storage can be opened");
   }
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Download failed (${res.status})`);
@@ -368,6 +391,7 @@ const runAgentTurn = oneTurnAtATime((mode, message, onEvent) =>
   mode === "claude" ? runArchitect(message, onEvent) : runArchitectLocal(message, onEvent)
 );
 ipcMain.handle("gs:agent:chat", async (event, { message, mode }) => {
+  if (!fromApp(event)) return REFUSED;
   try {
     await runAgentTurn(mode, message, (frame) => {
       event.sender.send("gs:agent:event", frame);
@@ -381,9 +405,7 @@ ipcMain.handle("gs:agent:chat", async (event, { message, mode }) => {
 // ----- Enterprise Search (ASTGL knowledge) -----
 handle("gs:knowledge:search", ({ query, limit }) => searchKnowledge(query, limit));
 handle("gs:knowledge:answer", ({ question }) => answerKnowledge(question));
-handle("gs:openExternal", ({ url }) => {
-  if (typeof url === "string" && /^https?:\/\//.test(url)) shell.openExternal(url);
-});
+handle("gs:openExternal", ({ url }) => openExternalSafely(url));
 
 // ----- Reader (aib-reader RSS) -----
 handle("gs:reader:listFeeds", () => listFeeds());
