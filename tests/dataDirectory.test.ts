@@ -38,18 +38,15 @@ describe("seedDataDirectory", () => {
   });
 
   it("an interrupted copy leaves no data directory, so the next launch retries", () => {
-    // A copy that dies partway: one blob in the seed can't be read, so cpSync throws
-    // after it has already copied some files.
-    const locked = path.join(seed(), "storage", "zz-locked");
-    fs.writeFileSync(locked, "unreadable");
-    fs.chmodSync(locked, 0o000);
-    try {
-      expect(() => seedDataDirectory(seed(), dest())).toThrow(/EACCES|permission/i);
-      expect(fs.existsSync(dest())).toBe(false);
-      expect(leftovers()).toEqual([]);
-    } finally {
-      fs.chmodSync(locked, 0o600);
-    }
+    // A copy that dies partway: it writes one file into the staging dir, then throws.
+    const failingCopy = (_from: string, to: string) => {
+      fs.mkdirSync(to, { recursive: true });
+      fs.writeFileSync(path.join(to, "config.json"), "{}");
+      throw new Error("disk full (simulated)");
+    };
+    expect(() => seedDataDirectory(seed(), dest(), { copy: failingCopy })).toThrow(/disk full/);
+    expect(fs.existsSync(dest())).toBe(false);
+    expect(leftovers()).toEqual([]);
   });
 
   it("refuses a seed without its database file", () => {

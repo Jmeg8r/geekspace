@@ -21,8 +21,20 @@ const ev = (id: string, cal: string, start: number, hours = 1): Item => ({
   calendarName: cal,
 });
 
-async function sync(t: ReturnType<typeof convexTest>, items: Item[], completeCalendars: string[]) {
-  return t.mutation(api.events.syncExternal, { windowStart, windowEnd, items, completeCalendars });
+async function sync(
+  t: ReturnType<typeof convexTest>,
+  items: Item[],
+  completeCalendars: string[],
+  scope: { selectedCalendars?: string[]; presentCalendars?: string[] | null } = {}
+) {
+  return t.mutation(api.events.syncExternal, {
+    windowStart,
+    windowEnd,
+    items,
+    completeCalendars,
+    selectedCalendars: scope.selectedCalendars ?? [],
+    presentCalendars: scope.presentCalendars === undefined ? completeCalendars : scope.presentCalendars,
+  });
 }
 const mirrors = (t: ReturnType<typeof convexTest>) =>
   t.run(async (ctx) => (await ctx.db.query("events").collect()).filter((e) => e.source === "macos"));
@@ -31,10 +43,35 @@ describe("events.syncExternal", () => {
   it("keeps a calendar's events when that calendar could not be read", async () => {
     const t = convexTest(schema, modules);
     await sync(t, [ev("w1", "Work", NOW), ev("h1", "Home", NOW + DAY)], ["Work", "Home"]);
-    // Next pass: Home failed to read, so it is absent from both items and completeCalendars.
-    const result = await sync(t, [ev("w1", "Work", NOW)], ["Work"]);
+    // Next pass: Home exists but failed to read, so it is missing from items and completeCalendars.
+    const result = await sync(t, [ev("w1", "Work", NOW)], ["Work"], { presentCalendars: ["Work", "Home"] });
     expect(result.removed).toBe(0);
     expect((await mirrors(t)).map((e) => e.externalId).sort()).toEqual(["h1", "w1"]);
+  });
+
+  it("removes a calendar's events once it is deselected in Settings", async () => {
+    const t = convexTest(schema, modules);
+    await sync(t, [ev("w1", "Work", NOW), ev("h1", "Home", NOW + DAY)], ["Work", "Home"]);
+    const result = await sync(t, [ev("w1", "Work", NOW)], ["Work"], {
+      selectedCalendars: ["Work"],
+      presentCalendars: ["Work", "Home"],
+    });
+    expect(result.removed).toBe(1);
+    expect((await mirrors(t)).map((e) => e.externalId)).toEqual(["w1"]);
+  });
+
+  it("removes a calendar's events once the calendar no longer exists", async () => {
+    const t = convexTest(schema, modules);
+    await sync(t, [ev("w1", "Work", NOW), ev("h1", "Home", NOW + DAY)], ["Work", "Home"]);
+    const result = await sync(t, [ev("w1", "Work", NOW)], ["Work"], { presentCalendars: ["Work"] });
+    expect(result.removed).toBe(1);
+  });
+
+  it("keeps everything when the calendar list itself could not be read in full", async () => {
+    const t = convexTest(schema, modules);
+    await sync(t, [ev("w1", "Work", NOW), ev("h1", "Home", NOW + DAY)], ["Work", "Home"]);
+    const result = await sync(t, [ev("w1", "Work", NOW)], ["Work"], { presentCalendars: null });
+    expect(result.removed).toBe(0);
   });
 
   it("still removes events that vanished from a calendar it read completely", async () => {

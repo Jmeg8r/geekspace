@@ -10,10 +10,12 @@ export interface MacCalendarEvent {
   calendarName: string;
 }
 
-/** One Calendar.app read: the events, and the calendars read without any error. */
+/** One Calendar.app read: the events, the calendars read without any error, and every
+ * calendar listed (null when the list itself couldn't be read in full). */
 export interface MacCalendarFetch {
   events: MacCalendarEvent[];
   complete: string[];
+  present: string[] | null;
 }
 
 export interface MacMailMessage {

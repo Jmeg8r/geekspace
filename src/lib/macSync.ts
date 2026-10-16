@@ -29,6 +29,8 @@ export async function syncMacCalendar(calendarNames: string[]): Promise<SyncOutc
     windowStart,
     windowEnd,
     completeCalendars: events.data.complete,
+    selectedCalendars: calendarNames,
+    presentCalendars: events.data.present,
     items: events.data.events.map((e) => ({
       externalId: e.externalId,
       title: e.title,

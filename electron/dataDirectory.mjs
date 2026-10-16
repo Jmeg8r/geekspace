@@ -8,6 +8,12 @@ import path from "node:path";
 
 const REQUIRED_FILES = ["config.json", "convex_local_backend.sqlite3"];
 
+// cpSync preserves the relative layout the SQLite blob store relies on. Injectable so a
+// copy that dies partway can be tested on every platform.
+function defaultCopy(from, to) {
+  fs.cpSync(from, to, { recursive: true });
+}
+
 function assertComplete(directory) {
   for (const name of REQUIRED_FILES) {
     const file = path.join(directory, name);
@@ -27,7 +33,7 @@ function assertComplete(directory) {
  * A directory left without config.json by an older, non-atomic seeding is moved aside
  * (never deleted) and seeded fresh.
  */
-export function seedDataDirectory(seed, destination) {
+export function seedDataDirectory(seed, destination, { copy = defaultCopy } = {}) {
   if (fs.existsSync(destination)) {
     if (fs.existsSync(path.join(destination, "config.json"))) return false;
     const aside = `${destination}.incomplete-${new Date().toISOString().replace(/[:.]/g, "-")}`;
@@ -38,8 +44,7 @@ export function seedDataDirectory(seed, destination) {
   fs.mkdirSync(parent, { recursive: true });
   const staged = fs.mkdtempSync(path.join(parent, ".geekspace-seed-"));
   try {
-    // cpSync preserves the relative layout the SQLite blob store relies on.
-    fs.cpSync(seed, staged, { recursive: true });
+    copy(seed, staged);
     assertComplete(staged);
     fs.renameSync(staged, destination);
   } finally {

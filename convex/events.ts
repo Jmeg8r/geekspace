@@ -103,6 +103,11 @@ export const syncExternal = mutation({
     // Calendars the fetch read without any error. Only their mirrors may be removed:
     // an event missing because its calendar failed to read is not a deleted event.
     completeCalendars: v.array(v.string()),
+    // Sync scope, separate from read success: the calendars chosen in Settings (empty =
+    // all) and every calendar Calendar.app listed (null when the list itself was partial).
+    // A mirror outside that scope was deselected or its calendar deleted, so it goes.
+    selectedCalendars: v.array(v.string()),
+    presentCalendars: v.union(v.array(v.string()), v.null()),
   },
   handler: async (ctx, args) => {
     // by_end, not a start look-back: an event that began long before the window but is
@@ -114,6 +119,10 @@ export const syncExternal = mutation({
         .collect()
     ).filter((e) => e.source === "macos" && e.start < args.windowEnd);
     const complete = new Set(args.completeCalendars);
+    const present = args.presentCalendars === null ? null : new Set(args.presentCalendars);
+    const outOfScope = (calendar: string) =>
+      (args.selectedCalendars.length > 0 && !args.selectedCalendars.includes(calendar)) ||
+      (present !== null && !present.has(calendar));
     // The fetch asks Calendar for events that START inside the window, so only those can
     // be judged missing; one that began earlier was never asked for.
     const fetchable = (e: { start: number }) => e.start > args.windowStart && e.start < args.windowEnd;
@@ -146,7 +155,9 @@ export const syncExternal = mutation({
       }
     }
     for (const e of existing) {
-      if (e.externalId && !seen.has(e.externalId) && complete.has(e.calendarName ?? "") && fetchable(e)) {
+      const calendar = e.calendarName ?? "";
+      const gone = outOfScope(calendar) || (complete.has(calendar) && fetchable(e));
+      if (e.externalId && !seen.has(e.externalId) && gone) {
         await ctx.db.delete(e._id);
         removed++;
       }

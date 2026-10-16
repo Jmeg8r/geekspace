@@ -115,3 +115,14 @@ linear: pending
   - navigating to `file:///etc/hosts` is blocked;
   - `openExternal("file:///Applications/Calculator.app")` is refused with "Only web and
     mail links can be opened".
+- **Codex review round 1 (`46a20a5`): GATE PASS, two [P2], fixed.**
+  - Deselected calendars kept their mirrors forever. They never counted as "complete",
+    and before this PR the next sync removed them. The sync now also gets its scope:
+    `selectedCalendars` (Settings) and `presentCalendars` (every calendar Calendar.app
+    listed, null if any name failed to read). A mirror outside that scope is removed,
+    meaning deselected or its calendar deleted. A selected, existing calendar that failed
+    to read keeps its mirrors. 3 tests added.
+  - The interrupted-copy test used `chmod 000`, which doesn't make a file unreadable on
+    Windows or for root. `seedDataDirectory` now takes an injectable `copy`, and the test
+    uses a copy that writes one file and then throws. Portable.
+  - Suite 196/196.
