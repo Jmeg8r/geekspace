@@ -158,12 +158,14 @@ function createWindow() {
   }
 }
 
+/** Open a web or mail link in the OS; anything else is refused (and logged). Returns whether it opened. */
 function openExternalSafely(url) {
   if (isSafeExternalUrl(url)) {
     shell.openExternal(url).catch((err) => console.warn("Could not open external link", err));
-  } else {
-    console.warn(`Refused to open a non-web link: ${String(url).slice(0, 80)}`);
+    return true;
   }
+  console.warn(`Refused to open a non-web link: ${String(url).slice(0, 80)}`);
+  return false;
 }
 
 /** True when an IPC call comes from the app's own page (not another origin or file). */
@@ -405,7 +407,9 @@ ipcMain.handle("gs:agent:chat", async (event, { message, mode }) => {
 // ----- Enterprise Search (ASTGL knowledge) -----
 handle("gs:knowledge:search", ({ query, limit }) => searchKnowledge(query, limit));
 handle("gs:knowledge:answer", ({ question }) => answerKnowledge(question));
-handle("gs:openExternal", ({ url }) => openExternalSafely(url));
+handle("gs:openExternal", ({ url }) => {
+  if (!openExternalSafely(url)) throw new Error("Only web and mail links can be opened");
+});
 
 // ----- Reader (aib-reader RSS) -----
 handle("gs:reader:listFeeds", () => listFeeds());
