@@ -79,9 +79,10 @@ departures from the plan text.
   horizon (no room for the dependent either way); it was sharpened to a no-split blocker
   that cannot fit at all, which leaves room, and then failed on `main` as it should.
 - **After:** 8/8; suite 110/110; build passes.
-- **Settings validation:** `settings.update` already rolled back an invalid value on
-  `main`'s branch-with-engine-check because its reflow threw; the explicit check before
-  saving is still added so the error comes from the boundary with a clear message.
+- **Settings validation:** the settings test passed before the explicit check was added,
+  because the reflow it triggers ran the new engine check, threw, and rolled the whole
+  mutation back. The check before saving is still added, so the error comes from the
+  boundary with a clear message instead of from the engine.
 - **`pageTree` helper not shared with `pages.list`:** the list hides subtrees from one
   in-memory pass over all pages; the scheduler and calendar data check one database page
   at a time by walking its parents. Same rule, two shapes; merging them would make the list
