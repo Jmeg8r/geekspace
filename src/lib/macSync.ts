@@ -28,7 +28,8 @@ export async function syncMacCalendar(calendarNames: string[]): Promise<SyncOutc
   const result = await convex.mutation(api.events.syncExternal, {
     windowStart,
     windowEnd,
-    items: events.data.map((e) => ({
+    completeCalendars: events.data.complete,
+    items: events.data.events.map((e) => ({
       externalId: e.externalId,
       title: e.title,
       start: e.start,
@@ -39,11 +40,15 @@ export async function syncMacCalendar(calendarNames: string[]): Promise<SyncOutc
     tzOffsetMin: tzOffsetMin(),
   });
   const changes = result.created + result.updated + result.removed;
+  // Calendars that didn't read cleanly kept their events; say so rather than pass silently.
+  const wanted = calendarNames.length > 0 ? calendarNames : null;
+  const partial = wanted ? wanted.filter((n) => !events.data.complete.includes(n)) : [];
+  const note = partial.length > 0 ? ` · couldn't fully read ${partial.join(", ")}; kept its events` : "";
   return {
-    ok: true,
+    ok: partial.length === 0,
     message:
-      changes === 0
+      (changes === 0
         ? `Up to date (${result.total} events)`
-        : `Synced ${result.total} events (+${result.created} / ~${result.updated} / -${result.removed})`,
+        : `Synced ${result.total} events (+${result.created} / ~${result.updated} / -${result.removed})`) + note,
   };
 }

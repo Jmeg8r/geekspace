@@ -1,7 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { runReflow } from "./scheduling";
-import { DAY_MS } from "./lib/scheduler";
 
 // WHAT: Standalone calendar events (appointments). Any change reflows the
 // auto-schedule because fixed events shape the free time everything else
@@ -101,16 +100,23 @@ export const syncExternal = mutation({
       })
     ),
     tzOffsetMin: v.optional(v.number()),
+    // Calendars the fetch read without any error. Only their mirrors may be removed:
+    // an event missing because its calendar failed to read is not a deleted event.
+    completeCalendars: v.array(v.string()),
   },
   handler: async (ctx, args) => {
+    // by_end, not a start look-back: an event that began long before the window but is
+    // still running must be found, or every sync inserts it again.
     const existing = (
       await ctx.db
         .query("events")
-        .withIndex("by_start", (q) => q.gte("start", args.windowStart - 35 * DAY_MS))
+        .withIndex("by_end", (q) => q.gt("end", args.windowStart))
         .collect()
-    ).filter(
-      (e) => e.source === "macos" && e.start < args.windowEnd && e.end > args.windowStart
-    );
+    ).filter((e) => e.source === "macos" && e.start < args.windowEnd);
+    const complete = new Set(args.completeCalendars);
+    // The fetch asks Calendar for events that START inside the window, so only those can
+    // be judged missing; one that began earlier was never asked for.
+    const fetchable = (e: { start: number }) => e.start > args.windowStart && e.start < args.windowEnd;
     const byExternalId = new Map(existing.map((e) => [e.externalId, e]));
     const seen = new Set<string>();
     let created = 0;
@@ -140,7 +146,7 @@ export const syncExternal = mutation({
       }
     }
     for (const e of existing) {
-      if (e.externalId && !seen.has(e.externalId)) {
+      if (e.externalId && !seen.has(e.externalId) && complete.has(e.calendarName ?? "") && fetchable(e)) {
         await ctx.db.delete(e._id);
         removed++;
       }

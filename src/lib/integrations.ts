@@ -10,6 +10,12 @@ export interface MacCalendarEvent {
   calendarName: string;
 }
 
+/** One Calendar.app read: the events, and the calendars read without any error. */
+export interface MacCalendarFetch {
+  events: MacCalendarEvent[];
+  complete: string[];
+}
+
 export interface MacMailMessage {
   id: string;
   subject: string;
@@ -28,7 +34,7 @@ interface Bridge {
     start: number,
     end: number,
     names: string[]
-  ): Promise<IpcResult<MacCalendarEvent[]>>;
+  ): Promise<IpcResult<MacCalendarFetch>>;
   fetchInbox(limit: number): Promise<IpcResult<MacMailMessage[]>>;
   openMessage(messageId: string): Promise<IpcResult<void>>;
 }

@@ -80,6 +80,9 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
   const endWindow = new Date(${Number(endMs)});
   const wanted = ${JSON.stringify(Array.isArray(names) ? names : [])};
   const out = [];
+  // WHY: the sync deletes mirrors that weren't returned. Only a calendar read without a
+  // single error may be judged that way, so report which ones that was.
+  const complete = [];
   const cals = Calendar.calendars();
   for (const cal of cals) {
     let name = "";
@@ -94,6 +97,7 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
         ],
       })();
     } catch (e) { continue; }
+    let clean = true;
     for (const ev of events) {
       try {
         const sd = ev.startDate();
@@ -109,13 +113,14 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
           allDay: Boolean(ev.alldayEvent()),
           calendarName: name,
         });
-      } catch (e) {}
+      } catch (e) { clean = false; }
     }
+    if (clean) complete.push(name);
   }
-  return JSON.stringify(out);
+  return JSON.stringify({ events: out, complete: complete });
 })()`;
   const out = await runJxa(script);
-  return JSON.parse(out || "[]");
+  return JSON.parse(out || '{"events":[],"complete":[]}');
 }
 
 export async function fetchInbox(limit = 12) {
