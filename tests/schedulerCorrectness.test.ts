@@ -11,6 +11,7 @@ import {
   type SchedulerWarning,
 } from "../convex/lib/scheduler";
 import { isNumber } from "../convex/lib/predicates";
+import type { PropertyDef } from "../convex/lib/types";
 
 // WHAT: the auto-scheduler books each task once, around everything it should.
 // See docs/changes/2026-10-15-scheduler-correctness/.
@@ -143,6 +144,57 @@ describe("runReflow", () => {
     // Stored as v.any(): name the shape the reflow writes.
     const warnings: SchedulerWarning[] = state.warnings;
     expect(warnings.find((w) => w.taskId === block.taskRowId)?.reason).toBe("time_used_up");
+  });
+});
+
+describe("runReflow — Codex review of PR #54", () => {
+  it("does not hold a dependent for a finished blocker's leftover locked block", async () => {
+    const s = await seeded();
+    const wiring = s.tasks.taskConfig;
+    if (!wiring?.blockedByPropId) throw new Error("no dependency wiring");
+    const rows = await s.t.run((ctx) =>
+      ctx.db
+        .query("rows")
+        .withIndex("by_database", (q) => q.eq("databaseId", s.tasks._id))
+        .collect()
+    );
+    const blocker = rows.find((r) => r.title === "Plan Proxmox migration");
+    const dependent = rows.find((r) => r.title === "Update DNS + reverse proxy");
+    if (!blocker || !dependent) throw new Error("seed tasks missing");
+    await s.t.mutation(api.rows.updateProperty, {
+      rowId: dependent._id,
+      propId: wiring.blockedByPropId,
+      value: [blocker._id],
+    });
+    // Lock one of the blocker's blocks far ahead, then mark the blocker done.
+    const block = (await s.blocks()).find((b) => b.taskRowId === blocker._id);
+    if (!block) throw new Error("blocker has no block");
+    const farAhead = Date.now() + 10 * DAY_MS;
+    await s.t.mutation(api.timeBlocks.move, {
+      blockId: block._id,
+      start: farAhead,
+      end: farAhead + (block.end - block.start),
+    });
+    const statusDefs: PropertyDef[] = s.tasks.properties;
+    const done = statusDefs
+      .find((p) => p.id === wiring.statusPropId)
+      ?.options?.find((o) => o.group === "complete");
+    if (!done) throw new Error("no complete status");
+    await s.t.mutation(api.rows.updateProperty, { rowId: blocker._id, propId: wiring.statusPropId, value: done.id });
+    const dependentStarts = (await s.blocks()).filter((b) => b.taskRowId === dependent._id).map((b) => b.start);
+    expect(dependentStarts.length).toBeGreaterThan(0);
+    expect(Math.min(...dependentStarts)).toBeLessThan(farAhead);
+  });
+
+  it("puts a restored task database back on the schedule", async () => {
+    const s = await seeded();
+    const before = (await s.blocks()).length;
+    expect(before).toBeGreaterThan(0);
+    if (!s.tasks.pageId) throw new Error("tasks database has no page");
+    await s.t.mutation(api.pages.trash, { pageId: s.tasks.pageId });
+    expect(await s.blocks()).toEqual([]);
+    await s.t.mutation(api.pages.restore, { pageId: s.tasks.pageId });
+    expect((await s.blocks()).length).toBe(before);
   });
 });
 

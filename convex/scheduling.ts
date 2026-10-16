@@ -93,6 +93,8 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     }
   }
   const usedUp: SchedulerWarning[] = [];
+  // Tasks marked done: their leftover reservations must not hold anyone up.
+  const doneIds = new Set<string>();
 
   // --- Tasks from every task-source database
   const dbs = await ctx.db.query("databases").collect();
@@ -114,7 +116,10 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       const statusVal = p[db.taskConfig.statusPropId];
       const group =
         statusProp?.options?.find((o) => o.id === statusVal)?.group ?? "todo";
-      if (group === "complete") continue;
+      if (group === "complete") {
+        doneIds.add(row._id);
+        continue;
+      }
       const estimate = p[db.taskConfig.estimatePropId];
       if (!isNumber(estimate) || estimate <= 0) continue;
       const remaining = estimate - (loggedMin.get(row._id) ?? 0);
@@ -151,14 +156,17 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
         dueMs,
         priority,
         blockedBy,
-        // Not before a blocker's started or locked work ends, even when the blocker itself
-        // has nothing left to plan.
-        earliestMs: Math.max(now, ...(blockedBy ?? []).map((id) => reservedEnd.get(id) ?? now)),
       });
       taskDb.set(row._id, db._id);
     }
   }
 
+  // Not before an unfinished blocker's started or locked work ends, even when it has nothing
+  // left to plan. A blocker marked done holds nobody, whatever it still has reserved.
+  for (const t of tasks) {
+    const holding = (t.blockedBy ?? []).filter((id) => !doneIds.has(id));
+    t.earliestMs = Math.max(now, ...holding.map((id) => reservedEnd.get(id) ?? now));
+  }
   const result = computeSchedule(now, tasks, busy, cfg);
   const warnings = [...result.warnings, ...usedUp];
   for (const b of result.blocks) {

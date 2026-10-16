@@ -2,6 +2,8 @@ import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getPageByAnyId } from "./lib/pageLookup";
+import { holdsTaskSource } from "./lib/pageTree";
+import { runReflow } from "./scheduling";
 import { makeId, type PropertyDef, type SelectOption } from "./lib/types";
 
 // WHAT: Page tree CRUD. Pages are docs or database containers; trash works on
@@ -155,10 +157,17 @@ export const toggleFavorite = mutation({
   },
 });
 
+// WHY: the scheduler skips task databases that are trashed or under a trashed page, so a
+// trash, restore or move that changes that must re-plan at once, not on some later edit.
+async function reflowIfTaskSourceMoved(ctx: MutationCtx, pageId: Id<"pages">) {
+  if (await holdsTaskSource(ctx.db, pageId)) await runReflow(ctx);
+}
+
 export const trash = mutation({
   args: { pageId: v.id("pages") },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.pageId, { trashed: true, favorite: false });
+    await reflowIfTaskSourceMoved(ctx, args.pageId);
   },
 });
 
@@ -175,6 +184,7 @@ export const restore = mutation({
       if (!parent || parent.trashed) parentId = undefined;
     }
     await ctx.db.patch(args.pageId, { trashed: false, parentId });
+    await reflowIfTaskSourceMoved(ctx, args.pageId);
   },
 });
 
@@ -226,6 +236,8 @@ export const move = mutation({
         return p.order === i ? Promise.resolve() : ctx.db.patch(p._id, { order: i });
       })
     );
+    // Moving into or out of a trashed subtree hides or shows a task database.
+    await reflowIfTaskSourceMoved(ctx, args.pageId);
   },
 });
 

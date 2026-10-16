@@ -98,3 +98,16 @@ departures from the plan text.
     overlapping block was the locked one, kept by design. Probe data removed.
   - Trashed task source: unit-tested only, to keep the demo workspace intact.
 - **The `events.by_end` index** deployed with `convex dev` (`[+] events.by_end`).
+- **Codex review round 1 (`74239da`): GATE PASS, two [P2], both fixed.**
+  - A blocker marked done still held its dependents through a leftover locked block. The
+    reflow now records done tasks, and `earliestMs` only counts unfinished blockers'
+    reservations. Failing-first test: the dependent started after the far reservation.
+  - Trash, restore and move did not reflow, so a restored task database stayed off the
+    schedule (and a trashed one stayed on it) until some unrelated edit. They now reflow
+    when the page is, or contains, a task-source database (`holdsTaskSource` in
+    `convex/lib/pageTree.ts`). Failing-first test: blocks were still there after trash.
+    Live: 12 blocks → trash → 5 (past history and the locked block, kept by design) →
+    restore → 12.
+  - Suite 112/112.
+- **Follow-up, not fixed here:** a trashed task's locked or past blocks still render on the
+  week grid; `timeBlocks.listRange` could hide blocks of hidden databases.
