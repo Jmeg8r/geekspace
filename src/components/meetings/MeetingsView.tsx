@@ -19,7 +19,7 @@ import { useUI } from "../../state/ui";
 import { cn, debounce, isElectron, isMacLike, tzOffsetMin } from "../../lib/utils";
 import { fmtDuration } from "../../lib/dates";
 import { listMicrophones, recorder, resolveMicChoice, type MicDevice } from "../../lib/recorder";
-import { pendingAudio, retrySave } from "../../lib/meetingPipeline";
+import { discardHeldAudio, pendingAudio, retrySave } from "../../lib/meetingPipeline";
 import {
   meetingAskMic,
   meetingsAvailable,
@@ -387,6 +387,7 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
   const [reprocessing, setReprocessing] = useState(false);
   // Audio whose upload failed is still in memory: offer to store it again.
   const unsavedHere = useSyncExternalStore(pendingAudio.subscribe, () => pendingAudio.has(meetingId));
+  const savingHere = useSyncExternalStore(pendingAudio.subscribe, () => pendingAudio.saving(meetingId));
   const [title, setTitle] = useState<string | null>(null);
   const [saveTitle] = useState(() =>
     debounce((id: Id<"meetings">, value: string) => void rename({ meetingId: id, title: value }), 400)
@@ -431,6 +432,7 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
             onClick={() => {
               if (confirm("Delete this meeting and its audio? The notes page stays.")) {
                 onBack();
+                discardHeldAudio(meetingId);
                 void removeMeeting({ meetingId });
               }
             }}
@@ -454,10 +456,11 @@ function MeetingDetail({ meetingId, onBack }: { meetingId: Id<"meetings">; onBac
           )}
           {unsavedHere && (
             <button
+              disabled={savingHere}
               onClick={() => void retrySave(meetingId)}
-              className="flex items-center gap-1 rounded-md border border-accent/50 px-2 py-1 text-[12px] text-accent hover:bg-hov"
+              className="flex items-center gap-1 rounded-md border border-accent/50 px-2 py-1 text-[12px] text-accent hover:bg-hov disabled:opacity-50"
             >
-              <RefreshCw size={12} /> Retry save
+              <RefreshCw size={12} className={cn(savingHere && "animate-spin")} /> {savingHere ? "Saving…" : "Retry save"}
             </button>
           )}
           {(meeting.status === "error" || meeting.status === "done") && (meeting.audioUrl || meeting.transcript) && (

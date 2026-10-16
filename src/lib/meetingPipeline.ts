@@ -113,6 +113,9 @@ export async function finishRecording(): Promise<void> {
 
 /** Retry storing one meeting's held audio, then process it. */
 export async function retrySave(meetingId: Id<"meetings">): Promise<void> {
+  // A save already running for this meeting will process it when it lands; joining it
+  // here would start a second AI job for the same recording.
+  if (saver.pending.saving(meetingId)) return;
   let recording: StoppedRecording;
   try {
     recording = await saver.retry(meetingId);
@@ -126,7 +129,7 @@ export async function retrySave(meetingId: Id<"meetings">): Promise<void> {
 /** Quit guard: store the live recording and all held audio (no AI) so it survives the app closing. */
 export async function saveRecordingBeforeQuit(): Promise<void> {
   if (!saver.hasWork()) return;
-  const { stored } = await saver.saveAll();
+  const { stored, failed } = await saver.saveAll();
   for (const recording of stored) {
     await convex.mutation(api.meetings.setStatus, {
       meetingId: recording.meetingId as Id<"meetings">,
@@ -134,6 +137,14 @@ export async function saveRecordingBeforeQuit(): Promise<void> {
       error: "Saved when the app quit. Use Re-run AI to transcribe and summarise it.",
     });
   }
+  if (failed.length > 0) {
+    throw new Error(`${failed.length} recording(s) could not be saved: ${failed.join("; ")}`);
+  }
+}
+
+/** The meeting was deleted: let go of any audio still held for it. */
+export function discardHeldAudio(meetingId: Id<"meetings">): void {
+  saver.discard(meetingId);
 }
 
 /**

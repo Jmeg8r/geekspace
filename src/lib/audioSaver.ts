@@ -77,9 +77,10 @@ export function createAudioSaver(deps: AudioSaverDeps) {
 
     /**
      * Before quitting: stop any live recording, then store every held recording (joining
-     * saves already in flight). Throws after trying them all if any failed.
+     * saves already in flight). Returns what was stored and what failed, so the stored ones
+     * can be marked even when another failed.
      */
-    async saveAll(): Promise<{ stored: StoppedRecording[] }> {
+    async saveAll(): Promise<{ stored: StoppedRecording[]; failed: string[] }> {
       await stopLive();
       const ids = new Set([...unsaved.keys(), ...inFlight.keys()]);
       const results = await Promise.allSettled([...ids].map((id) => saveOne(id)));
@@ -87,14 +88,17 @@ export function createAudioSaver(deps: AudioSaverDeps) {
       const failed = results.flatMap((r) =>
         r.status === "rejected" ? [r.reason instanceof Error ? r.reason.message : String(r.reason)] : []
       );
-      if (failed.length > 0) {
-        throw new Error(`${failed.length} recording(s) could not be saved: ${failed.join("; ")}`);
-      }
-      return { stored };
+      return { stored, failed };
+    },
+
+    /** Drop a meeting's held audio (its meeting was deleted). A save in flight still finishes or fails on its own. */
+    discard(meetingId: string): void {
+      if (unsaved.delete(meetingId)) changed();
     },
 
     pending: {
       has: (meetingId: string): boolean => unsaved.has(meetingId),
+      saving: (meetingId: string): boolean => inFlight.has(meetingId),
       /** True while a save is in flight or stopped audio is still held. */
       busy: (): boolean => inFlight.size > 0 || unsaved.size > 0,
       subscribe(listener: () => void): () => void {

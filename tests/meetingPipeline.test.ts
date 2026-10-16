@@ -97,15 +97,39 @@ describe("createAudioSaver", () => {
     expect(state.live).toBeNull();
   });
 
-  it("saveAll stores what it can and then reports what failed", async () => {
+  it("saveAll returns what it stored alongside what failed", async () => {
     const { saver, state } = harness(async (r) => {
       if (r.meetingId === "m1") throw new Error("m1 down");
     });
     await expect(saver.stopAndSave()).rejects.toThrow("m1 down");
     state.live = "m2";
-    await expect(saver.saveAll()).rejects.toThrow(/m1 down/);
+    const result = await saver.saveAll();
+    expect(result.stored.map((r) => r.meetingId)).toEqual(["m2"]);
+    expect(result.failed).toEqual(["m1 down"]);
     expect(saver.pending.has("m1")).toBe(true);
     expect(saver.pending.has("m2")).toBe(false);
+  });
+
+  it("discard lets go of a deleted meeting's held audio", async () => {
+    const { saver } = harness(async () => {
+      throw new Error("down");
+    });
+    await expect(saver.stopAndSave()).rejects.toThrow("down");
+    saver.discard("m1");
+    expect(saver.pending.has("m1")).toBe(false);
+    expect(saver.pending.busy()).toBe(false);
+    expect(saver.hasWork()).toBe(false);
+  });
+
+  it("reports which meeting is saving, so a retry can stand aside", async () => {
+    const { gate, store } = heldStore();
+    const { saver } = harness(store);
+    const saving = saver.stopAndSave();
+    await vi.waitFor(() => expect(gate.started).toBe(1));
+    expect(saver.pending.saving("m1")).toBe(true);
+    gate.release();
+    await saving;
+    expect(saver.pending.saving("m1")).toBe(false);
   });
 
   it("reports busy while an upload is in flight, after the recorder is already idle", async () => {

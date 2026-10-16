@@ -174,3 +174,15 @@ linear: pending
   - Live: one meeting's audio was held after a simulated outage and a second meeting was
     recording. Quit, then my click on "Save Recording and Quit" (accepted by the desktop
     tool this time): both meetings were stored (4 s and 10 s) and the app exited.
+- **Codex review round 3 (`d610c8e`): GATE PASS, three [P2], fixed. This is the last round
+  under the cap.**
+  - Retry save during an upload joined the save but started a second AI job. Retry now
+    stands aside while that meeting is saving, and the button shows "Saving…" and is
+    disabled.
+  - Deleting a meeting with held audio kept that audio forever and failed every later
+    quit-save. Delete now discards it (`audioSaver.discard`).
+  - A partial quit-save threw away the stored results, leaving those meetings stuck.
+    `saveAll` now returns `{ stored, failed }`; the quit marks the stored meetings, then
+    reports the failures.
+  - 3 tests added or changed. Suite 159/159. Not re-probed live: these changes are
+    renderer-only and covered by the saver tests.
