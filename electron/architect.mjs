@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { errorFrame, mcpEnv } from "./agentShared.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GEEKSPACE_ROOT = path.join(__dirname, "..");
@@ -21,7 +22,7 @@ const MCP_SERVER =
     ? BUNDLED_MCP
     : path.join(GEEKSPACE_ROOT, "mcp", "index.mjs");
 
-const ALLOWED_TOOLS = [
+export const ARCHITECT_TOOLS = [
   "query_schema",
   "get_page",
   "create_page",
@@ -36,7 +37,7 @@ const ALLOWED_TOOLS = [
   "schedule_warnings",
   "list_templates",
   "apply_template",
-].map((t) => `mcp__geekspace__${t}`);
+];
 
 const SYSTEM_PROMPT = `You are ARCHITECT, the resident expert on Geekspace — James's local Notion-style workspace app. You design, create, and configure his workspace through the geekspace MCP tools. You are the go-to for "build me a database for X", "set up a project for Y", "reorganize Z", and "why isn't this task on my calendar?".
 
@@ -73,36 +74,41 @@ export function architectAuthOk() {
 }
 
 /**
- * Run one ARCHITECT turn. `onEvent` receives {type:"token"|"tool"|"error", ...}
+ * SDK options for one turn, confined to the geekspace workspace tools.
+ * WHY each lockdown field (SDK 0.3.172): `allowedTools` only auto-approves — it restricts
+ * nothing — and with `settingSources` unset the SDK loads every user setting, plugin, hook
+ * and MCP server on this machine. Measured before this change: 32 built-in tools (Bash,
+ * Edit, Write…) and ~30 MCP servers (Gmail, Slack, Drive…) with permissions bypassed.
+ */
+export function architectOptions({ resumeId, env = process.env } = {}) {
+  return {
+    cwd: GEEKSPACE_ROOT,
+    systemPrompt: SYSTEM_PROMPT,
+    tools: [], // no built-in tools at all
+    settingSources: [], // none of the user's settings, plugins, hooks or CLAUDE.md files
+    strictMcpConfig: true, // only the servers named here
+    mcpServers: {
+      geekspace: {
+        type: "stdio",
+        command: process.execPath,
+        args: [MCP_SERVER],
+        env: mcpEnv(env),
+      },
+    },
+    allowedTools: ARCHITECT_TOOLS.map((t) => `mcp__geekspace__${t}`),
+    permissionMode: "dontAsk", // anything not pre-approved above is denied, never prompted
+    includePartialMessages: true,
+    maxTurns: 24,
+    ...(resumeId ? { resume: resumeId } : {}),
+  };
+}
+
+/**
+ * Run one ARCHITECT turn. `onEvent` receives {type:"token"|"tool"|"error", text}
  * frames as the agent streams. Resolves when the turn completes.
  */
 export async function runArchitect(message, onEvent) {
-  const stream = query({
-    prompt: message,
-    options: {
-      cwd: GEEKSPACE_ROOT,
-      systemPrompt: SYSTEM_PROMPT,
-      mcpServers: {
-        geekspace: {
-          type: "stdio",
-          command: process.execPath,
-          args: [MCP_SERVER],
-          env: {
-            ...process.env,
-            ELECTRON_RUN_AS_NODE: "1",
-            CONVEX_URL: process.env.CONVEX_URL ?? "http://127.0.0.1:3210",
-          },
-        },
-      },
-      allowedTools: ALLOWED_TOOLS,
-      // Single-user, local, create/edit-only tools — run them without prompting.
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
-      includePartialMessages: true,
-      maxTurns: 24,
-      ...(sessionId ? { resume: sessionId } : {}),
-    },
-  });
+  const stream = query({ prompt: message, options: architectOptions({ resumeId: sessionId }) });
 
   for await (const msg of stream) {
     if (msg.session_id) sessionId = msg.session_id;
@@ -123,7 +129,7 @@ export async function runArchitect(message, onEvent) {
       }
     } else if (msg.type === "result") {
       if (msg.subtype && msg.subtype !== "success") {
-        onEvent({ type: "error", message: `Agent stopped: ${msg.subtype}` });
+        onEvent(errorFrame(`Agent stopped: ${msg.subtype}`));
       }
     }
   }

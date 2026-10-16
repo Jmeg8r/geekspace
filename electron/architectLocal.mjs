@@ -10,6 +10,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { errorFrame, mcpEnv, parseToolArgs, trimHistory } from "./agentShared.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Packaged: bundled MCP server in Resources; dev: the source in the repo.
@@ -29,12 +30,18 @@ const OLLAMA_URL = (process.env.OLLAMA_URL ?? "http://127.0.0.1:11434").replace(
 const MODEL_PREFERENCE = ["qwen3-coder", "gpt-oss", "qwen3", "llama3.3", "mistral"];
 const EXCLUDE = /embed|whisper|astgl-voice/i;
 
-const MAX_TOOL_ROUNDS = 12;
+const MAX_TOOL_ROUNDS = Number(process.env.GEEKSPACE_LOCAL_MAX_TOOL_ROUNDS ?? 12);
 // query_schema alone is ~14k chars; truncating below that made the model
 // miscount databases (it faithfully counted what it could see). Modern local
 // models have the context for this — just make sure num_ctx matches.
 const MAX_TOOL_RESULT_CHARS = 24000;
 const NUM_CTX = Number(process.env.GEEKSPACE_LOCAL_NUM_CTX ?? 32768);
+// WHY a budget: past num_ctx Ollama silently drops the OLDEST messages — the system
+// prompt first — so the model forgets "query_schema first" mid-chat. ~3 chars per token,
+// with a quarter of the window left for the reply and the tool definitions.
+const CHARS_PER_TOKEN = 3;
+const HISTORY_SHARE = 0.75;
+const HISTORY_MAX_CHARS = Math.floor(NUM_CTX * CHARS_PER_TOKEN * HISTORY_SHARE);
 
 // Same operating rules as the Claude lane, tightened for smaller models:
 // explicit tool-first behavior and short answers.
@@ -69,11 +76,7 @@ async function connectMcp() {
       const transport = new StdioClientTransport({
         command: process.execPath,
         args: [MCP_SERVER],
-        env: {
-          ...process.env,
-          ELECTRON_RUN_AS_NODE: "1",
-          CONVEX_URL: process.env.CONVEX_URL ?? "http://127.0.0.1:3210",
-        },
+        env: mcpEnv(),
         stderr: "ignore",
       });
       const c = new Client({ name: "geekspace-local-agent", version: "1.0.0" });
@@ -189,6 +192,7 @@ export async function runArchitectLocal(message, onEvent) {
   history.push({ role: "user", content: message });
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    history = trimHistory(history, HISTORY_MAX_CHARS);
     const { content, toolCalls } = await chatRound(model, history, tools, onEvent);
     history.push({ role: "assistant", content, tool_calls: toolCalls.length ? toolCalls : undefined });
 
@@ -196,18 +200,21 @@ export async function runArchitectLocal(message, onEvent) {
 
     for (const call of toolCalls) {
       const name = call.function?.name;
-      let args = call.function?.arguments ?? {};
-      if (typeof args === "string") {
-        try { args = JSON.parse(args); } catch { args = {}; }
-      }
       onEvent({ type: "tool", text: name });
+      const parsed = parseToolArgs(call.function?.arguments);
       let resultText;
-      try {
-        const result = await c.callTool({ name, arguments: args });
-        resultText = textOf(result) || "(empty result)";
-        if (result.isError) resultText = `ERROR: ${resultText}`;
-      } catch (err) {
-        resultText = `ERROR: ${String(err?.message ?? err)}`;
+      if (!parsed.ok) {
+        // Tell the model, so it can retry with valid arguments, instead of calling the
+        // tool with {} and acting on whatever that does.
+        resultText = `ERROR: ${parsed.error}. Call ${name} again with a JSON object of arguments.`;
+      } else {
+        try {
+          const result = await c.callTool({ name, arguments: parsed.args });
+          resultText = textOf(result) || "(empty result)";
+          if (result.isError) resultText = `ERROR: ${resultText}`;
+        } catch (err) {
+          resultText = `ERROR: ${String(err?.message ?? err)}`;
+        }
       }
       // Keep giant payloads from blowing the context window.
       if (resultText.length > MAX_TOOL_RESULT_CHARS) {
@@ -216,5 +223,5 @@ export async function runArchitectLocal(message, onEvent) {
       history.push({ role: "tool", content: resultText, tool_name: name });
     }
   }
-  onEvent({ type: "error", text: `Stopped after ${MAX_TOOL_ROUNDS} tool rounds without a final answer.` });
+  onEvent(errorFrame(`Stopped after ${MAX_TOOL_ROUNDS} tool rounds without a final answer.`));
 }
