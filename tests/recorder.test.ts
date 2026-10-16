@@ -3,7 +3,7 @@
 // for — a silent substitution to the wrong input is exactly how a meeting gets
 // recorded as 43 minutes of nothing.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listMicrophones, openStream, resolveMicChoice } from "../src/lib/recorder";
+import { listMicrophones, openStream, recorder, resolveMicChoice } from "../src/lib/recorder";
 
 type Track = { kind: string; label: string; stop: () => void };
 
@@ -171,5 +171,70 @@ describe("listMicrophones", () => {
     expect(await listMicrophones()).toEqual([]);
     // No devices means nothing to probe for — never prompt in that case.
     expect(getUserMedia).not.toHaveBeenCalled();
+  });
+});
+
+// Start races (docs/changes/2026-10-15-meetings/): every path ends with the microphone
+// released, or with exactly one microphone open.
+describe("recorder.start lifecycle", () => {
+  const opts = { meetingId: "fixture", title: "Test", meetingType: "general" };
+  afterEach(() => {
+    recorder.cancel();
+  });
+
+  it("releases the microphone when MediaRecorder construction fails", async () => {
+    const stop = vi.fn();
+    stubMediaDevices({ getUserMedia: async () => fakeStream([{ kind: "audio", label: "Mic", stop }]) });
+    vi.stubGlobal(
+      "MediaRecorder",
+      class {
+        static isTypeSupported() {
+          return true;
+        }
+        constructor() {
+          throw new Error("unsupported codec");
+        }
+      }
+    );
+    await expect(recorder.start(opts)).rejects.toThrow("unsupported codec");
+    expect(stop).toHaveBeenCalledOnce();
+    expect(recorder.getState().status).toBe("idle");
+  });
+
+  it("does not open a second microphone while permission is pending", async () => {
+    let deny = (_err: Error) => {};
+    const getUserMedia = vi.fn(
+      () =>
+        new Promise<never>((_resolve, reject) => {
+          deny = reject;
+        })
+    );
+    stubMediaDevices({ getUserMedia });
+    const first = recorder.start(opts);
+    const firstResult = expect(first).rejects.toThrow("denied");
+    const second = recorder.start(opts);
+    // Checked before awaiting: a second getUserMedia would never settle.
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    await expect(second).rejects.toThrow("Already recording");
+    deny(new Error("denied"));
+    await firstResult;
+    expect(recorder.getState().status).toBe("idle");
+  });
+
+  it("closes a microphone granted after the pending start was cancelled", async () => {
+    const stop = vi.fn();
+    let grant = () => {};
+    stubMediaDevices({
+      getUserMedia: () =>
+        new Promise((resolve) => {
+          grant = () => resolve(fakeStream([{ kind: "audio", label: "Mic", stop }]));
+        }),
+    });
+    const start = recorder.start(opts);
+    recorder.cancel();
+    grant();
+    await expect(start).rejects.toThrow(/cancelled/i);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(recorder.getState().status).toBe("idle");
   });
 });
