@@ -1,0 +1,133 @@
+---
+change: 2026-10-15-scheduler-correctness
+status: accepted
+track: T1
+intent: ./intent.md
+linear: pending
+---
+# Plan: count locked work once, respect blockers and long events, skip trashed sources
+
+## Files that change
+
+- `convex/lib/validation.ts` (new, from #28): `validateSchedulerConfig`.
+- `convex/lib/scheduler.ts`: validate the config on entry; a task with unplaced minutes is
+  recorded as unfinished (`Infinity`) for its dependents; one warning per task, with its
+  real reason.
+- `convex/scheduling.ts`:
+  - locked future blocks count toward logged minutes and reserve their time (#28);
+  - dependents get `earliestMs` no earlier than any blocker's reserved or locked end (#28);
+  - busy events come from a new `events.by_end` index (`end > now`, `start < horizon`);
+  - task databases whose page is trashed, or under a trashed page, are skipped;
+  - (option A) a task whose planned time has all passed and is not done gets a new
+    `time_used_up` warning.
+- `convex/lib/pageTree.ts` (new): the "page or an ancestor is trashed" check, shared by
+  `pages.list` (PR 2) and the scheduler/calendar data.
+- `convex/calendarData.ts`: skip databases whose page is hidden.
+- `convex/settings.ts`: validate the merged settings before saving.
+- `convex/schema.ts`: `events.index("by_end", ["end"])`.
+- `src/components/calendar/CalendarView.tsx`: a label per warning reason, keyed by task and
+  reason.
+- `tests/schedulerCorrectness.test.ts` (new) + additions to `tests/scheduler.test.ts`.
+
+## Order of work
+
+1. Tests → fail on `main` for the stated reasons; commit test-only.
+2. Engine changes (validation, unfinished blockers, warnings) → engine tests pass.
+3. Reflow changes (locked blocks, earliest start, events index, trashed sources).
+4. Settings validation; `pageTree` helper shared with `pages.list`; calendar data.
+5. Warning labels in the UI.
+6. Live probes; `npm run verify`; `npm run build`.
+7. Commit, push, PR; CI; Codex; merge on James's approval.
+
+## Risks
+
+- **New index on a live table**: Convex backfills it on deploy; for a personal workspace
+  this is instant. The query falls back to nothing until it exists only if deployed
+  without the schema, which Convex prevents.
+- **Validation can reject an existing bad settings document** on the next reflow. The
+  error names the setting; the Settings UI already keeps values in range.
+- **`Infinity` as "unfinished"** must not leak into stored blocks; it is only used for
+  ordering dependents.
+
+## Proof
+
+| Signal | Command or place | Expected |
+|---|---|---|
+| failing first | `npx vitest run tests/schedulerCorrectness.test.ts` | fails for the stated reasons |
+| suite | `npm run verify` | pass |
+| drag then reflow | worktree UI + `convex data timeBlocks` | planned minutes for the task = estimate |
+| long event | event from 30 days ago to next week | no blocks inside it |
+| trashed source | trash a task database's page | its blocks disappear from the calendar |
+| cycle | A blocked by B, B blocked by A | one "Dependency cycle" warning |
+| build | `npm run build` | pass |
+
+## Options not taken
+
+- **#28's event query (`start < horizon`)**: correct, but reads every past event on each
+  reflow; an end-time index reads only what overlaps.
+- **Throwing on invalid settings inside the engine only**: the bad value would already be
+  saved; validate at `settings.update` as well.
+
+## Deviations
+
+Results of the plan's proofs, run 2026-10-15 on the isolated worktree backend, and the
+departures from the plan text.
+
+- **Failing first (`6e5da9f`):** all 8 new tests failed on `main` for the stated reasons;
+  the headline one booked **120 minutes for a 60-minute task** after a drag. The
+  partial-blocker test first passed on `main` because its blocker filled the whole
+  horizon (no room for the dependent either way); it was sharpened to a no-split blocker
+  that cannot fit at all, which leaves room, and then failed on `main` as it should.
+- **After:** 8/8; suite 110/110; build passes.
+- **Settings validation:** the settings test passed before the explicit check was added,
+  because the reflow it triggers ran the new engine check, threw, and rolled the whole
+  mutation back. The check before saving is still added, so the error comes from the
+  boundary with a clear message instead of from the engine.
+- **`pageTree` helper not shared with `pages.list`:** the list hides subtrees from one
+  in-memory pass over all pages; the scheduler and calendar data check one database page
+  at a time by walking its parents. Same rule, two shapes; merging them would make the list
+  do per-page reads.
+- **Live, worktree backend (clock: Thursday evening):**
+  - Dragged Friday's 2-hour "Record demo video": one locked block, 120 minutes, equal to
+    the estimate (no second copy).
+  - Option A on real data: the three tasks whose Thursday blocks had all passed showed
+    "Planned time used up, not done"; "Write first draft", with a Friday block left, did
+    not. The warnings popover opened under its button.
+  - A ⇄ B cycle: one `dependency_cycle` warning, labelled "Dependency cycle".
+  - An event from 30 days ago to next week: every unlocked block moved after it; the one
+    overlapping block was the locked one, kept by design. Probe data removed.
+  - Trashed task source: unit-tested only, to keep the demo workspace intact.
+- **The `events.by_end` index** deployed with `convex dev` (`[+] events.by_end`).
+- **Codex review round 1 (`74239da`): GATE PASS, two [P2], both fixed.**
+  - A blocker marked done still held its dependents through a leftover locked block. The
+    reflow now records done tasks, and `earliestMs` only counts unfinished blockers'
+    reservations. Failing-first test: the dependent started after the far reservation.
+  - Trash, restore and move did not reflow, so a restored task database stayed off the
+    schedule (and a trashed one stayed on it) until some unrelated edit. They now reflow
+    when the page is, or contains, a task-source database (`holdsTaskSource` in
+    `convex/lib/pageTree.ts`). Failing-first test: blocks were still there after trash.
+    Live: 12 blocks → trash → 5 (past history and the locked block, kept by design) →
+    restore → 12.
+  - Suite 112/112.
+- **Follow-up, not fixed here:** a trashed task's locked or past blocks still render on the
+  week grid; `timeBlocks.listRange` could hide blocks of hidden databases.
+- **Codex review round 2 (`d404780`): GATE PASS, one [P2], fixed.** A task whose whole
+  estimate sat in locked blocks skipped the deadline check, so locking an overdue task's
+  block cleared its `past_due` warning (and `timeBlocks.move` cleared the stripe). The
+  reflow now checks every locked future block against the current due date, keeps its
+  `pastDue` stripe in step, and adds a `past_due` warning when the engine did not.
+  Failing-first test (warning gone after lock), then 11/11; suite 113/113. Live: the
+  locked "Record demo video" went striped with a `past_due` warning when its due date
+  moved to yesterday, and back to clean when restored.
+- **Codex review round 3 (`2d562cc`): GATE PASS, one [P2] — same class as round 2, fixed at
+  the class.** The reflow dropped fully reserved tasks before the engine, so anything the
+  engine does over the dependency graph lost them; this time cycle detection (locking one
+  task of a cycle cleared its warning). Fully reserved tasks now go to the engine as
+  **reserved-only** participants (`remainingMin: 0`, new `reservedUntilMs`): they place
+  nothing, take part in ordering and cycle detection, and count as finished when their
+  reserved work ends. That also replaced round 1's reflow-side `earliestMs` workaround,
+  which is removed. Two failing-first engine tests; 34/34 scheduler tests; suite 115/115.
+  Live: A ⇄ B cycle, then lock A's block → the `dependency_cycle` warning stayed.
+- **Review loop stopped here** (CLAUDE.md L42): three rounds, all GATE PASS, no P0/P1.
+  The round-3 fix is covered by the suite, the live check and the forge ai-review gate on
+  the PR head.

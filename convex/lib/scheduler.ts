@@ -10,6 +10,8 @@
 // a DST switch may shift by an hour until the next reflow. Acceptable tradeoff
 // for a single-user tool — documented in the README.
 
+import { validateSchedulerConfig } from "./validation";
+
 export const MIN_MS = 60_000;
 export const DAY_MS = 86_400_000;
 /** System-wide floor: never create a block shorter than this. */
@@ -37,6 +39,12 @@ export interface SchedulerTask {
   noSplit?: boolean;
   /** Task ids that must finish before this one starts (dependencies). */
   blockedBy?: string[];
+  /**
+   * When work already reserved for this task (started or locked blocks) ends. A task with
+   * remainingMin 0 and this set is reserved-only: it places nothing, but stays in the
+   * dependency graph (cycle detection, and dependents wait until it ends).
+   */
+  reservedUntilMs?: number;
 }
 
 export interface Interval {
@@ -55,7 +63,10 @@ export interface SchedulerWarning {
   taskId: string;
   title: string;
   unscheduledMin: number;
-  reason: "no_capacity" | "past_due" | "dependency_cycle";
+  // time_used_up is added by the reflow, not the engine: every planned block of a task has
+  // passed and it is still not done (past blocks count as worked; option A in
+  // docs/changes/2026-10-15-scheduler-correctness/).
+  reason: "no_capacity" | "past_due" | "dependency_cycle" | "time_used_up";
 }
 
 export interface ScheduleResult {
@@ -170,6 +181,7 @@ export function computeSchedule(
   busy: Interval[],
   cfg: SchedulerConfig
 ): ScheduleResult {
+  validateSchedulerConfig(cfg);
   const windows = buildDayWindows(nowMs, cfg);
   const busyExpanded = mergeIntervals(
     busy.map((b) => ({
@@ -187,7 +199,7 @@ export function computeSchedule(
   const blocks: ScheduledBlock[] = [];
   const warnings: SchedulerWarning[] = [];
   const ordered = [...tasks]
-    .filter((t) => t.remainingMin > 0)
+    .filter((t) => t.remainingMin > 0 || t.reservedUntilMs !== undefined)
     .sort(compareTasks);
 
   // Topological processing: among tasks whose blockers are all satisfied, keep
@@ -219,12 +231,15 @@ export function computeSchedule(
       .map((b) => finishedAt.get(b)!);
     const depEarliestMs = blockerEnds.length > 0 ? Math.max(...blockerEnds) : 0;
 
-    let rem = Math.max(task.remainingMin, MIN_BLOCK_FLOOR_MIN);
+    // Reserved-only tasks have nothing left to place.
+    let rem = task.remainingMin > 0 ? Math.max(task.remainingMin, MIN_BLOCK_FLOOR_MIN) : 0;
     const earliest = ceilTo(
       Math.max(task.earliestMs ?? 0, depEarliestMs),
       cfg.granularityMin
     );
     let placedPastDue = false;
+    // One warning per task: a cycle is the reason worth showing.
+    const warned = inCycle;
     let lastEnd = earliest;
 
     let i = 0;
@@ -266,14 +281,14 @@ export function computeSchedule(
       i = 0;
     }
 
-    if (rem > 0) {
+    if (!warned && rem > 0) {
       warnings.push({
         taskId: task.id,
         title: task.title,
         unscheduledMin: rem,
         reason: "no_capacity",
       });
-    } else if (placedPastDue) {
+    } else if (!warned && placedPastDue) {
       warnings.push({
         taskId: task.id,
         title: task.title,
@@ -281,7 +296,9 @@ export function computeSchedule(
         reason: "past_due",
       });
     }
-    finishedAt.set(task.id, lastEnd);
+    // Unplaced work is still a blocker: a partial (or empty) placement is not completion, so
+    // dependents wait for it rather than starting after the last piece that did fit.
+    finishedAt.set(task.id, rem > 0 ? Infinity : Math.max(lastEnd, task.reservedUntilMs ?? 0));
   }
 
   blocks.sort((a, b) => a.start - b.start);

@@ -1,6 +1,6 @@
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import {
   computeSchedule,
   calendarDateToLocalMs,
@@ -9,7 +9,10 @@ import {
   type Interval,
   type SchedulerConfig,
   type SchedulerTask,
+  type SchedulerWarning,
 } from "./lib/scheduler";
+import { validateSchedulerConfig } from "./lib/validation";
+import { isPageHidden } from "./lib/pageTree";
 import type { DateValue, PropertyDef } from "./lib/types";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
 import { isNumber } from "./lib/predicates";
@@ -40,6 +43,8 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   }
 
   const now = Date.now();
+  // Fail before touching any block if the stored settings are out of range.
+  validateSchedulerConfig({ ...s, tzOffsetMin: tz });
   const cfg: SchedulerConfig = {
     workDays: s.workDays,
     dayStartMin: s.dayStartMin,
@@ -52,33 +57,49 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     tzOffsetMin: tz,
   };
 
-  // --- Busy time: fixed (non-all-day) events still ahead of us
+  // --- Busy time: fixed (non-all-day) events still running or ahead of us, however long
+  // ago they began (a multi-week trip used to stop counting after 14 days).
   const horizonEnd = now + (s.horizonDays + 1) * DAY_MS;
   const events = await ctx.db
     .query("events")
-    .withIndex("by_start", (q) => q.gte("start", now - 14 * DAY_MS))
+    .withIndex("by_end", (q) => q.gt("end", now))
     .collect();
   const busy: Interval[] = events
-    .filter((e) => !e.allDay && e.end > now && e.start < horizonEnd)
+    .filter((e) => !e.allDay && e.start < horizonEnd)
     .map((e) => ({ start: Math.max(e.start, now), end: e.end }));
 
-  // --- Existing blocks: freeze the past, respect locks, clear the rest
+  // --- Existing blocks: freeze the past, keep locks, clear the rest.
+  // Started/past blocks are history and count as worked (option A). A locked future block is
+  // a promise the engine keeps: it reserves its time AND counts toward the estimate, or the
+  // next reflow would book the whole estimate again around it.
   const allBlocks = await ctx.db.query("timeBlocks").collect();
   const loggedMin = new Map<string, number>();
+  const pastMin = new Map<string, number>();
+  const hasFutureBlock = new Set<string>();
+  const reservedEnd = new Map<string, number>();
+  // Locked blocks still ahead, per task: kept as placed, but their deadline is still checked.
+  const lockedAhead = new Map<string, Doc<"timeBlocks">[]>();
+  const add = (m: Map<string, number>, id: string, n: number) => m.set(id, (m.get(id) ?? 0) + n);
   for (const b of allBlocks) {
-    if (b.start <= now) {
-      // Started/past blocks are immutable history; they count as planned work.
-      loggedMin.set(
-        b.taskRowId,
-        (loggedMin.get(b.taskRowId) ?? 0) + (b.end - b.start) / MIN_MS
-      );
-      if (b.end > now) busy.push({ start: now, end: b.end });
-    } else if (b.locked) {
-      busy.push({ start: b.start, end: b.end });
+    const minutes = (b.end - b.start) / MIN_MS;
+    if (b.start <= now || b.locked) {
+      add(loggedMin, b.taskRowId, minutes);
+      reservedEnd.set(b.taskRowId, Math.max(reservedEnd.get(b.taskRowId) ?? 0, b.end));
+      if (b.start <= now) add(pastMin, b.taskRowId, minutes);
+      if (b.end > now) {
+        busy.push({ start: Math.max(now, b.start), end: b.end });
+        hasFutureBlock.add(b.taskRowId);
+      }
+      if (b.locked && b.start > now) {
+        lockedAhead.set(b.taskRowId, [...(lockedAhead.get(b.taskRowId) ?? []), b]);
+      }
     } else {
       await ctx.db.delete(b._id);
     }
   }
+  const usedUp: SchedulerWarning[] = [];
+  // Open tasks with a locked block after their due date, by id → title.
+  const lateLocked = new Map<string, string>();
 
   // --- Tasks from every task-source database
   const dbs = await ctx.db.query("databases").collect();
@@ -86,6 +107,8 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   const taskDb = new Map<string, Id<"databases">>();
   for (const db of dbs) {
     if (!db.isTaskSource || !db.taskConfig) continue;
+    // A task database in the trash (or under a trashed page) is out of sight: no blocks.
+    if (db.pageId && (await isPageHidden(ctx.db, db.pageId))) continue;
     const props = db.properties as PropertyDef[];
     const statusProp = props.find((p) => p.id === db.taskConfig!.statusPropId);
     const priorityProp = props.find((p) => p.id === db.taskConfig!.priorityPropId);
@@ -98,18 +121,34 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       const statusVal = p[db.taskConfig.statusPropId];
       const group =
         statusProp?.options?.find((o) => o.id === statusVal)?.group ?? "todo";
+      // Done tasks stay out of the engine, so they hold nobody up whatever they still reserve.
       if (group === "complete") continue;
       const estimate = p[db.taskConfig.estimatePropId];
       if (!isNumber(estimate) || estimate <= 0) continue;
-      const remaining = estimate - (loggedMin.get(row._id) ?? 0);
-      if (remaining <= 0) continue;
-
       const dateVal = p[db.taskConfig.datePropId] as DateValue | undefined;
       let dueMs: number | undefined;
       if (dateVal && isNumber(dateVal.start)) {
         dueMs = dateVal.includeTime
           ? (dateVal.end ?? dateVal.start)
           : calendarDateToLocalMs(dateVal.end ?? dateVal.start, tz, s.dayEndMin);
+      }
+      // Locked blocks are not re-planned, so check their deadline here: keep each block's
+      // past-due stripe true to the current due date, and warn if any lands after it, even
+      // when locked blocks cover the whole estimate and the engine never sees the task.
+      for (const b of lockedAhead.get(row._id) ?? []) {
+        const late = dueMs !== undefined && b.end > dueMs;
+        if (late !== b.pastDue) await ctx.db.patch(b._id, { pastDue: late });
+        if (late) lateLocked.set(row._id, row.title);
+      }
+
+      const remaining = estimate - (loggedMin.get(row._id) ?? 0);
+      // Every planned minute has passed and the task is still open: say so, rather than let
+      // it drop off the plan silently (option A).
+      if (remaining <= 0 && !hasFutureBlock.has(row._id)) {
+        if ((pastMin.get(row._id) ?? 0) >= estimate) {
+          usedUp.push({ taskId: row._id, title: row.title, unscheduledMin: 0, reason: "time_used_up" });
+        }
+        continue;
       }
 
       let priority = 2; // medium default
@@ -124,7 +163,10 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
       tasks.push({
         id: row._id,
         title: row.title,
-        remainingMin: remaining,
+        // Fully reserved tasks (locked or running blocks cover the estimate) go in with 0:
+        // they place nothing but stay in the dependency graph.
+        remainingMin: Math.max(remaining, 0),
+        reservedUntilMs: reservedEnd.get(row._id),
         dueMs,
         priority,
         blockedBy,
@@ -134,6 +176,11 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
   }
 
   const result = computeSchedule(now, tasks, busy, cfg);
+  const warned = new Set(result.warnings.map((w) => w.taskId));
+  const lateLockedWarnings: SchedulerWarning[] = [...lateLocked]
+    .filter(([taskId]) => !warned.has(taskId))
+    .map(([taskId, title]) => ({ taskId, title, unscheduledMin: 0, reason: "past_due" }));
+  const warnings = [...result.warnings, ...lateLockedWarnings, ...usedUp];
   for (const b of result.blocks) {
     await ctx.db.insert("timeBlocks", {
       taskRowId: b.taskId as Id<"rows">,
@@ -150,11 +197,11 @@ export async function runReflow(ctx: MutationCtx, tzOffsetMin?: number) {
     .withIndex("by_key", (q) => q.eq("key", "global"))
     .unique();
   if (state) {
-    await ctx.db.patch(state._id, { warnings: result.warnings, lastRun: now });
+    await ctx.db.patch(state._id, { warnings, lastRun: now });
   } else {
     await ctx.db.insert("schedulerState", {
       key: "global",
-      warnings: result.warnings,
+      warnings,
       lastRun: now,
     });
   }
