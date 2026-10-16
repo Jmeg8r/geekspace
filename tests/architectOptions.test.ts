@@ -26,7 +26,9 @@ describe("architectOptions", () => {
   });
 
   it("starts the MCP server without the parent's secrets", () => {
-    const env = opts.mcpServers?.geekspace?.env ?? {};
+    const server = opts.mcpServers?.geekspace;
+    if (!server || !("env" in server)) throw new Error("geekspace must be a stdio server with an env");
+    const env = server.env ?? {};
     expect(env).not.toHaveProperty("SECRET_TOKEN");
     expect(env.CONVEX_URL).toBe("http://127.0.0.1:3210");
   });

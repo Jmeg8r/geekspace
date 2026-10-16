@@ -36,6 +36,7 @@ import {
   searchItems,
 } from "./readerMcp.mjs";
 import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
+import { oneTurnAtATime } from "./agentShared.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import {
   getUrl as convexUrl,
@@ -361,10 +362,14 @@ handle("gs:agent:reset", async () => {
 // Runs one ARCHITECT turn; streams token/tool/error frames to the renderer
 // (same push pattern as meeting progress). mode "local" (default) drives the
 // Ollama lane; "claude" escalates to the Agent SDK lane.
+// One turn at a time across both lanes: a second message mid-turn would interleave
+// with the running conversation.
+const runAgentTurn = oneTurnAtATime((mode, message, onEvent) =>
+  mode === "claude" ? runArchitect(message, onEvent) : runArchitectLocal(message, onEvent)
+);
 ipcMain.handle("gs:agent:chat", async (event, { message, mode }) => {
   try {
-    const run = mode === "claude" ? runArchitect : runArchitectLocal;
-    await run(message, (frame) => {
+    await runAgentTurn(mode, message, (frame) => {
       event.sender.send("gs:agent:event", frame);
     });
     return { ok: true, data: true };
