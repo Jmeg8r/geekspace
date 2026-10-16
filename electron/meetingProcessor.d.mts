@@ -39,6 +39,32 @@ export function parseVolumeStats(stderr: string): VolumeStats;
 /** True when the audio carries no usable speech signal. Fails open on NaN. */
 export function isSilentAudio(stats: VolumeStats): boolean;
 
+/** True when the transcript holds only whisper's non-speech markers (or under 5 characters). */
+export function isNoSpeech(transcript: string): boolean;
+
+/** Transcript → notes; long transcripts are summarised in sections, then merged. Throws on failure. */
+export function summarizeTranscript(
+  transcript: string,
+  meetingType: string,
+  ollamaUrl?: string,
+  ollamaModel?: string,
+  onProgress?: (pct: number) => void
+): Promise<MeetingSummary>;
+
+/** Either the notes, or the transcript with the summary's error message. */
+export type MeetingNotesResult =
+  | (MeetingSummary & { transcript: string; summaryError?: undefined })
+  | { transcript: string; summaryError: string };
+
+/** Like summarizeTranscript, but a summary failure is returned with the transcript, never thrown. */
+export function notesFromTranscript(
+  transcript: string,
+  meetingType: string,
+  ollamaUrl?: string,
+  ollamaModel?: string,
+  onProgress?: (pct: number) => void
+): Promise<MeetingNotesResult>;
+
 export function processMeeting(
   input: {
     audio: ArrayBuffer | Uint8Array;
@@ -47,4 +73,4 @@ export function processMeeting(
     ollamaModel?: string;
   },
   onProgress?: (p: { phase: MeetingPhase; pct: number }) => void
-): Promise<MeetingSummary & { transcript: string }>;
+): Promise<MeetingNotesResult>;

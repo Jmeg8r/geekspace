@@ -3,11 +3,10 @@
 //   transcript → local Ollama → { summary, key points, decisions, action items }
 // WHY main-process: child processes + localhost HTTP without CORS ceremony.
 import { execFile, spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import https from "node:https";
 import os from "node:os";
 import path from "node:path";
+import { downloadVerifiedFile, verifiedFile } from "./verifiedDownload.mjs";
 
 // WHY: Windows executables carry the .exe suffix; used when probing for
 // ffmpeg/whisper-cli so we look for the name Windows actually resolves.
@@ -16,6 +15,11 @@ const EXE = process.platform === "win32" ? ".exe" : "";
 const MODEL_DIR = path.join(os.homedir(), ".geekspace", "whisper-models");
 const MODEL_NAME = "ggml-base.en.bin";
 const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}`;
+// WHY pinned: a size check alone accepted any file over 100 MB as the model.
+// Hugging Face LFS metadata (x-linked-size / x-linked-etag), checked 2026-10-15 against
+// both the CDN and an installed copy.
+const MODEL_SIZE = 147_964_211;
+const MODEL_SHA256 = "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002";
 // WHY win32 gets a 4th dir: whisper.cpp ships no winget package, so
 // ~/.geekspace/tools is the documented drop-dir for whisper-cli.exe. The three
 // mac dirs stay exactly as-is and in order on every platform.
@@ -23,7 +27,9 @@ const TOOL_PATHS =
   process.platform === "win32"
     ? ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", path.join(os.homedir(), ".geekspace", "tools")]
     : ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"];
-const MAX_TRANSCRIPT_CHARS_FOR_LLM = 24_000;
+// WHY 24k: about 6k tokens, leaving the 16k context room for the prompt and the reply.
+// Longer transcripts are summarised section by section, then merged.
+const SECTION_CHARS = 24_000;
 
 // WHAT: dB floors separating a usable recording from a dead input device.
 // WHY: calibrated against real recordings from this app. A healthy 73-min
@@ -61,57 +67,47 @@ async function findTool(names) {
   return null;
 }
 
+// WHY cache: hashing 148 MB takes a moment and toolStatus runs on every Meetings visit.
+// Keyed by inode, size and mtime, so a replaced or truncated file is hashed again.
+let modelCheck = { key: "", ok: false };
+async function modelVerified() {
+  const file = path.join(MODEL_DIR, MODEL_NAME);
+  let key;
+  try {
+    const st = await fs.lstat(file);
+    key = `${st.ino}:${st.size}:${st.mtimeMs}`;
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+  if (modelCheck.key !== key) {
+    modelCheck = { key, ok: await verifiedFile(file, MODEL_SIZE, MODEL_SHA256) };
+  }
+  return modelCheck.ok;
+}
+
 export async function toolStatus() {
   const ffmpeg = await findTool(["ffmpeg"]);
   const whisper = await findTool(["whisper-cli", "whisper-cpp"]);
-  let model = false;
-  try {
-    const stat = await fs.stat(path.join(MODEL_DIR, MODEL_NAME));
-    model = stat.size > 100_000_000; // a partial download doesn't count
-  } catch {
-    model = false;
-  }
+  const model = await modelVerified();
   return { ffmpeg: Boolean(ffmpeg), whisper: Boolean(whisper), model, modelName: MODEL_NAME };
 }
 
-/** Download the whisper model with progress callbacks (0-100). */
+let modelDownload = null;
+/** Download the whisper model (progress 0-100). Concurrent callers share one download. */
 export async function ensureModel(onProgress) {
-  const status = await toolStatus();
-  if (status.model) return true;
-  await fs.mkdir(MODEL_DIR, { recursive: true });
-  const dest = path.join(MODEL_DIR, MODEL_NAME);
-  const tmp = `${dest}.part`;
-
-  await new Promise((resolve, reject) => {
-    const fetchFrom = (url, redirectsLeft) => {
-      https
-        .get(url, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            if (redirectsLeft <= 0) return reject(new Error("Too many redirects"));
-            res.resume();
-            return fetchFrom(res.headers.location, redirectsLeft - 1);
-          }
-          if (res.statusCode !== 200) {
-            return reject(new Error(`Model download failed (HTTP ${res.statusCode})`));
-          }
-          const total = Number(res.headers["content-length"] ?? 0);
-          let got = 0;
-          const file = createWriteStream(tmp);
-          res.on("data", (chunk) => {
-            got += chunk.length;
-            if (total > 0) onProgress?.(Math.round((got / total) * 100));
-          });
-          res.pipe(file);
-          file.on("finish", () => file.close(resolve));
-          file.on("error", reject);
-          res.on("error", reject);
-        })
-        .on("error", reject);
-    };
-    fetchFrom(MODEL_URL, 5);
-  });
-  await fs.rename(tmp, dest);
-  return true;
+  if (modelDownload) return modelDownload;
+  modelDownload = (async () => {
+    if (await modelVerified()) return true;
+    await fs.mkdir(MODEL_DIR, { recursive: true });
+    await downloadVerifiedFile(MODEL_URL, path.join(MODEL_DIR, MODEL_NAME), MODEL_SIZE, MODEL_SHA256, onProgress);
+    return true;
+  })();
+  try {
+    return await modelDownload;
+  } finally {
+    modelDownload = null;
+  }
 }
 
 export async function checkOllama(url) {
@@ -222,27 +218,71 @@ const TYPE_FOCUS = {
   brainstorm: "Focus on the ideas generated — list them faithfully — plus emerging themes and which directions were chosen or parked.",
 };
 
-function buildPrompt(transcript, meetingType, truncated) {
+/** True when whisper heard nothing but its own non-speech markers ([BLANK_AUDIO], (silence)…). */
+export function isNoSpeech(transcript) {
+  const speech = String(transcript ?? "")
+    .replace(/\[[^\]]*\]|\([^)]*\)/g, "")
+    .replace(/\s+/g, "");
+  return speech.length < 5;
+}
+
+const NOTES_SHAPE = `{"summary": "2-4 short paragraphs separated by \\n\\n", "key_points": ["..."], "decisions": ["..."], "action_items": ["..."]}`;
+
+const NOTES_RULES = `Rules:
+- Be faithful to the source; never invent facts, names, or dates.
+- action_items start with a verb; include the owner and due date when mentioned.
+- decisions are things that were settled; key_points are important discussion topics.
+- Use empty arrays when a category has nothing.`;
+
+function buildPrompt(transcript, meetingType, part) {
   const focus = TYPE_FOCUS[meetingType] ?? TYPE_FOCUS.general;
-  return `You are an expert meeting-notes assistant. Below is a raw meeting transcript${truncated ? " (truncated)" : ""} from an automatic speech recognizer — expect missing punctuation and occasional mis-heard words.
+  const which = part ? ` This is section ${part.index} of ${part.count} of a longer meeting; cover only this section.` : "";
+  return `You are an expert meeting-notes assistant. Below is a raw meeting transcript from an automatic speech recognizer — expect missing punctuation and occasional mis-heard words.${which}
 
 Meeting type: ${meetingType.replace(/_/g, " ")}. ${focus}
 
 Respond with ONLY a JSON object, no other text, in exactly this shape:
-{"summary": "2-4 short paragraphs separated by \\n\\n", "key_points": ["..."], "decisions": ["..."], "action_items": ["..."]}
+${NOTES_SHAPE}
 
-Rules:
-- Be faithful to the transcript; never invent facts, names, or dates.
-- action_items start with a verb; include the owner and due date when mentioned.
-- decisions are things that were settled; key_points are important discussion topics.
-- Use empty arrays when a category has nothing.
+${NOTES_RULES}
 
 TRANSCRIPT:
 ${transcript}`;
 }
 
-async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
-  const base = (ollamaUrl || "http://127.0.0.1:11434").replace(/\/$/, "");
+function buildMergePrompt(partials, meetingType) {
+  const focus = TYPE_FOCUS[meetingType] ?? TYPE_FOCUS.general;
+  const sections = partials.map((p, i) => `Section ${i + 1}: ${JSON.stringify(p)}`).join("\n");
+  return `You are an expert meeting-notes assistant. A long meeting was summarised in ${partials.length} consecutive sections. Merge the partial notes below into one set of notes for the whole meeting: combine duplicates, keep every distinct decision and action item, and write the summary for the meeting as a whole.
+
+Meeting type: ${meetingType.replace(/_/g, " ")}. ${focus}
+
+Respond with ONLY a JSON object, no other text, in exactly this shape:
+${NOTES_SHAPE}
+
+${NOTES_RULES}
+
+PARTIAL NOTES:
+${sections}`;
+}
+
+/** Split on whitespace into sections of at most `max` characters (a longer word stands alone). */
+function splitSections(text, max) {
+  const sections = [];
+  let current = "";
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    if (current && current.length + 1 + word.length > max) {
+      sections.push(current);
+      current = word;
+    } else {
+      current = current ? `${current} ${word}` : word;
+    }
+  }
+  if (current) sections.push(current);
+  return sections;
+}
+
+async function pickModel(base, ollamaModel) {
   const tags = await checkOllama(base);
   if (!tags.ok) throw new Error(tags.error);
   const model =
@@ -252,10 +292,11 @@ async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
         tags.models.find((m) => !m.includes("embed")) ??
         tags.models[0]);
   if (!model) throw new Error("No Ollama models installed");
+  return model;
+}
 
-  const truncated = transcript.length > MAX_TRANSCRIPT_CHARS_FOR_LLM;
-  const text = truncated ? transcript.slice(0, MAX_TRANSCRIPT_CHARS_FOR_LLM) : transcript;
-
+/** One generate call → validated notes. Throws rather than inventing a placeholder. */
+async function generateNotes(base, model, prompt) {
   // WHY /api/generate: /api/chat returns empty content for some local models
   // (seen with gemma on Ollama 0.20).
   const res = await fetch(`${base}/api/generate`, {
@@ -263,7 +304,7 @@ async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
-      prompt: buildPrompt(text, meetingType, truncated),
+      prompt,
       stream: false,
       format: "json",
       options: { temperature: 0.2, num_ctx: 16384 },
@@ -283,17 +324,47 @@ async function summarize(transcript, meetingType, ollamaUrl, ollamaModel) {
     if (start === -1 || end <= start) throw new Error("Model returned unparseable summary");
     parsed = JSON.parse(raw.slice(start, end + 1));
   }
+  if (!parsed || typeof parsed.summary !== "string" || !parsed.summary.trim()) {
+    throw new Error("Model returned no usable summary");
+  }
   const strArray = (x) =>
     Array.isArray(x) ? x.filter((s) => typeof s === "string" && s.trim()).map((s) => s.trim()) : [];
   return {
-    summary: typeof parsed.summary === "string" && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : "No summary produced.",
+    summary: parsed.summary.trim(),
     keyPoints: strArray(parsed.key_points),
     decisions: strArray(parsed.decisions),
     actionItems: strArray(parsed.action_items),
-    modelUsed: model,
   };
+}
+
+/** Transcript → notes. Long transcripts go section by section, then one merge pass. */
+export async function summarizeTranscript(transcript, meetingType, ollamaUrl, ollamaModel, onProgress) {
+  const base = (ollamaUrl || "http://127.0.0.1:11434").replace(/\/$/, "");
+  const model = await pickModel(base, ollamaModel);
+  const type = meetingType || "general";
+  const sections = splitSections(transcript, SECTION_CHARS);
+  if (sections.length <= 1) {
+    return { ...(await generateNotes(base, model, buildPrompt(transcript, type))), modelUsed: model };
+  }
+  const partials = [];
+  for (const [i, section] of sections.entries()) {
+    onProgress?.(Math.round((i / (sections.length + 1)) * 100));
+    partials.push(await generateNotes(base, model, buildPrompt(section, type, { index: i + 1, count: sections.length })));
+  }
+  onProgress?.(Math.round((sections.length / (sections.length + 1)) * 100));
+  return { ...(await generateNotes(base, model, buildMergePrompt(partials, type))), modelUsed: model };
+}
+
+/**
+ * Summarise, but never lose the transcript: a summary failure comes back as
+ * `summaryError` next to the transcript so it can be saved and summarised again later.
+ */
+export async function notesFromTranscript(transcript, meetingType, ollamaUrl, ollamaModel, onProgress) {
+  try {
+    return { transcript, ...(await summarizeTranscript(transcript, meetingType, ollamaUrl, ollamaModel, onProgress)) };
+  } catch (err) {
+    return { transcript, summaryError: String(err?.message ?? err) };
+  }
 }
 
 /**
@@ -357,13 +428,14 @@ export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaMode
     const transcript = await runWhisper(whisper, modelPath, wav, (pct) =>
       onProgress?.({ phase: "transcribing", pct })
     );
-    if (!transcript || transcript.replace(/[\s[\]BLANK_AUDIO()]+/gi, "").length < 5) {
+    if (isNoSpeech(transcript)) {
       throw new Error("No speech detected in the recording");
     }
 
     onProgress?.({ phase: "summarizing", pct: 0 });
-    const summary = await summarize(transcript, meetingType ?? "general", ollamaUrl, ollamaModel);
-    return { transcript, ...summary };
+    return notesFromTranscript(transcript, meetingType ?? "general", ollamaUrl, ollamaModel, (pct) =>
+      onProgress?.({ phase: "summarizing", pct })
+    );
   } finally {
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
