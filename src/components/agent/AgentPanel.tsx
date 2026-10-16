@@ -56,7 +56,9 @@ export function AgentPanel() {
           ? e.text
           : e.type === "tool"
             ? `\n⚙ ${e.text}…\n`
-            : undefined;
+            : e.type === "error"
+              ? `\n⚠️ ${e.text}\n`
+              : undefined;
       if (chunk) {
         setMessages((m) => {
           const last = m[m.length - 1];

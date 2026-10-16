@@ -16,10 +16,10 @@ export interface AgentStatus {
   local?: LocalLaneStatus;
 }
 
+/** Frames both lanes send (electron/agentShared.mjs errorFrame is the error shape). */
 export interface AgentEvent {
-  type: "token" | "tool" | "done" | "error" | string;
-  text?: string;
-  message?: string;
+  type: "token" | "tool" | "error";
+  text: string;
 }
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
