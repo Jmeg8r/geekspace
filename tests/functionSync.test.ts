@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   SyncError,
   hashRequest,
+  invalidateMarker,
   readBundle,
   readMarker,
   stripAdminKey,
@@ -42,7 +43,7 @@ const isEndpoint = (path: string): path is Endpoint =>
 // The last reply in a queue repeats, so a single "inProgress" polls forever.
 function fakeBackend(replies: Replies) {
   const calls: Call[] = [];
-  const fetchImpl = async (url: string, init: { body: string; headers: { authorization?: string } }) => {
+  const fetchImpl = async (url: string, init: { body: string; headers: { authorization?: string }; signal?: AbortSignal }) => {
     const endpoint = url.slice(URL.length);
     // SAFETY: functionSync serialises a plain object; PushBody lists only optional fields
     // these tests then assert on, so a missing field fails the assertion, not the cast.
@@ -97,6 +98,17 @@ describe("bundle", () => {
   it("refuses a bundle whose payload does not match its manifest hash", () => {
     fs.writeFileSync(path.join(bundleDir(), "push-request.json"), JSON.stringify({ ...REQUEST, functions: "other/" }));
     expect(() => readBundle(bundleDir())).toThrow(/hash/i);
+  });
+});
+
+describe("invalidateMarker", () => {
+  it("removes the marker so the next launch redeploys, and tolerates none", async () => {
+    await sync(fakeBackend(happyReplies()).fetchImpl);
+    expect(invalidateMarker(dataDir())).toBe(true);
+    expect(readMarker(dataDir())).toBeNull();
+    expect(invalidateMarker(dataDir())).toBe(false);
+    const again = fakeBackend(happyReplies());
+    expect((await sync(again.fetchImpl)).status).toBe("deployed");
   });
 });
 
@@ -193,6 +205,18 @@ describe("syncFunctions", () => {
     expect(result.status).toBe("failed");
     expect(result.error?.message).toMatch(/timed out/i);
     expect(backend.endpoints()).not.toContain("/api/deploy2/finish_push");
+    expect(readMarker(dataDir())).toBeNull();
+  });
+
+  it("a request that never answers is abandoned at the deadline", async () => {
+    // A stalled backend: never resolves, but honours the abort signal like real fetch.
+    const hang = (_url: string, init: { signal?: AbortSignal }) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    const result = await sync(hang, { deadlineMs: 50 });
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toMatch(/timed out/i);
     expect(readMarker(dataDir())).toBeNull();
   });
 
