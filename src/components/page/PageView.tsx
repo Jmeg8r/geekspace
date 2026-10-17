@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Check, MoreHorizontal, Plus, Star, Trash2, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
@@ -10,7 +10,8 @@ import { Popover } from "../common/Popover";
 import { MenuItem, MenuList } from "../common/Menu";
 import { Chip } from "../common/bits";
 import { EmojiPicker } from "../common/EmojiPicker";
-import { Editor } from "./Editor";
+import { LazyEditor } from "../../lib/lazyEditor";
+import { ViewLoading } from "../common/ViewLoading";
 import { DatabaseContainer } from "../database/DatabaseContainer";
 
 export function PageView({ pageId }: { pageId: Id<"pages"> }) {
@@ -34,12 +35,14 @@ export function PageView({ pageId }: { pageId: Id<"pages"> }) {
       <PageHeader key={page._id} page={page} />
       {page.kind === "doc" ? (
         <div className="mx-auto w-full max-w-3xl flex-1 px-14 pb-40">
-          <Editor
-            key={page._id}
-            documentId={page._id}
-            content={page.content}
-            onSave={(json) => setContent({ pageId: page._id, content: json })}
-          />
+          <Suspense fallback={<ViewLoading />}>
+            <LazyEditor
+              key={page._id}
+              documentId={page._id}
+              content={page.content}
+              onSave={(json) => setContent({ pageId: page._id, content: json })}
+            />
+          </Suspense>
         </div>
       ) : page.databaseId ? (
         <DatabaseContainer key={page.databaseId} databaseId={page.databaseId} />
