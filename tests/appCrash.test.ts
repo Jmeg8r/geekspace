@@ -2,14 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { AppCrash } from "../src/components/common/ViewError";
 
 // WHAT: the crash screen's Reload / Go to Home never throw away meeting audio. Reloading
 // the renderer skips the quit guard in electron/main.mjs, so the screen saves first and
 // only discards when the user says so. See docs/changes/2026-10-17-function-sync/.
 
 const save = vi.fn<() => Promise<void>>();
-vi.mock("../src/lib/meetingPipeline", () => ({ saveRecordingBeforeQuit: () => save() }));
-const { AppCrash } = await import("../src/components/common/ViewError");
 
 declare global {
   // eslint-disable-next-line no-var
@@ -22,7 +21,7 @@ let root: Root;
 const reload = vi.fn();
 
 function render() {
-  act(() => root.render(createElement(AppCrash, { error: new Error("render failed"), reload })));
+  act(() => root.render(createElement(AppCrash, { error: new Error("render failed"), reload, saveAudio: save })));
 }
 const button = (label: string) =>
   [...container.querySelectorAll("button")].find((b) => b.textContent === label);
