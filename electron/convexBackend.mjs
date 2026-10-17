@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BACKEND_VERSION, backendCachePath } from "./backendVersion.mjs";
 import { seedDataDirectory } from "./dataDirectory.mjs";
+import { syncFunctions } from "./functionSync.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -51,6 +52,14 @@ function binaryPath() {
   return backendCachePath();
 }
 
+function functionsBundleDir() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "convex-functions");
+  }
+  // Dev: whatever the last `npm run prebake` built (absent until then; sync is skipped).
+  return path.join(__dirname, "..", "build", "convex-functions");
+}
+
 function seedDir() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, "convex-seed");
@@ -65,6 +74,7 @@ let child = null; // the spawned backend process, or null if we attached/it exit
 let managed = false; // true only when WE started the backend (so we own stopping it)
 let exitInfo = null; // {code, signal} once a managed backend process has exited
 let logStream = null;
+let functionSync = null; // syncFunctions' result for this launch, or null when attached
 
 // --- health --------------------------------------------------------------
 
@@ -199,6 +209,16 @@ export async function startOrAttach() {
 
   await waitHealthy();
   log("Backend healthy on :3210.");
+
+  // Only for a backend we started: when attached, `convex dev` owns the functions.
+  functionSync = await syncFunctions({
+    dataDir: DATA_DIR,
+    bundleDir: functionsBundleDir(),
+    url: CONVEX_URL,
+    adminKey: cfg.adminKey,
+    log,
+    requireBundle: app.isPackaged,
+  });
 }
 
 /** Stop the backend if (and only if) we started it. Safe to call repeatedly. */
@@ -253,4 +273,13 @@ export function getUrl() {
 
 export function isManaged() {
   return managed;
+}
+
+/** This launch's function sync outcome (see functionSync.mjs), or null when attached. */
+export function getFunctionSyncResult() {
+  return functionSync;
+}
+
+export function getLogPath() {
+  return logPath();
 }

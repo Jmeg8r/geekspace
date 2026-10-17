@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Check, MoreHorizontal, Plus, Star, Trash2, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
-import { useUI } from "../../state/ui";
+import { fallbackNav, useUI } from "../../state/ui";
 import { cn, debounce } from "../../lib/utils";
 import { hashColor } from "../../lib/optionColors";
 import { Popover } from "../common/Popover";
@@ -17,6 +17,16 @@ import { DatabaseContainer } from "../database/DatabaseContainer";
 export function PageView({ pageId }: { pageId: Id<"pages"> }) {
   const page = useQuery(api.pages.get, { pageId });
   const setContent = useMutation(api.pages.setContent);
+  const navRestored = useUI((s) => s.navRestored);
+  const navigate = useUI((s) => s.navigate);
+  const gone = page === null || page?.trashed === true;
+  // A page restored from storage that no longer exists (or came from another deployment)
+  // opens Home instead of a dead end; one opened just now keeps the message below.
+  const target = gone ? fallbackNav({ kind: "page", pageId }, navRestored, "missing") : null;
+  const leaving = target !== null && target.kind !== "page";
+  useEffect(() => {
+    if (leaving && target) navigate(target);
+  }, [leaving, target, navigate]);
 
   if (page === undefined) {
     return <div className="flex h-full items-center justify-center text-ink-3">Loading…</div>;

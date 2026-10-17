@@ -20,6 +20,8 @@ import { HomeView } from "./components/home/HomeView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
 import { RowPeek } from "./components/database/RowPeek";
 import { ViewLoading } from "./components/common/ViewLoading";
+import { ErrorBoundary } from "./components/common/ErrorBoundary";
+import { ViewError } from "./components/common/ViewError";
 import { preloadEditor } from "./lib/lazyEditor";
 
 // WHY lazy: only Home and the sidebar are needed to draw the first screen. Every other
@@ -43,6 +45,7 @@ const IDLE_PREFETCH_TIMEOUT_MS = 2000;
 export default function App() {
   const settings = useQuery(api.settings.get);
   const nav = useUI((s) => s.nav);
+  const viewKey = nav.kind === "page" ? `page:${nav.pageId}` : nav.kind;
   const navigate = useUI((s) => s.navigate);
   const commandOpen = useUI((s) => s.commandOpen);
   const setCommandOpen = useUI((s) => s.setCommandOpen);
@@ -193,17 +196,24 @@ export default function App() {
         <div className="flex min-h-0 flex-1">
           <Sidebar />
           <main className="min-w-0 flex-1">
-            {nav.kind === "home" && <HomeView />}
-            <Suspense fallback={<ViewLoading />}>
-              {nav.kind === "calendar" && <CalendarView />}
-              {nav.kind === "meetings" && <MeetingsView />}
-              {nav.kind === "knowledge" && <KnowledgePage />}
-              {nav.kind === "reader" && <ReaderPage />}
-              {nav.kind === "docs" && <DocsPage />}
-              {nav.kind === "page" && (
-                <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
-              )}
-            </Suspense>
+            {/* Keyed by the view, so navigating anywhere else clears a caught error. */}
+            <ErrorBoundary
+              key={viewKey}
+              onError={(error) => console.error(`View ${viewKey} failed to render`, error)}
+              fallback={(error, reset) => <ViewError nav={nav} error={error} reset={reset} />}
+            >
+              {nav.kind === "home" && <HomeView />}
+              <Suspense fallback={<ViewLoading />}>
+                {nav.kind === "calendar" && <CalendarView />}
+                {nav.kind === "meetings" && <MeetingsView />}
+                {nav.kind === "knowledge" && <KnowledgePage />}
+                {nav.kind === "reader" && <ReaderPage />}
+                {nav.kind === "docs" && <DocsPage />}
+                {nav.kind === "page" && (
+                  <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
+                )}
+              </Suspense>
+            </ErrorBoundary>
           </main>
           <Suspense fallback={null}>
             {/* Mounted from first open on, so its code loads on first use. */}
