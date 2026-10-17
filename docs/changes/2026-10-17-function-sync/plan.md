@@ -163,3 +163,34 @@ CLI, no repo at runtime. Prebake itself pushes through the same module, so every
   at build time proves it against the real pinned backend on every package.
 - **Renderer-only fix** (boundary + nav fallback without sync): stops the blank window
   but leaves every update running stale functions.
+
+## Deviations
+
+- **Spike result (step 1), 2026-10-17:** against a throwaway backend on :3290 (backend
+  `precompiled-2026-10-10-72ce13c`, convex 1.46.0), `convex deploy --push-all-modules
+  --write-push-request` wrote a 648 KB payload (39 modules, `adminKey` included) and pushed
+  nothing: `pages:list` answered "Could not find public function" afterwards. The CLI still
+  prints "Deployed Convex functions" in this mode, so prebake checks for the file, not the
+  message. Replaying it as plain uncompressed JSON (no brotli) through `start_push` →
+  `wait_for_schema` (`complete` on first poll) → `finish_push` took 541 ms, and
+  `pages:list` then succeeded. Plan held; no re-plan.
+- **Error class renamed `SyncError`** (plan: `FunctionSyncError`). A security hook treats
+  the text `new Function…` as `eval` and blocked the write. Same behavior.
+- **Added `skipped` status and `requireBundle`.** In dev, a missing `build/convex-functions`
+  is skipped with a log line; in the packaged app it's `failed` (an incomplete build must
+  not pass silently). Tested both ways.
+- **Added a no-admin-key guard.** A `config.json` without `adminKey` fails with a clear
+  message instead of a 401 from the backend. Tested.
+- **Dropped the "atomic marker write" test.** Tested the invariant that matters instead: a
+  failed push leaves an existing marker untouched, and no failure path writes one. The
+  write itself is temp file + rename.
+- **`readBundle` checks for a leaked admin key before checking the hash**, so a leaked key is
+  reported as that, not as a hash mismatch.
+- **Live probe runs on the real data dir after a full backup.** The packaged app's data dir
+  path is fixed (`~/Library/Application Support/Geekspace/convex`), so "a copy first" became
+  "back up first, then run the real upgrade path".
+- **Lint baseline:** oxlint warnings 208 on `origin/main` and 208 on this branch (no new
+  warnings; the existing `as` casts in `App.tsx`/`PageView.tsx` were moved, not added).
+- **`snyk test --dev`:** 11 issues / 23 paths, none through `jsdom`; all rooted at
+  existing dependencies (eslint, electron, electron-builder, MCP SDK, zod,
+  eslint-plugin-react-hooks), tracked separately.
