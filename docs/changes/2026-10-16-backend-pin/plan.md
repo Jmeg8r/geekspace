@@ -84,3 +84,40 @@ Assumes option A (pin) from the intent.
 - **Re-pin both strings by hand.** Fixes today, recreates the drift.
 - **Use `convex dev --local-backend-version <v>` to fetch.** A hidden, undocumented flag
   that also starts a dev deployment. Too heavy, and too fragile to build on.
+
+## Proof results (2026-10-17, Mac Studio, arm64)
+
+- `tests/backendVersion.test.ts`: red at `7cee21c` (module missing), then 10/10 green.
+- `npm run verify`: green after merging `origin/main` (219 tests). `snyk test`: 3 open
+  issues (2 high, 1 medium), none in dependencies this branch touches. Tracked in a
+  separate session.
+- `npm run fetch-backend`, run with `HOME` pointed at an empty scratch dir:
+  - empty cache → downloads and verifies;
+  - rerun → no-op;
+  - deliberately corrupted binary → prebake refuses it, and fetch-backend replaces it.
+- Prebake with the binary absent prints the `npm run fetch-backend` hint and exits 1.
+- `npm run package`: exit 0. Prebake seeded 6 pages on the pinned backend; the app is
+  signed, and the `.dmg` and `.zip` are in `release/`.
+- The packaged app launched against James's real data dir (backed up first to
+  `convex.backup-2026-10-17-pre-backend-pin`). It started its bundled backend and
+  migrated 125 → 133 (`Migration complete`). It serves the same 30 pages, with the
+  same content digest as the copy test, and the renderer connected (`/api/1.46.0/sync`).
+
+## Deviations
+
+- **Migration 130 retried once on live data.** An OCC (optimistic concurrency) conflict
+  with the startup index backfill made the worker sleep 48 s, then finish. This is
+  Convex's own retry, and the app was healthy and serving data throughout. The copy
+  test showed the same step pausing about 7 s.
+- **The bundled binary's hash differs from the pin.** electron-builder re-signs it with
+  the Developer ID. Prebake verifies the hash *before* signing, which is the point the
+  pin protects.
+- **Prebake's mismatch hint** says "run `npm run fetch-backend` to replace it", not
+  "delete it": fetch-backend overwrites a bad file itself.
+- **`electron/verifiedDownload.mjs` was reused as-is.** Its error strings say "Model
+  download…", so a backend download failure reads oddly but still fails loudly.
+- **Port 3210 was freed twice**, with James's OK each time. The `geekspace-reassess`
+  `convex dev` held it, and it was restarted in between.
+- **`convex/_generated/*` is stale on `main`.** Prebake's `convex deploy` regenerates it
+  (+37 lines for existing `convex/lib` modules). I reverted that here to keep this PR
+  scoped; it needs its own change.
