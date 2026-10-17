@@ -22,6 +22,7 @@
     "package": "npm run build && npm run prebake && electron-builder --mac",
     "package:win": "npm run build && npm run prebake && electron-builder --win",
     "prebake": "node scripts/prebake-seed.mjs",
+    "fetch-backend": "node scripts/fetch-backend.mjs",
     "migrate:local-data": "node scripts/migrate-local-data.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
     "verify": "oxlint && tsc -b --noEmit && vitest run"

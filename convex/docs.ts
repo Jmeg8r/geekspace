@@ -22,6 +22,16 @@ export const list = query({
   },
 });
 
+/** One doc, read live by the viewer; null once it is deleted or trashed. */
+export const get = query({
+  args: { docId: v.id("docs") },
+  handler: async (ctx, args) => {
+    const doc = await ctx.db.get(args.docId);
+    if (!doc || doc.trashed) return null;
+    return { ...doc, url: await ctx.storage.getUrl(doc.storageId) };
+  },
+});
+
 export const add = mutation({
   args: {
     name: v.string(),

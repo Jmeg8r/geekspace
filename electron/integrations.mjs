@@ -83,10 +83,17 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
   const endWindow = new Date(${Number(endMs)});
   const wanted = ${JSON.stringify(Array.isArray(names) ? names : [])};
   const out = [];
+  // WHY: the sync deletes mirrors that weren't returned. Only a calendar read without a
+  // single error may be judged that way, so report which ones that was.
+  const complete = [];
+  // Every calendar Calendar.app lists, so the sync can drop mirrors of deleted calendars;
+  // left null if any name can't be read, since then absence proves nothing.
+  let present = [];
   const cals = Calendar.calendars();
   for (const cal of cals) {
     let name = "";
-    try { name = cal.name(); } catch (e) { continue; }
+    try { name = cal.name(); } catch (e) { present = null; continue; }
+    if (present) present.push(name);
     if (wanted.length > 0 && wanted.indexOf(name) === -1) continue;
     let events = [];
     try {
@@ -97,6 +104,7 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
         ],
       })();
     } catch (e) { continue; }
+    let clean = true;
     for (const ev of events) {
       try {
         const sd = ev.startDate();
@@ -112,13 +120,14 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
           allDay: Boolean(ev.alldayEvent()),
           calendarName: name,
         });
-      } catch (e) {}
+      } catch (e) { clean = false; }
     }
+    if (clean) complete.push(name);
   }
-  return JSON.stringify(out);
+  return JSON.stringify({ events: out, complete: complete, present: present });
 })()`;
   const out = await runJxa(script);
-  return JSON.parse(out || "[]");
+  return JSON.parse(out || '{"events":[],"complete":[],"present":null}');
 }
 
 export async function fetchInbox(limit = 12) {
