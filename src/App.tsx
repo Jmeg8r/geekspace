@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "./../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -17,18 +17,28 @@ import { recorder } from "./lib/recorder";
 import { pendingAudio, saveRecordingBeforeQuit } from "./lib/meetingPipeline";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { HomeView } from "./components/home/HomeView";
-import { CalendarView } from "./components/calendar/CalendarView";
-import { MeetingsView } from "./components/meetings/MeetingsView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
-import { KnowledgePage } from "./components/search/KnowledgePage";
-import { ReaderPage } from "./components/reader/ReaderPage";
-import { AgentPanel } from "./components/agent/AgentPanel";
-import { TemplatesModal } from "./components/templates/TemplatesModal";
-import { DocsPage } from "./components/docs/DocsPage";
-import { PageView } from "./components/page/PageView";
 import { RowPeek } from "./components/database/RowPeek";
-import { CommandPalette } from "./components/search/CommandPalette";
-import { SettingsModal } from "./components/settings/SettingsModal";
+import { ViewLoading } from "./components/common/ViewLoading";
+import { preloadEditor } from "./lib/lazyEditor";
+
+// WHY lazy: only Home and the sidebar are needed to draw the first screen. Every other
+// view loads on first use, keeping the entry chunk small (bundleBoundaries.test.ts keeps
+// these out of static imports). See docs/changes/2026-10-17-bundle-split/.
+const CalendarView = lazy(() => import("./components/calendar/CalendarView").then((m) => ({ default: m.CalendarView })));
+const MeetingsView = lazy(() => import("./components/meetings/MeetingsView").then((m) => ({ default: m.MeetingsView })));
+const KnowledgePage = lazy(() => import("./components/search/KnowledgePage").then((m) => ({ default: m.KnowledgePage })));
+const ReaderPage = lazy(() => import("./components/reader/ReaderPage").then((m) => ({ default: m.ReaderPage })));
+const AgentPanel = lazy(() => import("./components/agent/AgentPanel").then((m) => ({ default: m.AgentPanel })));
+const TemplatesModal = lazy(() => import("./components/templates/TemplatesModal").then((m) => ({ default: m.TemplatesModal })));
+const DocsPage = lazy(() => import("./components/docs/DocsPage").then((m) => ({ default: m.DocsPage })));
+const PageView = lazy(() => import("./components/page/PageView").then((m) => ({ default: m.PageView })));
+const CommandPalette = lazy(() => import("./components/search/CommandPalette").then((m) => ({ default: m.CommandPalette })));
+const SettingsModal = lazy(() => import("./components/settings/SettingsModal").then((m) => ({ default: m.SettingsModal })));
+
+// Editor prefetch waits for the browser to be idle after first paint (with a fallback
+// where requestIdleCallback is missing), so it never competes with drawing Home.
+const IDLE_PREFETCH_TIMEOUT_MS = 2000;
 
 export default function App() {
   const settings = useQuery(api.settings.get);
@@ -42,6 +52,17 @@ export default function App() {
   const createPage = useMutation(api.pages.create);
   const reflow = useMutation(api.scheduling.reflowNow);
   const setMeetingStatus = useMutation(api.meetings.setStatus);
+  const agentPanelOpen = useUI((s) => s.agentPanelOpen);
+
+  useEffect(() => {
+    const idle = window.requestIdleCallback;
+    if (idle) {
+      const handle = idle(() => preloadEditor(), { timeout: IDLE_PREFETCH_TIMEOUT_MS });
+      return () => window.cancelIdleCallback(handle);
+    }
+    const timer = setTimeout(preloadEditor, IDLE_PREFETCH_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, []);
   const reconcileMeetings = useMutation(api.meetings.reconcileInterrupted);
 
   // Pipe meeting-pipeline progress (whisper/model/LLM) into Convex so every
@@ -169,21 +190,28 @@ export default function App() {
           <Sidebar />
           <main className="min-w-0 flex-1">
             {nav.kind === "home" && <HomeView />}
-            {nav.kind === "calendar" && <CalendarView />}
-            {nav.kind === "meetings" && <MeetingsView />}
-            {nav.kind === "knowledge" && <KnowledgePage />}
-            {nav.kind === "reader" && <ReaderPage />}
-            {nav.kind === "docs" && <DocsPage />}
-            {nav.kind === "page" && (
-              <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
-            )}
+            <Suspense fallback={<ViewLoading />}>
+              {nav.kind === "calendar" && <CalendarView />}
+              {nav.kind === "meetings" && <MeetingsView />}
+              {nav.kind === "knowledge" && <KnowledgePage />}
+              {nav.kind === "reader" && <ReaderPage />}
+              {nav.kind === "docs" && <DocsPage />}
+              {nav.kind === "page" && (
+                <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
+              )}
+            </Suspense>
           </main>
-          <AgentPanel />
+          <Suspense fallback={null}>
+            {/* Mounted only while open, so its code loads on first use. */}
+            {agentPanelOpen && <AgentPanel />}
+          </Suspense>
           <RowPeek />
           <RecorderWidget />
-          {commandOpen && <CommandPalette />}
-          {settingsOpen && <SettingsModal />}
-          {templatesOpen && <TemplatesModal onClose={() => setTemplatesOpen(false)} />}
+          <Suspense fallback={null}>
+            {commandOpen && <CommandPalette />}
+            {settingsOpen && <SettingsModal />}
+            {templatesOpen && <TemplatesModal onClose={() => setTemplatesOpen(false)} />}
+          </Suspense>
         </div>
       </div>
     </ThemeProvider>

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { LayoutTemplate, Trash2 } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
@@ -10,7 +10,8 @@ import { debounce, tzOffsetMin } from "../../lib/utils";
 import { Modal } from "../common/Modal";
 import { PROP_ICONS } from "../common/bits";
 import { PropertyValueCell } from "./cells";
-import { Editor } from "../page/Editor";
+import { LazyEditor } from "../../lib/lazyEditor";
+import { ViewLoading } from "../common/ViewLoading";
 
 // WHAT: Notion-style "open row as page" — properties panel + full block editor.
 export function RowPeek() {
@@ -87,12 +88,14 @@ function RowPeekInner({ rowId, onClose }: { rowId: Id<"rows">; onClose: () => vo
         </div>
 
         <div className="pt-4">
-          <Editor
-            key={row._id}
-            documentId={row._id}
-            content={row.content}
-            onSave={(json) => setContent({ rowId, content: json })}
-          />
+          <Suspense fallback={<ViewLoading />}>
+            <LazyEditor
+              key={row._id}
+              documentId={row._id}
+              content={row.content}
+              onSave={(json) => setContent({ rowId, content: json })}
+            />
+          </Suspense>
         </div>
       </div>
     </Modal>
