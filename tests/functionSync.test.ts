@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  FunctionSyncError,
+  SyncError,
   hashRequest,
   readBundle,
   readMarker,
@@ -28,27 +28,35 @@ const REQUEST = {
 };
 const SCHEMA_CHANGE = { allocatedComponentIds: {}, schemaIds: {}, indexDiffs: {} };
 
-type Reply = { status?: number; body: unknown };
-type Call = { endpoint: string; body: Record<string, unknown>; authorization: string | null };
+type Endpoint = "/api/deploy2/start_push" | "/api/deploy2/wait_for_schema" | "/api/deploy2/finish_push";
+type Reply = { status?: number; body: object };
+type Replies = { [E in Endpoint]: Reply[] };
+// The fields these tests read from what functionSync sends.
+type PushBody = { adminKey?: string; appDefinition?: object; schemaChange?: object; startPush?: object };
+type Call = { endpoint: string; body: PushBody; authorization: string | null };
+
+const isEndpoint = (path: string): path is Endpoint =>
+  path === "/api/deploy2/start_push" || path === "/api/deploy2/wait_for_schema" || path === "/api/deploy2/finish_push";
 
 // A fake backend: answers each endpoint from a queue of replies and records every call.
-function fakeBackend(replies: Record<string, Reply[]>) {
+// The last reply in a queue repeats, so a single "inProgress" polls forever.
+function fakeBackend(replies: Replies) {
   const calls: Call[] = [];
-  const fetchImpl = async (url: string, init: RequestInit) => {
+  const fetchImpl = async (url: string, init: { body: string; headers: { authorization?: string } }) => {
     const endpoint = url.slice(URL.length);
-    // SAFETY: functionSync always sends a JSON string body and a plain headers object.
-    const body = JSON.parse(init.body as string) as Record<string, unknown>;
-    const headers = init.headers as Record<string, string>;
-    calls.push({ endpoint, body, authorization: headers.authorization ?? null });
+    // SAFETY: functionSync serialises a plain object; PushBody lists only optional fields
+    // these tests then assert on, so a missing field fails the assertion, not the cast.
+    const body = JSON.parse(init.body) as PushBody;
+    calls.push({ endpoint, body, authorization: init.headers.authorization ?? null });
+    if (!isEndpoint(endpoint)) return new Response("not found", { status: 404 });
     const queue = replies[endpoint];
-    const reply = queue && queue.length > 1 ? queue.shift()! : queue?.[0];
-    if (!reply) return new Response("not found", { status: 404 });
+    const reply = queue.length > 1 ? queue.shift()! : queue[0];
     return new Response(JSON.stringify(reply.body), { status: reply.status ?? 200 });
   };
   return { calls, fetchImpl, endpoints: () => calls.map((c) => c.endpoint) };
 }
 
-const happyReplies = (): Record<string, Reply[]> => ({
+const happyReplies = (): Replies => ({
   "/api/deploy2/start_push": [{ body: { schemaChange: SCHEMA_CHANGE, app: {} } }],
   "/api/deploy2/wait_for_schema": [
     { body: { type: "inProgress", components: {} } },
@@ -144,7 +152,7 @@ describe("syncFunctions", () => {
     });
     const result = await sync(backend.fetchImpl);
     expect(result.status).toBe("failed");
-    expect(result.error).toBeInstanceOf(FunctionSyncError);
+    expect(result.error).toBeInstanceOf(SyncError);
     expect(result.error?.message).toMatch(/pages/);
     expect(result.error?.message).toMatch(/does not match schema/);
     expect(backend.endpoints()).not.toContain("/api/deploy2/finish_push");
@@ -203,6 +211,14 @@ describe("syncFunctions", () => {
     expect(result.status).toBe("skipped");
     expect(backend.calls).toEqual([]);
     expect(logs.join("\n")).toMatch(/no bundled functions/i);
+  });
+
+  it("a data dir without an admin key fails with a clear message instead of a 401", async () => {
+    const backend = fakeBackend(happyReplies());
+    const result = await sync(backend.fetchImpl, { adminKey: undefined });
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toMatch(/admin key/i);
+    expect(backend.calls).toEqual([]);
   });
 
   it("a packaged app missing its bundle fails loudly", async () => {

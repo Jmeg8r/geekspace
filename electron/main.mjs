@@ -40,6 +40,8 @@ import { oneTurnAtATime } from "./agentShared.mjs";
 import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import {
+  getFunctionSyncResult,
+  getLogPath as convexLogPath,
   getUrl as convexUrl,
   isManaged as convexManaged,
   killBackendSync,
@@ -448,6 +450,25 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  // An update whose functions couldn't be deployed still opens, on the previous
+  // functions (nothing is half-applied), but the user is told rather than left with
+  // features that quietly misbehave. Retried on every launch until it succeeds.
+  const sync = getFunctionSyncResult();
+  if (sync?.status === "failed") {
+    const choice = await dialog.showMessageBox({
+      type: "warning",
+      title: "Geekspace couldn't update its database",
+      message: "Geekspace couldn't update its database functions.",
+      detail:
+        "Your data is unchanged and the previous functions are still running, so some features may not work.\n\n" +
+        `${sync.error?.message ?? "Unknown error"}\n\nThe backend log has more detail: ${convexLogPath()}`,
+      buttons: ["Continue", "Open Log Folder"],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (choice.response === 1) await shell.openPath(path.dirname(convexLogPath()));
+  }
+
   // Authoritative CONVEX_URL for the ARCHITECT MCP subprocesses (the renderer
   // uses the build-time VITE_CONVEX_URL, which already points here).
   process.env.CONVEX_URL = convexUrl();

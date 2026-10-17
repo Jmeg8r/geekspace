@@ -4,6 +4,8 @@
 // functions and rebuild, your live data dir still runs the old code. Run this
 // once (with Geekspace open) to deploy the new functions onto it. The admin key
 // is read from the local config at runtime — never committed.
+// A packaged build now does this itself at startup from its bundled payload
+// (electron/functionSync.mjs); this stays for pushing unpackaged dev changes.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";

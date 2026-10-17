@@ -1,5 +1,7 @@
 // WHAT: Build-time step that produces build/convex-seed/ — a fresh Convex data
-// dir with the app's functions deployed and the starter template seeded.
+// dir with the app's functions deployed and the starter template seeded — and
+// build/convex-functions/, the deploy payload the packaged app replays into
+// existing data dirs after an update (electron/functionSync.mjs).
 // WHY: The packaged app ships this as the "factory" data so a first launch (or a
 // reset) has a working, functions-loaded backend WITHOUT running the convex CLI
 // or esbuild at runtime — esbuild's native subprocess can't read inside the asar
@@ -12,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { backendAsset, backendCachePath, missingBinaryMessage } from "../electron/backendVersion.mjs";
 import { verifiedFile } from "../electron/verifiedDownload.mjs";
+import { MARKER_FILE, stripAdminKey, syncFunctions, writeBundle } from "../electron/functionSync.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -27,6 +30,7 @@ const SITE_PORT = 3211;
 const URL = `http://127.0.0.1:${CLOUD_PORT}`;
 const SRC_CONFIG = path.join(ROOT, ".convex", "local", "default", "config.json");
 const OUT = path.join(ROOT, "build", "convex-seed");
+const OUT_FUNCTIONS = path.join(ROOT, "build", "convex-functions");
 // WHY: `.bin/convex` is a shim (a bash script on POSIX; a `.cmd`/`.ps1` pair on
 // Windows) — unlaunchable directly and unsafe to invoke via a shell (see the
 // spawnSync call below). The package's real JS entry works on both platforms.
@@ -137,31 +141,65 @@ async function main() {
     console.log("• starting throwaway backend…");
     await waitHealthy(child);
 
-    console.log("• deploying functions (convex deploy)…");
+    console.log("• building the deploy payload (convex deploy --write-push-request)…");
+    // WHY write the payload instead of letting the CLI push: the packaged app replays this
+    // exact payload into existing data dirs at startup (electron/functionSync.mjs), where
+    // it can't run the CLI or esbuild. Pushing it here through the same module proves the
+    // runtime path against the pinned backend on every build. Both flags are hidden in
+    // convex 1.46.0's CLI; if a bump removes them, the file check below fails the build.
     // WHY process.execPath + CONVEX_CLI, not the `.bin/convex` shim: on
     // Windows that shim is a bash script (unlaunchable without a shell), and
     // its `.cmd` sibling throws EINVAL when spawned without `shell: true` on
     // patched Node (CVE-2024-27980). process.execPath is node here (this
     // script itself runs under node), so running the real entry point works
     // identically on both platforms.
+    const pushRequestBase = path.join(WORK, "push-request");
     const dep = spawnSync(
       process.execPath,
-      [CONVEX_CLI, "deploy", "--env-file", SHENV, "--typecheck", "disable"],
+      [
+        CONVEX_CLI, "deploy", "--env-file", SHENV, "--typecheck", "disable",
+        "--push-all-modules", "--write-push-request", pushRequestBase,
+      ],
       { cwd: ROOT, stdio: ["ignore", "inherit", "inherit"], timeout: 180000, killSignal: "SIGKILL" }
     );
-    if (dep.status !== 0) {
-      // F6: on Windows, the convex CLI can finish `deploy`'s actual work
-      // successfully and THEN crash during process teardown — "Assertion
-      // failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c,
-      // line 76" — exiting nonzero regardless. Exit status alone is therefore
-      // not a reliable failure signal here: don't die yet, fall through to
-      // the seed + pages:list probe below, which IS authoritative. If the
-      // deploy genuinely failed, the probe (or the seed mutation itself) will
-      // also fail, and both signals get reported together below.
-      console.warn(
-        `⚠ prebake: convex deploy exited with status ${dep.status}${dep.signal ? " (" + dep.signal + ")" : ""}. ` +
-          "This matches a known Windows libuv-teardown crash that happens AFTER a successful deploy — verifying via seed + probe before deciding."
+    // F6: on Windows, the convex CLI can finish its actual work successfully and THEN
+    // crash during process teardown ("Assertion failed: !(handle->flags &
+    // UV_HANDLE_CLOSING), file src\win\async.c, line 76"), exiting nonzero regardless.
+    // So the exit status is not the signal: the payload file existing and parsing is.
+    // (The CLI also prints "Deployed" in this mode even though it pushes nothing.)
+    let pushRequest;
+    try {
+      pushRequest = JSON.parse(fs.readFileSync(`${pushRequestBase}.json`, "utf8"));
+    } catch (err) {
+      throw new Error(
+        `convex deploy did not write a readable push request (exit status ${dep.status}${dep.signal ? ", " + dep.signal : ""}): ${err?.message ?? err}`
       );
+    }
+    if (dep.status !== 0) {
+      console.warn(
+        `⚠ prebake: convex deploy exited with status ${dep.status} after writing the payload; ` +
+          "matches the known Windows libuv-teardown crash, continuing."
+      );
+    }
+
+    const convexVersion = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "node_modules", "convex", "package.json"), "utf8")
+    ).version;
+    fs.rmSync(OUT_FUNCTIONS, { recursive: true, force: true });
+    const hash = writeBundle(OUT_FUNCTIONS, stripAdminKey(pushRequest), { convexVersion });
+    console.log(`• functions bundle → ${path.relative(ROOT, OUT_FUNCTIONS)} (${hash.slice(0, 12)}, convex ${convexVersion})`);
+
+    console.log("• deploying the bundle through electron/functionSync.mjs…");
+    const synced = await syncFunctions({
+      dataDir: WORK,
+      bundleDir: OUT_FUNCTIONS,
+      url: URL,
+      adminKey: cfg.adminKey,
+      log: (line) => console.log(`  ${line}`),
+      requireBundle: true,
+    });
+    if (synced.status !== "deployed") {
+      throw new Error(`function sync did not deploy (status ${synced.status}): ${synced.error?.message ?? "no error"}`);
     }
 
     console.log("• seeding starter template…");
@@ -171,19 +209,13 @@ async function main() {
       format: "json",
     });
     if (res.status !== "success") {
-      throw new Error(
-        `seed failed: ${JSON.stringify(res)}` +
-          (dep.status !== 0 ? ` (convex deploy also exited with status ${dep.status})` : "")
-      );
+      throw new Error(`seed failed: ${JSON.stringify(res)}`);
     }
 
     const probe = await postJson("/api/query", { path: "pages:list", args: {}, format: "json" });
     const count = Array.isArray(probe.value) ? probe.value.length : 0;
     if (count < 1) {
-      throw new Error(
-        "seed produced no pages" +
-          (dep.status !== 0 ? ` (convex deploy also exited with status ${dep.status})` : "")
-      );
+      throw new Error("seed produced no pages");
     }
     console.log(`• seeded ${count} top-level pages`);
   } finally {
@@ -206,6 +238,9 @@ async function main() {
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
   fs.copyFileSync(path.join(WORK, "config.json"), path.join(OUT, "config.json"));
+  // The marker syncFunctions wrote above: a fresh install starts out "current" and
+  // doesn't redeploy what the seed already has.
+  fs.copyFileSync(path.join(WORK, MARKER_FILE), path.join(OUT, MARKER_FILE));
   fs.copyFileSync(
     path.join(WORK, "convex_local_backend.sqlite3"),
     path.join(OUT, "convex_local_backend.sqlite3")
@@ -272,7 +307,7 @@ async function main() {
   }
   console.log(`• mcp server → ${path.relative(ROOT, OUT_MCP)}`);
 
-  console.log("✔ prebake complete → build/{convex-seed, convex-local-backend, geekspace-mcp.mjs}");
+  console.log("✔ prebake complete → build/{convex-seed, convex-functions, convex-local-backend, geekspace-mcp.mjs}");
 }
 
 main().catch((err) => die(err?.stack ?? String(err)));

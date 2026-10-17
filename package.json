@@ -86,6 +86,7 @@
     ],
     "extraResources": [
       { "from": "build/convex-seed", "to": "convex-seed" },
+      { "from": "build/convex-functions", "to": "convex-functions" },
       { "from": "build/geekspace-mcp.mjs", "to": "geekspace-mcp.mjs" }
     ],
     "afterPack": "scripts/afterPack.cjs",
