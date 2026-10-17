@@ -9,16 +9,15 @@
 import { app } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { BACKEND_VERSION, backendCachePath } from "./backendVersion.mjs";
 import { seedDataDirectory } from "./dataDirectory.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// WHY: Windows executables carry the .exe suffix; every binary path below
-// appends this so we mirror exactly what the convex CLI itself downloads and
-// names on each platform.
+// WHY: Windows executables carry the .exe suffix; the bundled resource keeps
+// the name prebake copied it under (see package.json extraResources).
 const EXE = process.platform === "win32" ? ".exe" : "";
 
 // WHY constants, not config: the renderer's Convex URL is compiled into dist/ at
@@ -29,15 +28,6 @@ const CLOUD_PORT = 3210;
 const SITE_PORT = 3211;
 const CONVEX_URL = `http://127.0.0.1:${CLOUD_PORT}`;
 const HEALTH_URL = `${CONVEX_URL}/version`;
-
-// The precompiled backend version we bundle. The on-disk SQLite schema is tied
-// to the binary version, so a future bump must re-bake the seed (see the guard
-// in startOrAttach). Keep in sync with the binary shipped via extraResources.
-// WHY bumped to 2026-07-21: convex 1.41.0 (pinned by package-lock, the CLI that
-// actually populates the dev-cache binaryPath() reads from) downloads this
-// version, not the older one this used to pin. The seed is re-baked at package
-// time (see scripts/prebake-seed.mjs), so this bump is already satisfied.
-const BUNDLED_BACKEND_VERSION = "precompiled-2026-07-21-82d5e9f";
 
 // --- paths (dev vs packaged) ---------------------------------------------
 
@@ -57,27 +47,8 @@ function binaryPath() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, "convex-local-backend" + EXE);
   }
-  // Dev: the same binary the convex CLI downloaded into its cache.
-  // WHY the platform branch: verified on-machine that the CLI caches under
-  // %LOCALAPPDATA% on Windows, vs. the XDG-ish ~/.cache everywhere else.
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local");
-    return path.join(
-      localAppData,
-      "convex",
-      "binaries",
-      BUNDLED_BACKEND_VERSION,
-      "convex-local-backend" + EXE
-    );
-  }
-  return path.join(
-    os.homedir(),
-    ".cache",
-    "convex",
-    "binaries",
-    BUNDLED_BACKEND_VERSION,
-    "convex-local-backend"
-  );
+  // Dev: the pinned binary in the convex CLI cache (`npm run fetch-backend`).
+  return backendCachePath();
 }
 
 function seedDir() {
@@ -191,9 +162,9 @@ export async function startOrAttach() {
   // bumps the binary but the user's data was created by an older one, surface a
   // clear failure instead of a cryptic crash. (Same version today — this is
   // future-proofing.)
-  if (cfg.backendVersion && cfg.backendVersion !== BUNDLED_BACKEND_VERSION) {
+  if (cfg.backendVersion && cfg.backendVersion !== BACKEND_VERSION) {
     log(
-      `WARNING: data dir backendVersion ${cfg.backendVersion} != bundled ${BUNDLED_BACKEND_VERSION}.`
+      `WARNING: data dir backendVersion ${cfg.backendVersion} != bundled ${BACKEND_VERSION}.`
     );
   }
 

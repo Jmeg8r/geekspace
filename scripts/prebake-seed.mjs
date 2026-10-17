@@ -10,6 +10,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { backendAsset, backendCachePath, missingBinaryMessage } from "../electron/backendVersion.mjs";
+import { verifiedFile } from "../electron/verifiedDownload.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -18,23 +20,8 @@ const ROOT = path.join(__dirname, "..");
 // electron/convexBackend.mjs so both places name the binary identically.
 const EXE = process.platform === "win32" ? ".exe" : "";
 
-// Keep in sync with electron/convexBackend.mjs's BUNDLED_BACKEND_VERSION — the
-// packaged app's runtime resolver and this build-time baker must agree on
-// which precompiled backend version they're each pinned to.
-const BACKEND_VERSION = "precompiled-2026-07-21-82d5e9f";
-// WHY the platform branch: verified on-machine that the convex CLI caches the
-// downloaded backend binary under %LOCALAPPDATA% on Windows, vs. the XDG-ish
-// ~/.cache everywhere else (see electron/convexBackend.mjs).
-const BINARY =
-  process.platform === "win32"
-    ? path.join(
-        process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"),
-        "convex",
-        "binaries",
-        BACKEND_VERSION,
-        "convex-local-backend" + EXE
-      )
-    : path.join(os.homedir(), ".cache/convex/binaries", BACKEND_VERSION, "convex-local-backend");
+// The pinned backend (electron/backendVersion.mjs), where `npm run fetch-backend` puts it.
+const BINARY = backendCachePath();
 const CLOUD_PORT = 3210;
 const SITE_PORT = 3211;
 const URL = `http://127.0.0.1:${CLOUD_PORT}`;
@@ -89,7 +76,14 @@ async function waitHealthy(child, deadlineMs = 30000) {
 async function main() {
   // --- preconditions ---
   if (!fs.existsSync(BINARY)) {
-    die(`backend binary missing at ${BINARY}\n  Run \`npm run dev\` once so the convex CLI downloads it.`);
+    die(missingBinaryMessage(BINARY));
+  }
+  const asset = backendAsset();
+  if (!asset) die(`no pinned backend asset for ${process.platform}-${process.arch} in electron/backendVersion.mjs`);
+  // WHY verify: this file is copied into the app bundle and run on every launch;
+  // whatever sits at the cache path must be exactly the pinned release.
+  if (!(await verifiedFile(BINARY, asset.binarySize, asset.binarySha256))) {
+    die(`backend binary at ${BINARY} does not match the pinned size/SHA-256\n  Run \`npm run fetch-backend\` to replace it.`);
   }
   if (!fs.existsSync(SRC_CONFIG)) {
     die(`no local deployment config at ${SRC_CONFIG}\n  Run \`npm run dev\` once to create the local deployment.`);
