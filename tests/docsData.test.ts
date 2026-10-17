@@ -16,7 +16,7 @@ describe("docs.get", () => {
     await t.mutation(api.docs.rename, { docId, name: "renamed.txt" });
     const live = await t.query(api.docs.get, { docId });
     expect(live?.name).toBe("renamed.txt");
-    expect(typeof live?.url).toBe("string");
+    expect(live?.url).toMatch(/^http/);
     await t.mutation(api.docs.remove, { docId });
     expect(await t.query(api.docs.get, { docId })).toBeNull();
   });
