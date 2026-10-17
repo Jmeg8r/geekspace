@@ -194,3 +194,24 @@ CLI, no repo at runtime. Prebake itself pushes through the same module, so every
 - **`snyk test --dev`:** 11 issues / 23 paths, none through `jsdom`; all rooted at
   existing dependencies (eslint, electron, electron-builder, MCP SDK, zod,
   eslint-plugin-react-hooks), tracked separately.
+
+## Proof results (2026-10-17, Mac Studio)
+
+- `npm run verify`: exit 0, 33 files / 246 tests passed (the three new files were
+  committed red first in `af0bb47`).
+- `npm run package`: exit 0. Prebake wrote the payload (`71e399550a61`, convex 1.46.0),
+  deployed it through `functionSync.mjs` in 556 ms, seeded 6 pages. The built `.app` has
+  `Resources/convex-functions/{push-request.json, manifest.json}` (0 occurrences of
+  `adminKey`) and `convex-seed/functions.json`.
+- Live upgrade on the real data dir (after a cold, verified backup to
+  `convex.backup-2026-10-17-function-sync`; that dir had no `functions.json`):
+  1. First launch: `Deploying bundled functions 71e399550a61…` → `Deployed … in 159ms`,
+     marker written. `pages:get` with a foreign id now returns `null` (the stale
+     `v.id("pages")` version threw); `pages:list` returns all 30 pages.
+  2. Relaunch: `Functions current (71e399550a61).`, no push.
+  3. A planted `geekspace-ui` nav `{kind:"page", pageId:<foreign id>}` + reload: nav
+     became `{kind:"home"}`, Home rendered (sidebar, tasks), no "page is gone" screen.
+- **Not proven live:** the schema-failure dialog (unit-tested only; forcing real data to
+  violate the schema wasn't worth the risk), the error-boundary fallback screens
+  (jsdom-tested; nothing in the current build throws on demand), and Windows
+  (`package:win` not run here).
