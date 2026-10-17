@@ -3,6 +3,9 @@ import { saveRecordingBeforeQuit } from "../../lib/meetingPipeline";
 import { fallbackNav, useUI, type Nav } from "../../state/ui";
 import { ViewLoading } from "./ViewLoading";
 
+// Matches the main process's quit handshake (SAVE_ON_QUIT_TIMEOUT_MS in electron/main.mjs).
+const SAVE_TIMEOUT_MS = 2 * 60 * 1000;
+
 const BUTTON = "rounded-md border border-border px-3 py-1.5 text-[13px] text-ink-2 hover:bg-hov hover:text-ink";
 
 /**
@@ -49,23 +52,37 @@ export function AppCrash({
   error,
   reload = () => window.location.reload(),
   saveAudio = saveRecordingBeforeQuit,
+  saveTimeoutMs = SAVE_TIMEOUT_MS,
 }: {
   error: Error;
   reload?: () => void;
   saveAudio?: () => Promise<void>;
+  saveTimeoutMs?: number;
 }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const leave = async (beforeReload?: () => void) => {
     setSaving(true);
+    // WHY bounded: with the backend down, the save's mutations wait for a reconnect and its
+    // upload has no timeout, so an unbounded await would leave every button disabled. On
+    // timeout the save keeps running; the user gets the controls back and decides.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`saving took too long (over ${Math.round(saveTimeoutMs / 1000)}s)`)),
+        saveTimeoutMs
+      );
+    });
     try {
-      await saveAudio();
+      await Promise.race([saveAudio(), timeout]);
     } catch (err) {
       console.error("Could not save the recording before reloading", err);
       setSaveError(err instanceof Error ? err.message : String(err));
       setSaving(false);
       return;
+    } finally {
+      clearTimeout(timer);
     }
     beforeReload?.();
     reload();
