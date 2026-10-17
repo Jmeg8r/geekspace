@@ -13,8 +13,24 @@ export type Nav =
   | { kind: "reader" }
   | { kind: "page"; pageId: string };
 
+/** Why a page view couldn't show its page: it threw, or the page no longer exists. */
+export type PageFailure = "error" | "missing";
+
+/**
+ * Where to go when a page view can't show its page. A page that throws goes Home. A
+ * missing page goes Home only when the nav was restored from storage (it may name a page
+ * from another deployment); one you opened yourself keeps the "page is gone" message.
+ */
+export function fallbackNav(nav: Nav, navRestored: boolean, failure: PageFailure): Nav {
+  if (nav.kind !== "page") return nav;
+  if (failure === "error" || navRestored) return { kind: "home" };
+  return nav;
+}
+
 interface UIState {
   nav: Nav;
+  /** True while `nav` is a page restored from storage rather than one navigated to. */
+  navRestored: boolean;
   navigate: (nav: Nav) => void;
   openRowId: string | null;
   openRow: (rowId: string | null) => void;
@@ -43,7 +59,8 @@ export const useUI = create<UIState>()(
   persist(
     (set) => ({
       nav: { kind: "home" },
-      navigate: (nav) => set({ nav, openRowId: null }),
+      navRestored: false,
+      navigate: (nav) => set({ nav, navRestored: false, openRowId: null }),
       openRowId: null,
       openRow: (openRowId) => set({ openRowId }),
       commandOpen: false,
@@ -77,6 +94,14 @@ export const useUI = create<UIState>()(
         calMode: s.calMode,
         viewByDb: s.viewByDb,
       }),
+      // WHY merge, not onRehydrateStorage: localStorage hydrates synchronously inside
+      // create(), before `useUI` exists, so a rehydrate callback can't set state yet.
+      merge: (persisted, current) => {
+        // SAFETY: `persisted` is what partialize above wrote under this key; every field
+        // is optional here and only `nav.kind` is read before spreading.
+        const saved = (persisted ?? {}) as Partial<Pick<UIState, "nav" | "expanded" | "calMode" | "viewByDb">>;
+        return { ...current, ...saved, navRestored: saved.nav?.kind === "page" };
+      },
     }
   )
 );

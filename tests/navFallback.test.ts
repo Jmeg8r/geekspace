@@ -9,7 +9,10 @@ const STORAGE_KEY = "geekspace-ui";
 const PAGE = { kind: "page" as const, pageId: "pages:from-another-deployment" };
 const HOME = { kind: "home" as const };
 
-async function loadStore(persisted?: unknown) {
+// What partialize writes; `kind` is a plain string so tests can store any view.
+type Persisted = { nav: { kind: string; pageId?: string } };
+
+async function loadStore(persisted?: Persisted) {
   vi.resetModules();
   localStorage.clear();
   if (persisted) localStorage.setItem(STORAGE_KEY, JSON.stringify({ state: persisted, version: 0 }));

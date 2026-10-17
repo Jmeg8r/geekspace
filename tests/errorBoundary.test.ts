@@ -25,15 +25,12 @@ function Flaky() {
 function render(onError = vi.fn()) {
   act(() => {
     root.render(
-      createElement(
-        ErrorBoundary,
-        {
-          onError,
-          fallback: (error: Error, reset: () => void) =>
-            createElement("div", null, createElement("p", null, `failed: ${error.message}`), createElement("button", { onClick: reset }, "retry")),
-        },
-        createElement(Flaky),
-      ),
+      createElement(ErrorBoundary, {
+        onError,
+        fallback: (error: Error, reset: () => void) =>
+          createElement("div", null, createElement("p", null, `failed: ${error.message}`), createElement("button", { onClick: reset }, "retry")),
+        children: createElement(Flaky),
+      }),
     );
   });
   return onError;
