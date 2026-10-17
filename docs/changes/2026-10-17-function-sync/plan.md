@@ -215,3 +215,19 @@ CLI, no repo at runtime. Prebake itself pushes through the same module, so every
   violate the schema wasn't worth the risk), the error-boundary fallback screens
   (jsdom-tested; nothing in the current build throws on demand), and Windows
   (`package:win` not run here).
+
+## Deviations after Codex review (4 rounds, PR #65 comment)
+
+- **Deadline over every request** (round 1): the 120 s cap was only checked between
+  schema polls; an `AbortController` now cancels any request or body read at the deadline.
+- **`deploy:local` clears the marker** (round 1): it replaces the running app's functions
+  outside the bundle, so it removes `functions.json` first (`invalidateMarker`) and the next
+  packaged launch redeploys.
+- **Crash screen saves meeting audio before reloading** (round 2): reload skips the main
+  process's quit guard, so both buttons run `saveRecordingBeforeQuit()`; a failed save keeps
+  the screen and discarding needs an explicit click. Not in the original plan; required by
+  the repo's audio review standard.
+- **That save is capped at 2 minutes** (round 3), matching `SAVE_ON_QUIT_TIMEOUT_MS`, so a
+  dead backend can't leave the buttons disabled.
+- Round 4 reported no findings (untagged, so the mechanical gate fails closed; a human
+  read finds no P0/P1). `npm run verify` at `bef5fb0`: 34 files / 252 tests.
