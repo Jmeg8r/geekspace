@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { invalidateMarker } from "../electron/functionSync.mjs";
 import { packagedConvexDir } from "./lib/paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +40,14 @@ fs.writeFileSync(
   envFile,
   `CONVEX_SELF_HOSTED_URL=${URL}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${cfg.adminKey}\n`
 );
+
+// WHY before deploying: this replaces whatever functions the running app has, so the
+// packaged app's record of which bundle it deployed is no longer true. Forgetting it
+// makes the next packaged launch redeploy its own bundle instead of trusting a stale
+// marker. Done first so a deploy that dies halfway still leaves no false record.
+if (invalidateMarker(packagedConvexDir())) {
+  console.log("• cleared the packaged app's functions marker (next launch redeploys its bundle)");
+}
 
 try {
   console.log(`• deploying convex/ functions to ${URL} (open Geekspace must be running)…`);

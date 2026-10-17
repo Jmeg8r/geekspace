@@ -77,6 +77,21 @@ export function readMarker(dataDir) {
   }
 }
 
+/**
+ * Forget which functions this data dir runs, so the next launch redeploys the bundle.
+ * For anything that deploys outside this module (`npm run deploy:local`). Returns true
+ * when a marker was removed.
+ */
+export function invalidateMarker(dataDir) {
+  try {
+    fs.unlinkSync(path.join(dataDir, MARKER_FILE));
+    return true;
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
 /** Temp file + rename, so a crash mid-write can't leave a marker naming the wrong build. */
 export function writeMarker(dataDir, hash, { now = Date.now } = {}) {
   const target = path.join(dataDir, MARKER_FILE);
@@ -85,11 +100,12 @@ export function writeMarker(dataDir, hash, { now = Date.now } = {}) {
   fs.renameSync(temp, target);
 }
 
-async function post(fetchImpl, url, adminKey, endpoint, body) {
+async function post(fetchImpl, url, adminKey, endpoint, body, signal) {
   const res = await fetchImpl(`${url}${endpoint}`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Convex ${adminKey}` },
     body: JSON.stringify({ ...body, adminKey }),
+    signal,
   });
   const text = await res.text();
   if (!res.ok) {
@@ -110,26 +126,43 @@ async function post(fetchImpl, url, adminKey, endpoint, body) {
  * finish_push, so stopping at any earlier failure leaves the old functions running.
  */
 export async function pushFunctions({ url, adminKey, request, fetch: fetchImpl = fetch, deadlineMs = DEFAULT_DEADLINE_MS, now = Date.now }) {
-  const startedAt = now();
-  const startPush = await post(fetchImpl, url, adminKey, "/api/deploy2/start_push", { ...request, dryRun: false });
-  for (;;) {
-    const status = await post(fetchImpl, url, adminKey, "/api/deploy2/wait_for_schema", {
-      schemaChange: startPush.schemaChange,
-      timeoutMs: SCHEMA_POLL_MS,
-      dryRun: false,
-    });
-    if (status.type === "complete") break;
-    if (status.type === "failed") {
-      const where = status.tableName ? ` (table "${status.tableName}")` : "";
-      throw new SyncError(`Schema validation failed${where}: ${status.error}`, { tableName: status.tableName });
+  // WHY a timer as well as the clock check below: a backend that stops answering never
+  // returns to the loop, and startup waits on this before opening the window. Aborting
+  // also cancels a response body still being read.
+  const deadline = new AbortController();
+  const timer = setTimeout(
+    () => deadline.abort(new SyncError(`Function deploy timed out after ${Math.round(deadlineMs / 1000)}s`)),
+    deadlineMs
+  );
+  const call = (endpoint, body) => post(fetchImpl, url, adminKey, endpoint, body, deadline.signal);
+  try {
+    const startedAt = now();
+    const startPush = await call("/api/deploy2/start_push", { ...request, dryRun: false });
+    for (;;) {
+      const status = await call("/api/deploy2/wait_for_schema", {
+        schemaChange: startPush.schemaChange,
+        timeoutMs: SCHEMA_POLL_MS,
+        dryRun: false,
+      });
+      if (status.type === "complete") break;
+      if (status.type === "failed") {
+        const where = status.tableName ? ` (table "${status.tableName}")` : "";
+        throw new SyncError(`Schema validation failed${where}: ${status.error}`, { tableName: status.tableName });
+      }
+      if (status.type === "raceDetected") throw new SyncError("Schema was overwritten by another push");
+      if (status.type !== "inProgress") throw new SyncError(`Unexpected schema status: ${JSON.stringify(status).slice(0, MAX_DETAIL_CHARS)}`);
+      if (now() - startedAt > deadlineMs) {
+        throw new SyncError(`Schema validation timed out after ${Math.round(deadlineMs / 1000)}s`);
+      }
     }
-    if (status.type === "raceDetected") throw new SyncError("Schema was overwritten by another push");
-    if (status.type !== "inProgress") throw new SyncError(`Unexpected schema status: ${JSON.stringify(status).slice(0, MAX_DETAIL_CHARS)}`);
-    if (now() - startedAt > deadlineMs) {
-      throw new SyncError(`Schema validation timed out after ${Math.round(deadlineMs / 1000)}s`);
-    }
+    // If the deadline cuts this one off after the backend committed, no marker is written
+    // and the next launch redeploys the same payload, which is harmless.
+    await call("/api/deploy2/finish_push", { startPush, dryRun: false });
+  } catch (err) {
+    throw deadline.signal.aborted ? deadline.signal.reason : err;
+  } finally {
+    clearTimeout(timer);
   }
-  await post(fetchImpl, url, adminKey, "/api/deploy2/finish_push", { startPush, dryRun: false });
 }
 
 /**

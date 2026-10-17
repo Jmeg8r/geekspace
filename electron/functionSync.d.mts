@@ -17,13 +17,17 @@ export interface PushRequest {
   [field: string]: unknown;
 }
 
-type FetchLike = (url: string, init: { method: string; headers: { "content-type": string; authorization: string }; body: string }) => Promise<Response>;
+type FetchLike = (
+  url: string,
+  init: { method: string; headers: { "content-type": string; authorization: string }; body: string; signal: AbortSignal }
+) => Promise<Response>;
 
 export function hashRequest(json: string): string;
 export function stripAdminKey(request: PushRequest): Omit<PushRequest, "adminKey">;
 export function writeBundle(dir: string, request: PushRequest, options: { convexVersion: string }): string;
 export function readBundle(dir: string): { hash: string; request: PushRequest };
 export function readMarker(dataDir: string): string | null;
+export function invalidateMarker(dataDir: string): boolean;
 export function writeMarker(dataDir: string, hash: string, options?: { now?: () => number }): void;
 
 export function pushFunctions(options: {
