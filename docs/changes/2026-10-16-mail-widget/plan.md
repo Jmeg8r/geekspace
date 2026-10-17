@@ -1,6 +1,6 @@
 ---
 change: 2026-10-16-mail-widget
-status: draft
+status: accepted
 track: T1
 intent: ./intent.md
 linear: pending
@@ -21,8 +21,8 @@ linear: pending
   kept). The JXA inbox script, including its silent `catch → "[]"`, is removed.
   `armAutomation("Mail")` is no longer called for the inbox; Mail stays in `ALLOWED_APPS`
   for `isAppRunning`/`openApp`.
-- **`src/components/home/HomeView.tsx`**: drop the Mail-not-running gate (pending James's
-  answer in intent.md). Error rendering already exists (`state === "error"`).
+- **`src/components/home/HomeView.tsx`**: drop the Mail-not-running gate (James decided, intent.md).
+  Error rendering already exists (`state === "error"`).
 - **`tests/mailIndex.test.ts`** (new): builds fixture databases with `node:sqlite` in a
   temp dir. Runs on Linux CI; no `/usr/bin/sqlite3` dependency.
 

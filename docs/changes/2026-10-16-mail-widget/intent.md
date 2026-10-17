@@ -1,9 +1,9 @@
 ---
 change: 2026-10-16-mail-widget
-status: draft
+status: accepted
 track: T1
 author: claude
-accepted_by: pending
+accepted_by: james
 linear: pending
 source: conversation
 ---
@@ -85,8 +85,7 @@ Measured 2026-10-16, counts and timings only, no content printed:
 - Opening or searching mail bodies; other mailboxes; unread counts elsewhere in the app.
 - Windows. The Mail widget is macOS-only, as today.
 
-## Open question for James
+## Decision: no Mail-not-running gate
 
-- **Mail-not-running gate.** The widget currently refuses to load when Mail isn't
-  running. The index is readable without Mail, just possibly stale. Proposed: drop the
-  gate and always read the index. Alternative: keep the "Open Mail" prompt.
+James, 2026-10-16: drop the gate. The widget always reads the index, which is readable
+without Mail running (possibly a little stale).
