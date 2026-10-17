@@ -118,7 +118,21 @@ That's the same `MacMailMessage` shape as today, so `messageUrl` and "make task"
   disabling access detection fails 4 tests, and removing the no-inbox guard fails 1.
 - **Read-only proof:** the test checks `openIndexReadOnly` directly (a `DELETE` through it
   throws `readonly`), and checks that `readNewestInbox` closes the handle it opened.
-- **Main-thread read kept.** Live via this module (counts, timings and booleans only):
+- **Codex round 1 (`290de4e`): GATE PASS, one [P2], fixed. The read now runs in a worker
+  thread.**
+  - The issue: a 2 s busy wait, or a cold read of the 2.2 GB file, would freeze Electron's
+    main process.
+  - New `electron/mailIndexWorker.mjs` and `readNewestInboxInWorker`. Error kinds cross
+    the thread boundary, and a 15 s timeout ends the worker with a visible `query` error.
+  - Before relying on it, a throwaway `app.asar` proved that Electron 42 loads a
+    `worker_threads` script from inside the asar and runs `node:sqlite` there.
+  - Live in the Electron 42.11.8 runtime: 12 rows, 45–73 ms round trip.
+  - Failing-first: commit `0fd9616`, 3 tests. Suite 192/192.
+
+  The native `codex review` run returned untagged prose ("No actionable regressions"), so
+  the gate failed closed on that run. The verdict above is from the tagged `codex exec`
+  rerun.
+- **Superseded by the worker change above: main-thread read kept.** Live via this module (counts, timings and booleans only):
   - Node 24.14: 12 rows, 22–26 ms;
   - Electron 42.11.8 runtime (`ELECTRON_RUN_AS_NODE`): 12 rows, 24 ms;
   - in both runs: newest first, every id/subject/sender present, 10 unread.

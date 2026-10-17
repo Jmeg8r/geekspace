@@ -5,7 +5,7 @@
 import { execFile } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { findEnvelopeIndex, readNewestInbox } from "./mailIndex.mjs";
+import { readNewestInboxInWorker } from "./mailIndex.mjs";
 
 const OSASCRIPT = "/usr/bin/osascript";
 const ALLOWED_APPS = new Set(["Calendar", "Mail"]);
@@ -124,8 +124,8 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
 export async function fetchInbox(limit = 12) {
   const n = Math.max(1, Math.min(Number(limit) || 12, 25));
   // WHY not JXA: on a ~264K-message inbox every scripting path fails or takes 68 s+.
-  // Mail's own index answers in ~55 ms and needs Full Disk Access, not Automation.
-  return readNewestInbox(findEnvelopeIndex(path.join(os.homedir(), "Library", "Mail")), n);
+  // Mail's own index answers in ~25 ms and needs Full Disk Access, not Automation.
+  return readNewestInboxInWorker(path.join(os.homedir(), "Library", "Mail"), n);
 }
 
 /** Deep link into Mail.app for a specific message. */

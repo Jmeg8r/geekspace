@@ -5,8 +5,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 
 const BUSY_TIMEOUT_MS = 2_000;
+const WORKER_TIMEOUT_MS = 15_000;
 const STORE_DIR = /^V(\d+)$/;
 const INDEX_FILE = ["MailData", "Envelope Index"];
 // SQLite primary result codes for a refused open: SQLITE_CANTOPEN, SQLITE_AUTH, SQLITE_PERM.
@@ -46,6 +48,7 @@ export class MailIndexError extends Error {
     super(detail ? `${MESSAGES[kind]} (${detail})` : MESSAGES[kind]);
     this.name = "MailIndexError";
     this.kind = kind;
+    this.detail = detail;
   }
 }
 
@@ -173,4 +176,30 @@ export function readNewestInbox(file, limit, { open = openIndexReadOnly } = {}) 
   } finally {
     db.close();
   }
+}
+
+/** `readNewestInbox` on a worker thread, with the same errors plus a timeout. */
+export function readNewestInboxInWorker(mailRoot, limit, { timeoutMs = WORKER_TIMEOUT_MS } = {}) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./mailIndexWorker.mjs", import.meta.url), {
+      workerData: { mailRoot, limit },
+    });
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker.terminate();
+      fn(value);
+    };
+    const timer = setTimeout(
+      () => settle(reject, new MailIndexError("query", `timed out after ${timeoutMs} ms`)),
+      timeoutMs
+    );
+    worker.once("message", (m) =>
+      m.ok ? settle(resolve, m.data) : settle(reject, new MailIndexError(m.kind, m.detail))
+    );
+    worker.once("error", (error) => settle(reject, new MailIndexError("query", String(error?.message ?? error))));
+    worker.once("exit", (code) => settle(reject, new MailIndexError("query", `reader exited (${code})`)));
+  });
 }

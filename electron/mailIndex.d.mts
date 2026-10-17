@@ -6,6 +6,7 @@ export type MailIndexErrorKind = "no-store" | "no-access" | "schema" | "no-inbox
 
 export class MailIndexError extends Error {
   kind: MailIndexErrorKind;
+  detail: string;
   constructor(kind: MailIndexErrorKind, detail?: string);
 }
 
@@ -32,3 +33,9 @@ export function readNewestInbox(
   limit: number,
   deps?: { open?: (file: string) => DatabaseSync }
 ): InboxMessage[];
+
+export function readNewestInboxInWorker(
+  mailRoot: string,
+  limit: number,
+  options?: { timeoutMs?: number }
+): Promise<InboxMessage[]>;
