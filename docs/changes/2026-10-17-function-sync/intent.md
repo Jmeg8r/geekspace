@@ -1,8 +1,9 @@
 ---
 change: 2026-10-17-function-sync
-status: draft
+status: accepted
 track: T1
 author: claude
+accepted_by: james
 linear: pending
 source: conversation (side session from PR #59 live test)
 ---
