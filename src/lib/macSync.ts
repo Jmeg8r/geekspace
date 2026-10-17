@@ -2,6 +2,7 @@ import { convex } from "./convex";
 import { api } from "../../convex/_generated/api";
 import { tzOffsetMin } from "./utils";
 import { integrationsAvailable, macFetchEvents, macIsRunning } from "./integrations";
+import { incompleteReadNote } from "./calendarSyncStatus";
 
 const DAY_MS = 86_400_000;
 
@@ -28,7 +29,10 @@ export async function syncMacCalendar(calendarNames: string[]): Promise<SyncOutc
   const result = await convex.mutation(api.events.syncExternal, {
     windowStart,
     windowEnd,
-    items: events.data.map((e) => ({
+    completeCalendars: events.data.complete,
+    selectedCalendars: calendarNames,
+    presentCalendars: events.data.present,
+    items: events.data.events.map((e) => ({
       externalId: e.externalId,
       title: e.title,
       start: e.start,
@@ -39,11 +43,12 @@ export async function syncMacCalendar(calendarNames: string[]): Promise<SyncOutc
     tzOffsetMin: tzOffsetMin(),
   });
   const changes = result.created + result.updated + result.removed;
+  const note = incompleteReadNote(calendarNames, events.data);
   return {
-    ok: true,
+    ok: note === "",
     message:
-      changes === 0
+      (changes === 0
         ? `Up to date (${result.total} events)`
-        : `Synced ${result.total} events (+${result.created} / ~${result.updated} / -${result.removed})`,
+        : `Synced ${result.total} events (+${result.created} / ~${result.updated} / -${result.removed})`) + note,
   };
 }
