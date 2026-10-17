@@ -173,15 +173,11 @@ describe("readNewestInbox", () => {
 
   it("names the missing column when Mail's schema has changed", () => {
     const file = buildIndex([], { schema: SCHEMA.replace("date_received INTEGER, ", "") });
-    let err: unknown;
-    try {
-      readNewestInbox(file, 12);
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(MailIndexError);
-    expect((err as MailIndexError).kind).toBe("schema");
-    expect((err as MailIndexError).message).toContain("messages.date_received");
+    const read = () => readNewestInbox(file, 12);
+    expect(read).toThrow(MailIndexError);
+    expect(read).toThrow(
+      expect.objectContaining({ kind: "schema", message: expect.stringContaining("messages.date_received") })
+    );
   });
 
   it("closes the handle after reading", () => {
@@ -208,19 +204,16 @@ describe("readNewestInbox", () => {
     ["unable to open database file", Object.assign(new Error("unable to open database file"), { errcode: 14 })],
     ["EPERM", Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" })],
   ])("reports a missing Full Disk Access grant (%s)", (_label, thrown) => {
-    let err: unknown;
-    try {
+    const read = () =>
       readNewestInbox(path.join(dir, "Envelope Index"), 12, {
         open: () => {
           throw thrown;
         },
       });
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(MailIndexError);
-    expect((err as MailIndexError).kind).toBe("no-access");
-    expect((err as MailIndexError).message).toMatch(/Full Disk Access/);
+    expect(read).toThrow(MailIndexError);
+    expect(read).toThrow(
+      expect.objectContaining({ kind: "no-access", message: expect.stringMatching(/Full Disk Access/) })
+    );
   });
 });
 
@@ -243,6 +236,15 @@ describe("findEnvelopeIndex", () => {
     expect(() => findEnvelopeIndex(dir)).toThrow(expect.objectContaining({ kind: "no-store" }));
     expect(() => findEnvelopeIndex(path.join(dir, "absent"))).toThrow(
       expect.objectContaining({ kind: "no-store" })
+    );
+  });
+
+  it("reports a missing Full Disk Access grant when ~/Library/Mail can't be listed", () => {
+    const denied = () => {
+      throw Object.assign(new Error("EPERM: operation not permitted, scandir"), { code: "EPERM" });
+    };
+    expect(() => findEnvelopeIndex(dir, { readdir: denied })).toThrow(
+      expect.objectContaining({ kind: "no-access" })
     );
   });
 });

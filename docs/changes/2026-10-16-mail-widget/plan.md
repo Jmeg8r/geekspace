@@ -105,3 +105,31 @@ That's the same `MacMailMessage` shape as today, so `messageUrl` and "make task"
 - **`better-sqlite3`**: a native module needing electron-rebuild on mac and win for a
   mac-only feature.
 - **`immutable=1`**: skips the WAL, so new mail would be missing until Mail checkpoints.
+
+## Deviations
+
+- **Listing `~/Library/Mail` is itself privacy-protected.** Without Full Disk Access the
+  first failure is the directory listing, not the SQLite open. `findEnvelopeIndex` classifies
+  `EPERM`/`EACCES` there as `no-access` too, not `no-store`. Its test was added with the
+  implementation, not in the test-only commit `132691f`.
+- **The widget asks for 12 messages, not 10**, matching the goal of the newest ~12.
+- **Test-only commit `132691f`** fails on the missing module: the reader is new, so there
+  is no old behaviour to fail against. Instead, the error branches were mutation-checked:
+  disabling access detection fails 4 tests, and removing the no-inbox guard fails 1.
+- **Read-only proof:** the test checks `openIndexReadOnly` directly (a `DELETE` through it
+  throws `readonly`), and checks that `readNewestInbox` closes the handle it opened.
+- **Main-thread read kept.** Live via this module (counts, timings and booleans only):
+  - Node 24.14: 12 rows, 22–26 ms;
+  - Electron 42.11.8 runtime (`ELECTRON_RUN_AS_NODE`): 12 rows, 24 ms;
+  - in both runs: newest first, every id/subject/sender present, 10 unread.
+
+  That's well under the 250 ms threshold, so no `worker_thread`. A truly cold read of the
+  2.2 GB file wasn't measured, because the OS page cache was warm from the probes.
+- **`node:sqlite` loads in Electron 42 without an ExperimentalWarning** in the probe's
+  output.
+- **`snyk test`:** 3 issues (zod; hono and qs via `@modelcontextprotocol/sdk`), all
+  pre-existing. This branch changes no dependencies.
+- **Suite 189/189; `npm run verify` passes.** New `as` assertions: none.
+- **Not yet live-tested (needs James):** the widget in `npm run dev`, and the packaged
+  app without, then with, Full Disk Access. Claude didn't render the widget, because that
+  would put real subjects and senders on screen.

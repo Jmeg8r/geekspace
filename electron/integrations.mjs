@@ -1,8 +1,11 @@
-// WHAT: macOS integration layer — reads Calendar.app and Mail.app via JXA
-// (osascript -l JavaScript). Runs only in the Electron main process.
+// WHAT: macOS integration layer — reads Calendar.app via JXA (osascript -l JavaScript)
+// and Mail's local index (mailIndex.mjs). Runs only in the Electron main process.
 // WHY JXA over EventKit: zero compilation, JSON-native output, and the TCC
 // Automation prompt is attributed to the app the user is actually using.
 import { execFile } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
+import { findEnvelopeIndex, readNewestInbox } from "./mailIndex.mjs";
 
 const OSASCRIPT = "/usr/bin/osascript";
 const ALLOWED_APPS = new Set(["Calendar", "Mail"]);
@@ -119,41 +122,10 @@ export async function fetchCalendarEvents(startMs, endMs, names) {
 }
 
 export async function fetchInbox(limit = 12) {
-  await armAutomation("Mail");
   const n = Math.max(1, Math.min(Number(limit) || 12, 25));
-  // WHY bulk arrays: one Apple event per property instead of ~5 per message —
-  // far fewer round trips, and we get every date so we can sort newest-first
-  // ourselves (Mail's `messages` order is oldest-first on many setups).
-  const script = `
-(() => {
-  const Mail = Application("Mail");
-  let msgs;
-  try {
-    msgs = Mail.inbox.messages;
-    if (msgs.length === 0) return "[]";
-  } catch (e) { return "[]"; }
-  const subjects = msgs.subject();
-  const senders = msgs.sender();
-  const dates = msgs.dateReceived();
-  const ids = msgs.messageId();
-  const reads = msgs.readStatus();
-  const idx = dates.map((d, i) => i);
-  idx.sort((a, b) => dates[b] - dates[a]);
-  const out = [];
-  for (let k = 0; k < Math.min(idx.length, ${n}); k++) {
-    const i = idx[k];
-    out.push({
-      id: String(ids[i] || ""),
-      subject: String(subjects[i] || "(no subject)"),
-      sender: String(senders[i] || ""),
-      date: dates[i].getTime(),
-      read: Boolean(reads[i]),
-    });
-  }
-  return JSON.stringify(out);
-})()`;
-  const out = await runJxa(script, 120_000);
-  return JSON.parse(out || "[]");
+  // WHY not JXA: on a ~264K-message inbox every scripting path fails or takes 68 s+.
+  // Mail's own index answers in ~55 ms and needs Full Disk Access, not Automation.
+  return readNewestInbox(findEnvelopeIndex(path.join(os.homedir(), "Library", "Mail")), n);
 }
 
 /** Deep link into Mail.app for a specific message. */
