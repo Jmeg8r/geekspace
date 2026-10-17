@@ -1,8 +1,9 @@
 ---
 change: 2026-10-16-backend-pin
-status: draft
+status: accepted
 track: T1
 author: claude
+accepted_by: james
 linear: pending
 source: conversation
 ---

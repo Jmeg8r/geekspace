@@ -1,6 +1,6 @@
 ---
 change: 2026-10-16-backend-pin
-status: draft
+status: accepted
 track: T1
 intent: ./intent.md
 linear: pending
