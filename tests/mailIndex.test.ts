@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { MailIndexError, findEnvelopeIndex, openIndexReadOnly, readNewestInbox } from "../electron/mailIndex.mjs";
+import {
+  MailIndexError,
+  findEnvelopeIndex,
+  openIndexReadOnly,
+  readNewestInbox,
+  readNewestInboxInWorker,
+} from "../electron/mailIndex.mjs";
 
 // WHAT: the Home Mail widget reads Mail's Envelope Index, newest inbox messages first,
 // and every failure is a named, visible error. See docs/changes/2026-10-16-mail-widget/.
@@ -246,5 +252,40 @@ describe("findEnvelopeIndex", () => {
     expect(() => findEnvelopeIndex(dir, { readdir: denied })).toThrow(
       expect.objectContaining({ kind: "no-access" })
     );
+  });
+});
+
+describe("readNewestInboxInWorker", () => {
+  // WHY: the read runs off Electron's main thread, so a busy lock or a cold 2 GB file
+  // can't freeze every window. Errors keep their kind across the thread boundary.
+  function storeWith(messages: Msg[]) {
+    const file = buildIndex(messages);
+    const data = path.join(dir, "Mail", "V10", "MailData");
+    fs.mkdirSync(data, { recursive: true });
+    fs.renameSync(file, path.join(data, "Envelope Index"));
+    return path.join(dir, "Mail");
+  }
+
+  it("returns the newest inbox messages", async () => {
+    const root = storeWith([
+      { id: 1, mailbox: IMAP_INBOX, date: 1000 },
+      { id: 2, mailbox: GMAIL_ALL, date: 2000, label: GMAIL_INBOX },
+    ]);
+    expect(ids(await readNewestInboxInWorker(root, 12))).toEqual(["<m2@example.test>", "<m1@example.test>"]);
+  });
+
+  it("carries the error kind back from the worker", async () => {
+    await expect(readNewestInboxInWorker(path.join(dir, "absent"), 12)).rejects.toMatchObject({
+      name: "MailIndexError",
+      kind: "no-store",
+    });
+  });
+
+  it("gives up loudly when the read takes too long", async () => {
+    const root = storeWith([{ id: 1, mailbox: IMAP_INBOX, date: 1000 }]);
+    await expect(readNewestInboxInWorker(root, 12, { timeoutMs: 1 })).rejects.toMatchObject({
+      kind: "query",
+      message: expect.stringContaining("timed out"),
+    });
   });
 });
