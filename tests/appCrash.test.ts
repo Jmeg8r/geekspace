@@ -20,8 +20,10 @@ let container: HTMLDivElement;
 let root: Root;
 const reload = vi.fn();
 
-function render() {
-  act(() => root.render(createElement(AppCrash, { error: new Error("render failed"), reload, saveAudio: save })));
+function render(saveTimeoutMs?: number) {
+  act(() =>
+    root.render(createElement(AppCrash, { error: new Error("render failed"), reload, saveAudio: save, saveTimeoutMs })),
+  );
 }
 const button = (label: string) =>
   [...container.querySelectorAll("button")].find((b) => b.textContent === label);
@@ -67,5 +69,17 @@ describe("AppCrash", () => {
     await click("Reload and discard the recording");
     expect(reload).toHaveBeenCalledOnce();
     expect(save).toHaveBeenCalledOnce();
+  });
+
+  it("a save that never finishes gives the controls back instead of disabling them forever", async () => {
+    save.mockReturnValue(new Promise<void>(() => {}));
+    render(20);
+    await click("Reload");
+    await act(async () => new Promise((r) => setTimeout(r, 60)));
+    expect(reload).not.toHaveBeenCalled();
+    expect(container.textContent).toMatch(/took too long/);
+    expect(button("Reload")!.disabled).toBe(false);
+    await click("Reload and discard the recording");
+    expect(reload).toHaveBeenCalledOnce();
   });
 });
