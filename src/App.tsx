@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useRef } from "react";
+import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "./../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
@@ -53,6 +53,10 @@ export default function App() {
   const reflow = useMutation(api.scheduling.reflowNow);
   const setMeetingStatus = useMutation(api.meetings.setStatus);
   const agentPanelOpen = useUI((s) => s.agentPanelOpen);
+  // Load the agent panel on first open, then keep it mounted: its conversation, draft and
+  // lane live in component state and must survive closing (the backend keeps its context).
+  const [agentMounted, setAgentMounted] = useState(agentPanelOpen);
+  if (agentPanelOpen && !agentMounted) setAgentMounted(true);
 
   useEffect(() => {
     const idle = window.requestIdleCallback;
@@ -202,8 +206,8 @@ export default function App() {
             </Suspense>
           </main>
           <Suspense fallback={null}>
-            {/* Mounted only while open, so its code loads on first use. */}
-            {agentPanelOpen && <AgentPanel />}
+            {/* Mounted from first open on, so its code loads on first use. */}
+            {agentMounted && <AgentPanel />}
           </Suspense>
           <RowPeek />
           <RecorderWidget />
