@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { Eye, Loader2, Trash2, X } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -17,6 +17,53 @@ const quickLookBridge = () =>
 // WHAT: Slide-over viewer — native rendering for the common types, Quick Look
 // for everything else.
 export function DocViewer({
+  docId,
+  projectRows,
+  onClose,
+}: {
+  docId: Id<"docs">;
+  projectRows: RowTitle[];
+  onClose: () => void;
+}) {
+  // Read live: edits made here (project) or elsewhere (rename, delete) show immediately.
+  const doc = useQuery(api.docs.get, { docId });
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  if (doc === undefined) return null; // first load; the slide-over appears with the data
+  if (doc === null) {
+    return (
+      <Shell onClose={onClose}>
+        <Empty>
+          This file was deleted.{" "}
+          <button onClick={onClose} className="text-accent underline">
+            Close
+          </button>
+        </Empty>
+      </Shell>
+    );
+  }
+  return <DocViewerBody key={doc._id} doc={doc} projectRows={projectRows} onClose={onClose} />;
+}
+
+function Shell({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-[60] flex justify-end bg-black/40" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div
+        className="fade-in flex h-full w-[min(720px,92vw)] flex-col border-l border-border bg-surface"
+        style={{ boxShadow: "var(--shadow-lg)" }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DocViewerBody({
   doc,
   projectRows,
   onClose,
@@ -27,23 +74,14 @@ export function DocViewer({
 }) {
   const removeDoc = useMutation(api.docs.remove);
   const setProject = useMutation(api.docs.setProject);
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   const m = doc.mime;
   const isText =
     m.startsWith("text/") || /json|yaml|xml|javascript|typescript|x-sh|x-python|csv/.test(m);
 
   return (
-    <div className="fixed inset-0 z-[60] flex justify-end bg-black/40" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div
-        className="fade-in flex h-full w-[min(720px,92vw)] flex-col border-l border-border bg-surface"
-        style={{ boxShadow: "var(--shadow-lg)" }}
-      >
+    <Shell onClose={onClose}>
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">
           <div className="min-w-0 flex-1">
             <div className="truncate text-[14px] font-bold">{doc.name}</div>
@@ -70,7 +108,17 @@ export function DocViewer({
           {quickLookBridge() && doc.url && (
             <button
               title="Open with the default app"
-              onClick={() => void quickLookBridge()!.quickLook(doc.url!, doc.name)}
+              onClick={async () => {
+                setOpenError(null);
+                const bridge = quickLookBridge();
+                if (!bridge || !doc.url) return;
+                try {
+                  const result = await bridge.quickLook(doc.url, doc.name);
+                  if (!result.ok) setOpenError(result.error ?? "Could not open the file");
+                } catch (err) {
+                  setOpenError(err instanceof Error ? err.message : String(err));
+                }
+              }}
               className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[12px] text-ink-2 hover:bg-hov hover:text-ink"
             >
               <Eye size={13} /> Open
@@ -93,6 +141,9 @@ export function DocViewer({
           </button>
         </header>
 
+        {openError && (
+          <p className="border-b border-border bg-hov px-4 py-2 text-[12.5px] text-[var(--pal-red)]">{openError}</p>
+        )}
         <div className="min-h-0 flex-1 overflow-auto bg-bg">
           {!doc.url ? (
             <Empty>File URL unavailable</Empty>
@@ -111,15 +162,14 @@ export function DocViewer({
               <audio src={doc.url} controls className="w-full max-w-md" />
             </div>
           ) : isText ? (
-            <TextPreview url={doc.url} markdown={m === "text/markdown"} />
+            <TextPreview key={doc.url} url={doc.url} markdown={m === "text/markdown"} />
           ) : (
             <Empty>
               No in-app preview for this type — use <b>Open</b> to view it in its native app.
             </Empty>
           )}
         </div>
-      </div>
-    </div>
+    </Shell>
   );
 }
 
@@ -134,12 +184,19 @@ function Empty({ children }: { children: React.ReactNode }) {
 function TextPreview({ url, markdown }: { url: string; markdown: boolean }) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  // Keyed by URL at the call site, so a new file always starts from a clean state.
   useEffect(() => {
     let cancelled = false;
     fetch(url)
-      .then((r) => r.text())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.text();
+      })
       .then((t) => !cancelled && setText(t.slice(0, 200_000)))
-      .catch(() => !cancelled && setError(true));
+      .catch((err) => {
+        console.warn("Text preview failed to load", err);
+        if (!cancelled) setError(true);
+      });
     return () => {
       cancelled = true;
     };

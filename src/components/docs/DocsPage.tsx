@@ -17,7 +17,7 @@ import type { Id } from "../../../convex/_generated/dataModel";
 import type { PropertyDef } from "../../../convex/lib/types";
 import { convex } from "../../lib/convex";
 import { cn } from "../../lib/utils";
-import { DocViewer, type DocItem } from "./DocViewer";
+import { DocViewer } from "./DocViewer";
 
 // WHAT: Docs library — drag files in, preview them in-app, optionally link
 // them to a project. Notion's "files & media", local-first.
@@ -62,9 +62,14 @@ export function DocsPage() {
     ) ?? [];
   const allDbs = useQuery(api.databases.listAll) ?? [];
   const addDoc = useMutation(api.docs.add);
+  const discardUpload = useMutation(api.files.discardUnattached);
+  // Per-file upload failures, shown on the page until dismissed.
+  const [uploadErrors, setUploadErrors] = useState<string[]>([]);
   const [uploading, setUploading] = useState(0);
   const [dragOver, setDragOver] = useState(false);
-  const [viewing, setViewing] = useState<DocItem | null>(null);
+  // WHY an id, not the doc object: the viewer reads the doc live, so edits made in it
+  // (project, rename) show at once and a deletion elsewhere closes it.
+  const [viewingId, setViewingId] = useState<Id<"docs"> | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   // The projects database (relation target of the task source) for link options.
@@ -96,17 +101,27 @@ export function DocsPage() {
           headers: { "Content-Type": mime },
           body: file,
         });
-        if (!res.ok) throw new Error(`upload ${res.status}`);
+        if (!res.ok) throw new Error(`upload failed (${res.status})`);
         const { storageId } = (await res.json()) as { storageId: string };
-        await addDoc({
-          name: file.name,
-          storageId: storageId as Id<"_storage">,
-          mime,
-          size: file.size,
-          projectRowId: projectFilter ? (projectFilter as Id<"rows">) : undefined,
-        });
+        try {
+          await addDoc({
+            name: file.name,
+            storageId: storageId as Id<"_storage">,
+            mime,
+            size: file.size,
+            projectRowId: projectFilter ? (projectFilter as Id<"rows">) : undefined,
+          });
+        } catch (err) {
+          // The file is in storage but nothing points at it: take it back out.
+          await discardUpload({ storageId: storageId as Id<"_storage"> }).catch((discardErr) =>
+            console.warn("Could not remove the stranded upload", discardErr)
+          );
+          throw err;
+        }
       } catch (err) {
-        console.error("doc upload failed", err);
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error("doc upload failed", file.name, err);
+        setUploadErrors((list) => [...list, `${file.name}: ${reason}`]);
       } finally {
         setUploading((n) => n - 1);
       }
@@ -171,6 +186,24 @@ export function DocsPage() {
           in-app{projectFilter ? " — uploads link to the selected project" : ""}.
         </p>
 
+        {uploadErrors.length > 0 && (
+          <div className="mb-4 flex items-start gap-2 rounded-lg border border-[var(--pal-red)]/40 bg-hov px-3 py-2 text-[13px] text-[var(--pal-red)]">
+            <div className="min-w-0 flex-1">
+              <p className="font-semibold">
+                {uploadErrors.length === 1 ? "1 file wasn't uploaded" : `${uploadErrors.length} files weren't uploaded`}
+              </p>
+              {uploadErrors.map((e, i) => (
+                <p key={i} className="truncate text-ink-2" title={e}>
+                  {e}
+                </p>
+              ))}
+            </div>
+            <button onClick={() => setUploadErrors([])} className="text-[12px] text-ink-3 hover:text-ink">
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {docs.length === 0 && uploading === 0 ? (
           <div
             className={cn(
@@ -189,7 +222,7 @@ export function DocsPage() {
               return (
                 <button
                   key={d._id}
-                  onClick={() => setViewing(d as DocItem)}
+                  onClick={() => setViewingId(d._id)}
                   className="group flex flex-col rounded-lg border border-border bg-surface p-3 text-left hover:border-accent"
                   style={{ boxShadow: "var(--shadow)" }}
                 >
@@ -226,11 +259,11 @@ export function DocsPage() {
         </div>
       )}
 
-      {viewing && (
+      {viewingId && (
         <DocViewer
-          doc={viewing}
+          docId={viewingId}
           projectRows={projectRows ?? []}
-          onClose={() => setViewing(null)}
+          onClose={() => setViewingId(null)}
         />
       )}
     </div>
