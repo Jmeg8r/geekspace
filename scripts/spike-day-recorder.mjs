@@ -266,6 +266,14 @@ const commands = {
     await sleep(WINDOW_SETTLE_MS);
     run("open", ["-a", "TextEdit", doc]);
     await sleep(WINDOW_SETTLE_MS);
+    // --keep-only works per app, not per window: any OTHER TextEdit window inside the crop
+    // would land in a committed image. Refuse instead (Codex review of PR 72).
+    const [sx, sy, sw, sh] = stage;
+    const intruders = helper("windows", "--bundle", TEXTEDIT_BUNDLE_ID)
+      .filter((w) => w.windowID !== win.windowID && w.x < sx + sw && w.x + w.w > sx && w.y < sy + sh && w.y + w.h > sy);
+    if (intruders.length) {
+      throw new Error(`${intruders.length} other TextEdit window(s) overlap the evidence crop; close or move them and re-run`);
+    }
     results.stage = { rect: stage };
     for (const [label, exclude] of [["control", ""], ["excluded", TEXTEDIT_BUNDLE_ID]]) {
       const out = path.join(OUT_DIR, `q1-stage-${label}.png`);
@@ -444,11 +452,14 @@ const commands = {
     await sleep(PROC_GAP_MS);
     const electron = spawn(path.join(ROOT, "node_modules", ".bin", "electron"), [path.join(ROOT, "scripts", "spike", "web-tone.cjs")], {
       env: { ...process.env, GS_TONE_SECONDS: String(WEB_TONE_SECONDS), GS_TONE_REAL_MIC: "1" }, stdio: ["ignore", "pipe", "inherit"] });
-    let started = null;
-    electron.stdout.on("data", (chunk) => { started ??= JSON.parse(String(chunk).split("\n")[0]); });
-    const exited = new Promise((resolve) => electron.on("exit", resolve));
+    let out = "";
+    electron.stdout.on("data", (chunk) => { out += chunk; });
+    const exited = new Promise((resolve, reject) => { electron.on("close", resolve); electron.on("error", reject); });
     const lines = await watch.done;
-    await exited;
+    const code = await exited;
+    // A denied or failed getUserMedia exits 1 without "started": not a measurement.
+    const started = jsonLines(out).find((event) => event.event === "started") ?? null;
+    if (code !== 0 || !started) throw new Error(`web-mic probe failed (exit ${code}, started ${started ? "yes" : "no"}); nothing saved`);
     save("q4-web-mic", { started, electronMainPid: electron.pid,
       events: lines.filter((line) => /Electron/.test(line.bundle ?? "") || line.reason === "gone")
         .map(({ t, reason, bundle, pid, responsibleBundle, input, output }) => ({ t, reason, bundle, pid, responsibleBundle, input, output })) });
