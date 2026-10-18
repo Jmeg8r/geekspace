@@ -7,10 +7,10 @@
 // talks to http://127.0.0.1:3210 (baked at build time by Vite); our job is to
 // make sure something is actually listening there before the window opens.
 import { app } from "electron";
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { killBackendProcessSync, spawnBackend, stopBackendProcess, waitHealthy } from "./backendProcess.mjs";
 import { BACKEND_VERSION, backendCachePath } from "./backendVersion.mjs";
 import { seedDataDirectory } from "./dataDirectory.mjs";
 import { syncFunctions } from "./functionSync.mjs";
@@ -70,9 +70,8 @@ function seedDir() {
 
 // --- module state --------------------------------------------------------
 
-let child = null; // the spawned backend process, or null if we attached/it exited
+let backend = null; // spawnBackend's state for the process we started, or null if we attached
 let managed = false; // true only when WE started the backend (so we own stopping it)
-let exitInfo = null; // {code, signal} once a managed backend process has exited
 let logStream = null;
 let functionSync = null; // syncFunctions' result for this launch, or null when attached
 
@@ -89,25 +88,6 @@ async function isHealthy(timeoutMs = 1500) {
   } catch {
     return false;
   }
-}
-
-/** Poll /version until healthy or the deadline passes. Throws on timeout. */
-async function waitHealthy(deadlineMs = 30000, intervalMs = 400) {
-  const start = Date.now();
-  while (Date.now() - start < deadlineMs) {
-    if (await isHealthy()) return;
-    // If the child died while we were waiting, fail fast with its log (the exit
-    // handler nulls `child`, so we read the recorded exit info, not child).
-    if (managed && exitInfo) {
-      throw new Error(
-        `Convex backend exited early (code ${exitInfo.code}). See ${logPath()}`
-      );
-    }
-    await new Promise((r) => setTimeout(r, intervalMs));
-  }
-  throw new Error(
-    `Convex backend did not become healthy within ${deadlineMs}ms. See ${logPath()}`
-  );
 }
 
 function logPath() {
@@ -195,19 +175,10 @@ export async function startOrAttach() {
   ];
 
   log(`Starting backend: ${bin} (cwd ${DATA_DIR})`);
-  exitInfo = null;
-  child = spawn(bin, args, { cwd: DATA_DIR, stdio: ["ignore", "pipe", "pipe"] });
+  backend = spawnBackend(bin, args, { cwd: DATA_DIR, log, output: (d) => logStream?.write(d) });
   managed = true;
 
-  child.stdout.on("data", (d) => logStream?.write(d));
-  child.stderr.on("data", (d) => logStream?.write(d));
-  child.on("exit", (code, signal) => {
-    log(`Backend process exited (code ${code}, signal ${signal}).`);
-    exitInfo = { code, signal };
-    child = null;
-  });
-
-  await waitHealthy();
+  await waitHealthy(backend, { isHealthy, logPath: logPath() });
   log("Backend healthy on :3210.");
 
   // Only for a backend we started: when attached, `convex dev` owns the functions.
@@ -225,46 +196,14 @@ export async function startOrAttach() {
 
 /** Stop the backend if (and only if) we started it. Safe to call repeatedly. */
 export async function stopBackend() {
-  if (!managed || !child) return;
-  const proc = child;
-  log("Stopping backend (SIGTERM)…");
-  // WHY this is safe on Windows too: Node maps POSIX signals to
-  // TerminateProcess there, so this is effectively an ungraceful kill (no
-  // signal handler runs, unlike SIGTERM on POSIX). The data dir is WAL-mode
-  // SQLite, so crash recovery on next open is the safety contract — the
-  // Windows path is power-cut-equivalent, and committed transactions are
-  // durable either way.
-  proc.kill("SIGTERM");
-
-  await new Promise((resolve) => {
-    const killTimer = setTimeout(() => {
-      log("Backend did not exit in time — SIGKILL.");
-      try {
-        proc.kill("SIGKILL");
-      } catch {
-        /* already gone */
-      }
-      resolve();
-    }, 5000);
-    proc.on("exit", () => {
-      clearTimeout(killTimer);
-      resolve();
-    });
-  });
-
-  child = null;
+  if (!managed || !backend) return;
+  await stopBackendProcess(backend, log);
   managed = false;
 }
 
 /** Synchronous best-effort kill for process-exit / crash paths. */
 export function killBackendSync() {
-  if (managed && child) {
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      /* already gone */
-    }
-  }
+  if (managed && backend) killBackendProcessSync(backend);
 }
 
 // --- accessors -----------------------------------------------------------
