@@ -1,0 +1,12 @@
+{
+  "control": {
+    "status": 0,
+    "summary": "{\"dbfs\":-15.271000000000001,\"event\":\"summary\",\"excludedProcesses\":0,\"peak\":0.26590824127197266,\"rms\":0.17235978050807915,\"samples\":188416}",
+    "stderr": ""
+  },
+  "excluded": {
+    "status": 0,
+    "summary": "{\"dbfs\":-999,\"event\":\"summary\",\"excludedProcesses\":0,\"peak\":0,\"rms\":0,\"samples\":189440}",
+    "stderr": ""
+  }
+}

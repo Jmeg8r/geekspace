@@ -1,0 +1,36 @@
+{
+  "frames": 231,
+  "spanMinutes": 57.8,
+  "hammingThreshold": 8,
+  "intervals": {
+    "15": {
+      "ticks": 231,
+      "kept": 124,
+      "mbPerHour": 20.2,
+      "mbPer8hDay": 161.6,
+      "gbPer30Days": 4.85
+    },
+    "30": {
+      "ticks": 116,
+      "kept": 75,
+      "mbPerHour": 12.35,
+      "mbPer8hDay": 98.8,
+      "gbPer30Days": 2.96
+    },
+    "60": {
+      "ticks": 58,
+      "kept": 41,
+      "mbPerHour": 6.76,
+      "mbPer8hDay": 54.07,
+      "gbPer30Days": 1.62
+    }
+  },
+  "perFrame": {
+    "meanCaptureMs": 64.58,
+    "meanEncodeMs": 52.45,
+    "meanHeicKB": 161.4,
+    "meanOcrMsKept": 320.86
+  },
+  "audioOpusMbPerHourPerStream": 14.4,
+  "note": "Storage and kept counts from the one-hour run. CPU fields removed: they used the replay accounting Codex flagged on PR 71; see q6-shots-cpu.json."
+}

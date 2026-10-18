@@ -1,0 +1,26 @@
+{
+  "sdkVersion": "0.3.172",
+  "baseUrl": "http://127.0.0.1:51333",
+  "runs": [
+    {
+      "label": "no ANTHROPIC_API_KEY (ARCHITECT today)",
+      "apiKeySource": "none",
+      "firstResult": null,
+      "error": "Claude Code process aborted by user",
+      "messagesRequests": 8,
+      "credentialSent": [
+        "x-api-key: absent; authorization: Bearer <OAuth access token>"
+      ]
+    },
+    {
+      "label": "ANTHROPIC_API_KEY set",
+      "apiKeySource": "ANTHROPIC_API_KEY",
+      "firstResult": null,
+      "error": "Claude Code process aborted by user",
+      "messagesRequests": 8,
+      "credentialSent": [
+        "x-api-key: the fake test key; authorization: absent"
+      ]
+    }
+  ]
+}
