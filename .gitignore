@@ -48,3 +48,6 @@ docs/article-assets/_replaced-web-captures/
 .lefthook-local.yml
 .cr-cache/
 *.cr-review.md
+
+# Swift build output (native helper; binary is built at package time, never committed)
+native/gs-capture/.build/
