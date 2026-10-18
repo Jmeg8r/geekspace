@@ -100,3 +100,33 @@ checkout instead. A marker without an ordinal means "unknown age" and deploys, a
 - **A `deploy:local` that fails** still leaves its ordinal in the marker, so a packaged
   build older than that checkout refuses to deploy until a newer build runs. This errs
   toward refusing a downgrade (conservative); the env var gets past it.
+
+## Verification (2026-10-17, Mac Studio)
+
+- Tests first: `3ddaffb^` had 20 failing / 18 passing in `tests/functionSync.test.ts` +
+  `tests/commitOrdinal.test.ts`; the 18 were today's behaviour that must not change.
+- `npm run verify`: oxlint + tsc clean, 35 files / 274 tests. `snyk test`: 3 issues, all
+  pre-existing (no `package*.json` change on this branch).
+- `npm run package`: `Geekspace.app/.../convex-functions/manifest.json` and the seed's
+  `functions.json` both carry `ordinal: 1792283562` = `git log -1 --format=%ct` at `3ddaffb`.
+- Live probe against the real data dir (marker only; original backed up and restored
+  byte-identical afterwards):
+  - Marker `{hash: "probe-newer-build", ordinal: bundle + 1 day}` → log line
+    `WARNING: bundled functions 71e399550a61 are older than the live ones …; skipping the
+    deploy`, the dialog below, marker byte-identical after, Quit stopped the backend
+    cleanly. Run twice.
+  - Same marker with `GEEKSPACE_ALLOW_FUNCTION_DOWNGRADE=1` → `downgrade forced`, deployed
+    in 158 ms, marker rewritten with the bundle's hash and older ordinal.
+
+![Downgrade dialog](./probe-downgrade-dialog.png)
+
+## Deviations
+
+- **`writeMarker` accepts `ordinal: null`.** The first cut refused to deploy a bundle
+  without an ordinal; the decision-table test for "pre-ordinal bundle on an unknown-age
+  data dir → deploy" caught it. A marker can now record "unknown age"; only
+  `recordExternalDeploy` insists on a real ordinal.
+- **Probe mechanics.** Computer use can't target an unsigned dev build's process, and
+  Electron holds SIGTERM until a modal closes, so James clicked Quit on both probe dialogs.
+  The worktree also needed `npm ci` and a copy of the gitignored
+  `.convex/local/default/config.json` before prebake would run (environment, not code).
