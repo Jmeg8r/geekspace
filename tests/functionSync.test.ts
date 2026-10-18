@@ -253,7 +253,8 @@ describe("syncFunctions", () => {
   it("a failed schema check reports what failed but none of the offending document", async () => {
     const result = await sync(schemaFailure(BACKEND_SCHEMA_ERROR).fetchImpl);
     expect(result.status).toBe("failed");
-    expect(result.error?.tableName).toBe("pages");
+    expect(result.error).toBeInstanceOf(SyncError);
+    expect(result.error instanceof SyncError ? result.error.tableName : undefined).toBe("pages");
     for (const text of [result.error?.message ?? "", logs.join("\n")]) {
       expect(text).toContain('(table "pages")');
       expect(text).toContain('Document with ID "jh70tjr51xhd5mtgea997tndqn8ghtd7"');
