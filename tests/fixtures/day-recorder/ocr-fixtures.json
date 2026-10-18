@@ -1,0 +1,434 @@
+{
+  "header": "SYNTHETIC — invented text rendered at run time for the Day Recorder OCR spike; no real screenshots, names or data.",
+  "width": 1920,
+  "height": 1080,
+  "fixtures": [
+    {
+      "name": "01-inbox",
+      "background": "#ffffff",
+      "lines": [
+        {
+          "text": "Inbox (12 unread)",
+          "x": 80,
+          "y": 60.0,
+          "size": 15
+        },
+        {
+          "text": "Avery Quinn — Quarterly roadmap draft attached",
+          "x": 80,
+          "y": 84.0,
+          "size": 15
+        },
+        {
+          "text": "Jordan Ellis — Re: lunch on Friday?",
+          "x": 80,
+          "y": 108.0,
+          "size": 15
+        },
+        {
+          "text": "Build Bot — Pipeline 4821 passed on main",
+          "x": 80,
+          "y": 132.0,
+          "size": 15
+        },
+        {
+          "text": "Morgan Reyes — Invoice INV-20931 is due October 30",
+          "x": 80,
+          "y": 156.0,
+          "size": 15
+        },
+        {
+          "text": "Taylor Brooks — Can we move the sync to 3:30 PM?",
+          "x": 80,
+          "y": 180.0,
+          "size": 15
+        }
+      ]
+    },
+    {
+      "name": "02-code-dark",
+      "background": "#1e1e1e",
+      "lines": [
+        {
+          "text": "export function scheduleBlocks(tasks: Task[], now: number) {",
+          "x": 60,
+          "y": 80.0,
+          "size": 14,
+          "mono": true,
+          "color": "#d4d4d4"
+        },
+        {
+          "text": "  const ready = tasks.filter((t) => t.dependsOn.length === 0);",
+          "x": 60,
+          "y": 102.4,
+          "size": 14,
+          "mono": true,
+          "color": "#d4d4d4"
+        },
+        {
+          "text": "  for (const task of ready) {",
+          "x": 60,
+          "y": 124.8,
+          "size": 14,
+          "mono": true,
+          "color": "#d4d4d4"
+        },
+        {
+          "text": "    placeBlock(task, nextFreeSlot(now, task.estimateMin));",
+          "x": 60,
+          "y": 147.2,
+          "size": 14,
+          "mono": true,
+          "color": "#d4d4d4"
+        },
+        {
+          "text": "  }",
+          "x": 60,
+          "y": 169.6,
+          "size": 14,
+          "mono": true,
+          "color": "#d4d4d4"
+        },
+        {
+          "text": "  return ready.length;",
+          "x": 60,
+          "y": 192.0,
+          "size": 14,
+          "mono": true,
+          "color": "#d4d4d4"
+        },
+        {
+          "text": "}",
+          "x": 60,
+          "y": 214.4,
+          "size": 14,
+          "mono": true,
+          "color": "#d4d4d4"
+        }
+      ]
+    },
+    {
+      "name": "03-chat",
+      "background": "#f4f4f6",
+      "lines": [
+        {
+          "text": "#design-review",
+          "x": 120,
+          "y": 70.0,
+          "size": 16
+        },
+        {
+          "text": "Riley Park  10:42 AM",
+          "x": 120,
+          "y": 95.6,
+          "size": 16
+        },
+        {
+          "text": "I'll send the deck by Thursday so we can review it together.",
+          "x": 120,
+          "y": 121.2,
+          "size": 16
+        },
+        {
+          "text": "Casey Morgan  10:44 AM",
+          "x": 120,
+          "y": 146.8,
+          "size": 16
+        },
+        {
+          "text": "Sounds good. Please include the pricing slide and the Q3 numbers.",
+          "x": 120,
+          "y": 172.4,
+          "size": 16
+        },
+        {
+          "text": "Riley Park  10:45 AM",
+          "x": 120,
+          "y": 198.0,
+          "size": 16
+        },
+        {
+          "text": "Will do. Blocking two hours tomorrow morning to finish it.",
+          "x": 120,
+          "y": 223.6,
+          "size": 16
+        }
+      ]
+    },
+    {
+      "name": "04-calendar",
+      "background": "#ffffff",
+      "lines": [
+        {
+          "text": "Monday 9:00  Standup with platform team",
+          "x": 100,
+          "y": 90.0,
+          "size": 18
+        },
+        {
+          "text": "Monday 13:00  Interview loop debrief",
+          "x": 100,
+          "y": 118.8,
+          "size": 18
+        },
+        {
+          "text": "Tuesday 10:30  Vendor demo: Northwind Analytics",
+          "x": 100,
+          "y": 147.6,
+          "size": 18
+        },
+        {
+          "text": "Wednesday 15:00  Dentist appointment",
+          "x": 100,
+          "y": 176.4,
+          "size": 18
+        },
+        {
+          "text": "Thursday 11:00  Deck review with Casey",
+          "x": 100,
+          "y": 205.2,
+          "size": 18
+        },
+        {
+          "text": "Friday 16:00  Weekly retro",
+          "x": 100,
+          "y": 234.0,
+          "size": 18
+        }
+      ]
+    },
+    {
+      "name": "05-terminal",
+      "background": "#000000",
+      "lines": [
+        {
+          "text": "$ npm run verify",
+          "x": 40,
+          "y": 40.0,
+          "size": 13,
+          "mono": true,
+          "color": "#33ff66"
+        },
+        {
+          "text": "> oxlint && tsc -b --noEmit && vitest run",
+          "x": 40,
+          "y": 60.8,
+          "size": 13,
+          "mono": true,
+          "color": "#33ff66"
+        },
+        {
+          "text": "Found 0 warnings and 0 errors.",
+          "x": 40,
+          "y": 81.6,
+          "size": 13,
+          "mono": true,
+          "color": "#33ff66"
+        },
+        {
+          "text": "Test Files  41 passed (41)",
+          "x": 40,
+          "y": 102.4,
+          "size": 13,
+          "mono": true,
+          "color": "#33ff66"
+        },
+        {
+          "text": "Tests  209 passed (209)",
+          "x": 40,
+          "y": 123.2,
+          "size": 13,
+          "mono": true,
+          "color": "#33ff66"
+        },
+        {
+          "text": "Duration  18.42s",
+          "x": 40,
+          "y": 144.0,
+          "size": 13,
+          "mono": true,
+          "color": "#33ff66"
+        }
+      ]
+    },
+    {
+      "name": "06-spreadsheet",
+      "background": "#ffffff",
+      "lines": [
+        {
+          "text": "Region    Q1 Revenue    Q2 Revenue    Growth",
+          "x": 80,
+          "y": 100.0,
+          "size": 15,
+          "mono": true
+        },
+        {
+          "text": "North     1,204,330     1,388,902     15.3%",
+          "x": 80,
+          "y": 124.0,
+          "size": 15,
+          "mono": true
+        },
+        {
+          "text": "South     982,114       1,001,776     2.0%",
+          "x": 80,
+          "y": 148.0,
+          "size": 15,
+          "mono": true
+        },
+        {
+          "text": "East      1,550,021     1,497,640     -3.4%",
+          "x": 80,
+          "y": 172.0,
+          "size": 15,
+          "mono": true
+        },
+        {
+          "text": "West      731,908       864,215       18.1%",
+          "x": 80,
+          "y": 196.0,
+          "size": 15,
+          "mono": true
+        }
+      ]
+    },
+    {
+      "name": "07-document",
+      "background": "#fdfcf8",
+      "lines": [
+        {
+          "text": "Project Kestrel: design notes",
+          "x": 160,
+          "y": 120.0,
+          "size": 17
+        },
+        {
+          "text": "The ingestion service batches events every fifteen minutes and writes",
+          "x": 160,
+          "y": 147.2,
+          "size": 17
+        },
+        {
+          "text": "them to cold storage. Retries back off exponentially up to six attempts.",
+          "x": 160,
+          "y": 174.4,
+          "size": 17
+        },
+        {
+          "text": "Open question: should failed batches page the on-call engineer, or only",
+          "x": 160,
+          "y": 201.6,
+          "size": 17
+        },
+        {
+          "text": "raise a ticket in the triage queue for the next business day?",
+          "x": 160,
+          "y": 228.8,
+          "size": 17
+        }
+      ]
+    },
+    {
+      "name": "08-slide",
+      "background": "#0b3d91",
+      "lines": [
+        {
+          "text": "Launch Readiness Review",
+          "x": 300,
+          "y": 300.0,
+          "size": 54,
+          "color": "#ffffff"
+        },
+        {
+          "text": "Ship date: November 14",
+          "x": 300,
+          "y": 381.0,
+          "size": 54,
+          "color": "#ffffff"
+        },
+        {
+          "text": "Owner: Avery Quinn",
+          "x": 300,
+          "y": 462.0,
+          "size": 54,
+          "color": "#ffffff"
+        }
+      ]
+    },
+    {
+      "name": "09-settings-lowcontrast",
+      "background": "#ececec",
+      "lines": [
+        {
+          "text": "Notifications",
+          "x": 200,
+          "y": 200.0,
+          "size": 11,
+          "color": "#8a8a8a"
+        },
+        {
+          "text": "Show previews: When unlocked",
+          "x": 200,
+          "y": 217.6,
+          "size": 11,
+          "color": "#8a8a8a"
+        },
+        {
+          "text": "Badge app icon",
+          "x": 200,
+          "y": 235.2,
+          "size": 11,
+          "color": "#8a8a8a"
+        },
+        {
+          "text": "Play sound for incoming messages",
+          "x": 200,
+          "y": 252.8,
+          "size": 11,
+          "color": "#8a8a8a"
+        },
+        {
+          "text": "Allow notifications from Kestrel Sync",
+          "x": 200,
+          "y": 270.4,
+          "size": 11,
+          "color": "#8a8a8a"
+        }
+      ]
+    },
+    {
+      "name": "10-article",
+      "background": "#fff4e5",
+      "lines": [
+        {
+          "text": "How We Cut Build Times in Half",
+          "x": 120,
+          "y": 80.0,
+          "size": 36,
+          "color": "#222222"
+        },
+        {
+          "text": "Caching the dependency graph saved eleven minutes per build.",
+          "x": 120,
+          "y": 170.0,
+          "size": 16,
+          "color": "#444444"
+        },
+        {
+          "text": "Remote execution handled the rest, with a 92 percent cache hit rate.",
+          "x": 120,
+          "y": 195.6,
+          "size": 16,
+          "color": "#444444"
+        },
+        {
+          "text": "Next we will measure flaky tests across 3,000 nightly runs.",
+          "x": 120,
+          "y": 221.2,
+          "size": 16,
+          "color": "#444444"
+        }
+      ]
+    }
+  ]
+}

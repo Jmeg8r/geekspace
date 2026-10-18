@@ -1,0 +1,15 @@
+{
+  "header": "SYNTHETIC \u2014 invented meeting text, spoken by macOS `say` at run time for the Day Recorder whisper spike.",
+  "paragraphs": [
+    "Good morning everyone, thanks for joining the weekly planning call.",
+    "First item: the onboarding redesign. Riley, where are we on the new welcome flow?",
+    "We finished the first three screens yesterday. I'll send the deck by Thursday so Casey can review it before Friday's demo.",
+    "Great. Please block two hours on Wednesday afternoon for the accessibility pass, and add a task to update the color tokens.",
+    "Second item: the billing migration. We moved forty percent of accounts last week with no failed payments.",
+    "The remaining accounts move in two batches, on October twenty eighth and November fourth.",
+    "Jordan will draft a status update for the platform channel and share it before it goes out.",
+    "Last item: the quarterly offsite. We're looking at the second week of December, probably in Austin.",
+    "If you have dietary restrictions, reply to the survey by the end of the month.",
+    "That's everything for today. Thanks, and see you next week."
+  ]
+}
