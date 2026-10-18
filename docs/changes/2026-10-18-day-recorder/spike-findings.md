@@ -22,7 +22,7 @@ JSON files listed at the end. Real screen frames were scored in memory and never
 | 3 | CoreAudio process objects report a denylisted app's audio | **Pass**, but only by polling: listeners never fire for input |
 | 4 | Call detection by mic ownership | **Zoom: pass.** Chromium (browser/Meet stand-in): pass via helper mapping. FaceTime, Teams, Slack: not run |
 | 5 | Vision OCR speed and accuracy | 110 ms/frame, 91.7% word recall at 1x; one blind spot (grey-on-grey text) with a fix |
-| 6 | Storage and CPU | SHOT_SEC **30**; whisper **small.en** |
+| 6 | Storage and CPU | SHOT_SEC **30** (12 MB/hour, ~1% of one core); whisper **small.en** |
 | 7 | Entitlements on a signed build | **No new entitlement.** Two TCC grants; one usage string to set |
 | 8 | F4: `ANTHROPIC_API_KEY` switches Agent SDK billing | **Yes, confirmed** without any request leaving the machine |
 | 9 | F8: `tmutil addexclusion` without admin | **Pass** (sticky form); `-p` needs root |
@@ -68,8 +68,10 @@ window can appear. In the excluded frame, the backdrop shows through where TextE
 Also measured: **SCK calls can hang forever.** During the spike, `captureImage` and
 `startCapture` stopped returning (no error, no CPU), and every other process's SCK capture
 hung too until the stuck process was killed. Then capture recovered at once. `gs-capture` now
-wraps every SCK call in a 10 s timeout that exits non-zero, which is the R3 "Not recording"
-path for the supervisor. The trigger was not isolated: it began while SCK audio, Electron and
+runs every SCK call under a 10 s watchdog that exits the process non-zero, which is the R3
+"Not recording" path for the supervisor. It has to be a watchdog: a task-group timeout
+still waits for a hung child that ignores cancellation (Codex, PR 71).
+`gs-capture selftest-timeout` proves it: a never-resumed continuation exits 1 after 1.3 s. The trigger was not isolated: it began while SCK audio, Electron and
 the screenshot loop ran together.
 
 ## Q2. System-audio exclusion (`audio`, `web-audio`, `tap`)
@@ -202,17 +204,30 @@ the same timeline at every 2nd and 4th tick, re-running the skip logic
 (`shots-analyze`), so all three intervals see identical activity. Per-hour figures divide by
 231 × 15 s (57.8 min), not the measured 59.8 min, so they overstate by about 3.5%.
 
-| SHOT_SEC | Ticks | Kept | MB/hour | MB per 8 h day | GB per 30 days | Helper CPU s/hour | % of one core |
-|---|---|---|---|---|---|---|---|
-| 15 | 231 | 124 | 20.2 | 162 | 4.85 | 59.7 | 1.66 |
-| **30** | 116 | 75 | **12.4** | **99** | **2.96** | **30.0** | **0.83** |
-| 60 | 58 | 41 | 6.8 | 54 | 1.62 | 14.8 | 0.41 |
+| SHOT_SEC | Ticks | Kept | MB/hour | MB per 8 h day | GB per 30 days |
+|---|---|---|---|---|---|
+| 15 | 231 | 124 | 20.2 | 162 | 4.85 |
+| **30** | 116 | 75 | **12.4** | **99** | **2.96** |
+| 60 | 58 | 41 | 6.8 | 54 | 1.62 |
 
 Per frame: capture 65 ms, HEIC encode 52 ms, 161 KB mean. OCR averaged 321 ms on kept real
 frames, about 3x the fixtures: real screens carry far more text (one frame: 4,627
-characters). Helper CPU covers capture, hash, encode and OCR. It excludes WindowServer and
-replayd, and the hour overlapped other spike tests, so treat it as an upper bound for the
-helper and a lower bound for the system.
+characters).
+
+**Helper CPU** (corrected after Codex review of PR 71). The first analysis charged no OCR to
+frames that only the 30/60 s replay kept, and it subtracted OCR wall time from CPU time. A
+second, 20-minute run (77 ticks) measured OCR CPU separately per frame:
+- **0.045 CPU-s per tick** for capture, hash and encode;
+- **0.395 CPU-s per kept frame** for OCR (mean of 31).
+
+| SHOT_SEC | Model: the hour's kept counts × per-frame CPU | Direct: 20-minute replay |
+|---|---|---|
+| 15 | 59.7 CPU-s/hour (1.66% of one core) | 46.8 (1.30%) |
+| **30** | **35.0 (0.97%)** | **28.8 (0.80%)** |
+| 60 | 18.9 (0.52%) | 19.3 (0.54%) |
+
+OCR is most of the cost, so CPU follows the kept count. Helper CPU excludes WindowServer and
+replayd, and both runs overlapped other work on the machine.
 
 Settled: **SHOT_SEC 30** (the spec default). Every interval is cheap on this machine, so
 storage is not what decides it. What decides it is the OCR text each kept frame adds to
@@ -347,7 +362,9 @@ duration. That approximation hides where in the boundary the loss falls.
 
 - `q1-stage-control.png`, `q1-stage-excluded.png`: synthetic stage, cropped
 - `results/*.json`: the driver's result JSON for each question, copied from the run (counts,
-  levels, timings and bundle IDs only; no frames, hashes, text or credentials)
+  levels, timings and bundle IDs only; no frames, hashes, text or credentials).
+  `q6-shots-storage-hour.json` is the hour's storage, and `q6-shots-cpu.json` is the
+  corrected CPU run.
 
 ## Not done in this spike
 

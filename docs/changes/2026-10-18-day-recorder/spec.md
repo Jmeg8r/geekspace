@@ -140,7 +140,7 @@ Each requirement traces to the intent.
   *Traces to:* open question 1.
 - **R6. Screenshots and OCR.**
   - A screenshot is taken every `SHOT_SEC` (default **30**, settled by the spike: 12 MB/hour,
-    3 GB per 30 days, 0.8% of one core), skipped when the frame is unchanged (a 32x32
+    3 GB per 30 days, ~1% of one core), skipped when the frame is unchanged (a 32x32
     difference hash within 8 bits of the last kept frame).
   - Stored as HEIC at reduced resolution.
   - OCR is local (Vision). OCR text goes into Convex; the image stays on disk.

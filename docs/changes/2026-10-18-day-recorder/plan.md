@@ -119,8 +119,9 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     when a frame yields few lines (spike Q5);
   - a process-audio watcher that polls every 100 ms (listeners alone miss mic use on macOS
     27.0) and ignores `replayd`, `avconferenced` and our own processes (spike Q3, Q4);
-  - a 10 s timeout on every SCK call, exiting non-zero so the supervisor shows
-    "Not recording" (spike Q1);
+  - a 10 s watchdog on every SCK call that exits the process non-zero, so the supervisor
+    shows "Not recording"; a task-group timeout is not enough, because a hung SCK call
+    ignores cancellation (spike Q1);
   - JSON-lines protocol on stdout.
 - `scripts/build-gs-capture.mjs`, run by `package`: runs `swiftc` on darwin only, and
   signing is inherited through `extraResources`.

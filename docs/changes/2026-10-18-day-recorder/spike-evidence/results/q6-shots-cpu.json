@@ -1,0 +1,47 @@
+{
+  "frames": 77,
+  "spanMinutes": 20.2,
+  "hammingThreshold": 8,
+  "intervals": {
+    "15": {
+      "ticks": 77,
+      "kept": 31,
+      "mbPerHour": 15.39,
+      "mbPer8hDay": 123.14,
+      "gbPer30Days": 3.69,
+      "helperCpuSecPerHour": 46.8,
+      "helperCpuPercentOfOneCore": 1.3
+    },
+    "30": {
+      "ticks": 39,
+      "kept": 20,
+      "mbPerHour": 9.86,
+      "mbPer8hDay": 78.9,
+      "gbPer30Days": 2.37,
+      "helperCpuSecPerHour": 28.8,
+      "helperCpuPercentOfOneCore": 0.799
+    },
+    "60": {
+      "ticks": 20,
+      "kept": 14,
+      "mbPerHour": 6.91,
+      "mbPer8hDay": 55.25,
+      "gbPer30Days": 1.66,
+      "helperCpuSecPerHour": 19.3,
+      "helperCpuPercentOfOneCore": 0.535
+    }
+  },
+  "cpuModel": {
+    "meanBaseCpuSecPerTick": 0.0452,
+    "meanOcrCpuSecPerKeptFrame": 0.3948,
+    "ocrMeasuredFrames": 31
+  },
+  "perFrame": {
+    "meanCaptureMs": 72.15,
+    "meanEncodeMs": 54.61,
+    "meanHeicKB": 174.1,
+    "meanOcrMsKept": 388.18
+  },
+  "audioOpusMbPerHourPerStream": 14.4,
+  "note": "20-minute run with OCR CPU measured separately per frame (helper e85d44f). Storage here is from 20 minutes only; the one-hour storage figures are in q6-shots-storage-hour.json."
+}
