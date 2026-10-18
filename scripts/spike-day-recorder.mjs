@@ -266,13 +266,17 @@ const commands = {
     await sleep(WINDOW_SETTLE_MS);
     run("open", ["-a", "TextEdit", doc]);
     await sleep(WINDOW_SETTLE_MS);
-    // --keep-only works per app, not per window: any OTHER TextEdit window inside the crop
-    // would land in a committed image. Refuse instead (Codex review of PR 72).
+    // --keep-only works per app, not per window: ANY other window of a kept app, on any
+    // layer (documents, panels, sheets), inside the crop would land in a committed image.
+    // Only the canary document and the backdrop may be there (Codex review of PR 72).
     const [sx, sy, sw, sh] = stage;
-    const intruders = helper("windows", "--bundle", TEXTEDIT_BUNDLE_ID)
-      .filter((w) => w.windowID !== win.windowID && w.x < sx + sw && w.x + w.w > sx && w.y < sy + sh && w.y + w.h > sy);
+    const kept = helper("windows", "--bundle", `${TEXTEDIT_BUNDLE_ID},${TONE_BUNDLE_ID}`, "--layers", "all");
+    const backdrop = kept.filter((w) => w.bundle === TONE_BUNDLE_ID && w.layer === 0);
+    if (backdrop.length !== 1) throw new Error(`expected exactly one backdrop window, found ${backdrop.length}`);
+    const allowed = new Set([win.windowID, backdrop[0].windowID]);
+    const intruders = kept.filter((w) => !allowed.has(w.windowID) && w.x < sx + sw && w.x + w.w > sx && w.y < sy + sh && w.y + w.h > sy);
     if (intruders.length) {
-      throw new Error(`${intruders.length} other TextEdit window(s) overlap the evidence crop; close or move them and re-run`);
+      throw new Error(`${intruders.length} other window(s) of a kept app overlap the evidence crop; close or move them and re-run`);
     }
     results.stage = { rect: stage };
     for (const [label, exclude] of [["control", ""], ["excluded", TEXTEDIT_BUNDLE_ID]]) {
