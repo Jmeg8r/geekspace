@@ -303,11 +303,25 @@ describe("syncFunctions", () => {
 });
 
 describe("syncFunctions ordering", () => {
-  it("treats the same hash as current whatever the ordinals say", async () => {
+  it("treats the same hash as current whatever the ordinals say, and never lowers the recorded one", async () => {
     writeMarkerFile({ hash: readBundle(bundleDir()).hash, ordinal: BUNDLE_ORDINAL + DAY_S });
+    const before = fs.readFileSync(markerPath(), "utf8");
     const backend = fakeBackend(happyReplies());
     expect((await sync(backend.fetchImpl)).status).toBe("current");
     expect(backend.calls).toEqual([]);
+    expect(fs.readFileSync(markerPath(), "utf8")).toBe(before);
+  });
+
+  it.each([
+    ["an older ordinal", BUNDLE_ORDINAL - DAY_S],
+    ["no ordinal (a data dir from before ordinals)", undefined],
+  ])("same hash under %s: no deploy, but the marker learns this bundle's ordinal", async (_label, ordinal) => {
+    // Otherwise a later, different bundle between the two ages would deploy unrefused.
+    writeMarkerFile({ hash: readBundle(bundleDir()).hash, ordinal });
+    const backend = fakeBackend(happyReplies());
+    expect((await sync(backend.fetchImpl)).status).toBe("current");
+    expect(backend.calls).toEqual([]);
+    expect(readMarker(dataDir())).toEqual({ hash: readBundle(bundleDir()).hash, ordinal: BUNDLE_ORDINAL });
   });
 
   it("deploys a newer bundle and records its ordinal", async () => {
