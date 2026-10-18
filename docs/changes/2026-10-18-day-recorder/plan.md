@@ -117,7 +117,7 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     live process objects, with `TapAutoStart` off; a tap that delivers no samples fails
     loudly (spike Q2);
   - **first proof obligation:** a second instance of a denylisted app that starts audio
-    mid-tap leaked in the spike (31 × 100 ms). The watcher must trigger a tap rebuild that
+    mid-tap leaked in the spike (27–31 × 100 ms). The watcher must trigger a tap rebuild that
     discards held-back system audio. Prove zero leaked windows with the spike's
     `late-second-instance` scenario before anything else in PR 3 builds on the tap;
   - Vision OCR, accurate, at point resolution, retried once on a luminance-thresholded copy
@@ -295,7 +295,7 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-10-18, PR 1, gate (2) tripped → system audio re-planned (James).**
   ScreenCaptureKit's app filter did not exclude audio from Chromium/Electron apps: −15 dBFS
   leaked, 3 of 3 runs, because the audio plays from a windowless helper SCK cannot list. It
-  also missed windowless apps and leaked 150–320 ms when a denylisted app launched
+  also missed windowless apps and leaked 150–390 ms when a denylisted app launched
   mid-stream. James chose to prototype a CoreAudio process tap. Excluding by bundle ID
   (`<id>` + `<id>.helper`, macOS 26+) plus live process objects was silent for helpers,
   windowless apps, late launches and concurrent instances, including on the signed build.

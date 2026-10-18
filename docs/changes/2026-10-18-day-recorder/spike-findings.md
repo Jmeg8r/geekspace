@@ -78,15 +78,18 @@ runs every SCK call under a 10 s watchdog that exits the process non-zero, which
 "Not recording" path for the supervisor. It has to be a watchdog: a task-group timeout
 still waits for a hung child that ignores cancellation (Codex, PR 71).
 `gs-capture selftest-timeout` proves it: a never-resumed continuation exits 1 after 1.3 s. The trigger was not isolated: it began while SCK audio, Electron and
-the screenshot loop ran together.
+the screenshot loop ran together. Separately, one later SCK audio start failed outright
+("Stream failed to start audio") and the retry succeeded. The fail-loud path is what
+caught it.
 
 ## Q2. System-audio exclusion (`audio`, `web-audio`, `tap`)
 
 **Method.** `SpikeTone.app` (`dev.geekspace.spike.tone`, built by the driver) plays a 440 Hz
 sine at 0.25 amplitude (−15.05 dBFS RMS). Each capture is 4 s at 48 kHz. Every result is
 accepted only if that run's tone was audible across the whole capture window (start before
-it, stop after it, and for Electron, a clean exit). Late-launch runs only need the tone to
-overlap the window. A tone that never played, or finished early, cannot pass as silence
+it, stop after it), with both timestamps taken by the tone process itself and, for
+Electron, a clean exit. Late-launch runs wait until the capture reports it is live, and the
+tone must start strictly inside the window. A tone that never played, or finished early, cannot pass as silence
 (Codex review, PR 71). The tables are from runs repeated under this check.
 `com.github.Electron` (the repo's Electron, playing WebAudio) stands in for any
 Chromium-based app.
@@ -99,9 +102,9 @@ Chromium-based app.
 | Tone, no exclusion | −15.05 dBFS |
 | Tone app (windowed) excluded | **−∞, peak 0.0** ✅ |
 | Tone app (windowless) excluded | **−15.05 dBFS** ❌ (not listed by SCK) |
-| Electron excluded (`excludedApps: 1`) | **−15.05 dBFS** ❌, 3 of 3 runs |
-| Tone launched after the stream started, static filter | leaked for the whole tone (63–65 × 100 ms windows, two runs) ❌ |
-| Same, re-listing apps every 200 ms + `updateContentFilter` | leaked 1–3 windows (150–320 ms, two runs) ❌ |
+| Electron excluded (`excludedApps: 1`) | **−15 to −16 dBFS** ❌, 4 of 4 runs |
+| Tone launched after the stream started, static filter | leaked for the whole tone (59–65 × 100 ms windows, three runs) ❌ |
+| Same, re-listing apps every 200 ms + `updateContentFilter` | leaked 1–3 windows (150–390 ms, three runs) ❌ |
 
 Chromium plays audio from a windowless helper process (`com.github.Electron.helper`).
 Excluding the app does not exclude the helper, and SCK can't list the helper. Chrome (Meet),
@@ -135,7 +138,7 @@ A browser can run several audio-using processes under one helper ID.
 | Tone app (windowed / windowless) excluded, with an older idle instance alive | **−∞** (`excludedProcesses: 2`) ✅ |
 | Electron excluded | **−∞** ✅ |
 | Electron launched after the tap started | **0 leaked windows** ✅ |
-| **A second instance starts audio after the tap exists** (an older instance already bound) | ❌ **31 × 100 ms windows leaked** (−16.46 dBFS) |
+| **A second instance starts audio after the tap exists** (an older instance already bound) | ❌ **27–31 × 100 ms windows leaked** (−16.5 to −16.8 dBFS, two runs) |
 
 **Design: `both`, plus a watcher-driven rebuild.** When the 100 ms process watcher (Q3) sees a
 new process object for a denylisted bundle, the helper must drop the system audio it has held
