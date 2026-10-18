@@ -1,6 +1,6 @@
 ---
 change: 2026-10-17-prebake-spawn-error
-status: draft
+status: accepted
 track: T1
 intent: ./intent.md
 linear: pending
@@ -51,6 +51,21 @@ Assertions: `rc == 1`; for each of `adminKey`, `instanceSecret` from
 `.convex/local/default/config.json`, `grep -cF <value> out.txt` is 0 (by value, never
 printed); positive control: grep for a string known to be in the output
 (`prebake work dir`) returns ≥1; `ls $T | grep gs-prebake-` is empty.
+
+The harness uses a fake `.convex/local/default/config.json` with dummy, distinctive
+`adminKey`/`instanceSecret` values (the binary never runs, so real secrets are not needed),
+and removes it afterwards.
+
+### Pre-fix control (origin/main 4f39fe7, 2026-10-17)
+
+```
+rc=1
+positive control 'prebake work dir': 1
+instanceSecret hits: 1        ← printed inside spawnargs of the unhandled 'error' event
+adminKey hits: 0
+leftover dirs in TMPDIR: 1 [gs-prebake-by6C5K]
+  contents: backend.log config.json selfhosted.env
+```
 
 ## Reported, not changed: electron/convexBackend.mjs
 

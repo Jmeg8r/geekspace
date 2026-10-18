@@ -1,8 +1,9 @@
 ---
 change: 2026-10-17-prebake-spawn-error
-status: draft
+status: accepted
 track: T1
 author: claude
+accepted_by: james
 linear: pending
 source: side session from forge PR #66 Codex round 1 [P2] (scripts/probe-schema-failure.mjs, commit 10803fa)
 ---
