@@ -133,9 +133,11 @@ enum Screen {
             var ocrCpu = 0.0
             var ocrChars = 0
             if !skipped {
-                lastKept = hash
                 let path = "\(dir)/frame-\(String(format: "%05d", index)).heic"
-                FileManager.default.createFile(atPath: path, contents: data)
+                // A frame that was not saved must not become the skip baseline, or later
+                // similar frames are dropped while nothing is on disk.
+                guard FileManager.default.createFile(atPath: path, contents: data) else { fail("cannot write \(path)") }
+                lastKept = hash
                 if runOCR {
                     let ocrCpuBefore = cpuSeconds()
                     let result = OCR.recognize(image, fast: false)

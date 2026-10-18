@@ -77,7 +77,10 @@ the screenshot loop ran together.
 ## Q2. System-audio exclusion (`audio`, `web-audio`, `tap`)
 
 **Method.** `SpikeTone.app` (`dev.geekspace.spike.tone`, built by the driver) plays a 440 Hz
-sine at 0.25 amplitude (−15.05 dBFS RMS). Each capture is 4 s at 48 kHz.
+sine at 0.25 amplitude (−15.05 dBFS RMS). Each capture is 4 s at 48 kHz. Every "excluded"
+result is accepted only if that run's tone logged a playback start inside the capture
+window (and, for Electron, exited 0). So a tone that never played cannot pass as silence
+(Codex review, PR 71; the recorded runs were repeated under this check).
 `com.github.Electron` (the repo's Electron, playing WebAudio) stands in for any
 Chromium-based app.
 
@@ -90,7 +93,7 @@ Chromium-based app.
 | Tone app (windowed) excluded | **−∞, peak 0.0** ✅ |
 | Tone app (windowless) excluded | **−15.05 dBFS** ❌ (not listed by SCK) |
 | Electron excluded (`excludedApps: 1`) | **−15.05 dBFS** ❌, 3 of 3 runs |
-| Tone launched after the stream started, static filter | leaked for 6.5 s (65 × 100 ms windows) ❌ |
+| Tone launched after the stream started, static filter | leaked for the whole tone (63–65 × 100 ms windows, two runs) ❌ |
 | Same, re-listing apps every 200 ms + `updateContentFilter` | leaked 1 window (~150 ms) ❌ |
 
 Chromium plays audio from a windowless helper process (`com.github.Electron.helper`).

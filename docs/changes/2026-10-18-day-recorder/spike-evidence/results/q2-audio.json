@@ -5,26 +5,18 @@
     "excludedApps": 0,
     "peak": 0,
     "rms": 0,
-    "samples": 198720,
-    "seconds": 4.14
+    "samples": 193920,
+    "seconds": 4.04
   },
   "control": {
     "dbfs": -15.052,
     "event": "summary",
     "excludedApps": 0,
     "peak": 0.25,
-    "rms": 0.17677307581850588,
-    "samples": 205440,
-    "seconds": 4.28,
-    "toneLog": [
-      {
-        "event": "started",
-        "mode": "play",
-        "pid": 8252,
-        "t": 1792331812260.124,
-        "windowless": false
-      }
-    ]
+    "rms": 0.17677257457908707,
+    "samples": 193920,
+    "seconds": 4.04,
+    "toneStartedT": 1792340032888.109
   },
   "excluded": {
     "dbfs": -999,
@@ -32,74 +24,58 @@
     "excludedApps": 1,
     "peak": 0,
     "rms": 0,
-    "samples": 192960,
-    "seconds": 4.02,
-    "toneLog": [
-      {
-        "event": "started",
-        "mode": "play",
-        "pid": 8377,
-        "t": 1792331826514.2979,
-        "windowless": false
-      }
-    ]
+    "samples": 197760,
+    "seconds": 4.12,
+    "toneStartedT": 1792340046791.453
   },
   "excluded-windowless": {
-    "dbfs": -15.051,
+    "dbfs": -15.052,
     "event": "summary",
     "excludedApps": 0,
-    "peak": 0.2500000298023224,
-    "rms": 0.17678301498001325,
-    "samples": 202560,
-    "seconds": 4.22,
-    "toneLog": [
-      {
-        "event": "started",
-        "mode": "play-windowless",
-        "pid": 8482,
-        "t": 1792331840471.49,
-        "windowless": true
-      }
-    ]
+    "peak": 0.25,
+    "rms": 0.17676961553691242,
+    "samples": 195840,
+    "seconds": 4.08,
+    "toneStartedT": 1792340060806.638
   },
   "lateLaunchStatic": {
     "summary": {
-      "dbfs": -16.262,
+      "dbfs": -16.264,
       "event": "summary",
       "excludedApps": 0,
       "peak": 0.25,
-      "rms": 0.1537740150746217,
-      "samples": 408000,
-      "seconds": 8.5
+      "rms": 0.15374804534813188,
+      "samples": 398400,
+      "seconds": 8.3
     },
     "filterUpdates": [],
-    "toneStartedT": 1792331856747.8381,
-    "leakedWindows100ms": 65,
-    "leakFirstT": 1792331856833.954,
-    "leakLastT": 1792331863234.162,
-    "leakMsAfterToneStart": 6486.32
+    "toneStartedT": 1792340076812.1282,
+    "leakedWindows100ms": 63,
+    "leakFirstT": 1792340076944.291,
+    "leakLastT": 1792340083130.896,
+    "leakMsAfterToneStart": 6318.77
   },
   "lateLaunchFollow": {
     "summary": {
-      "dbfs": -38.622,
+      "dbfs": -47.528,
       "event": "summary",
       "excludedApps": 0,
-      "peak": 0.24999995529651642,
-      "rms": 0.011719156018525282,
-      "samples": 384960,
-      "seconds": 8.02
+      "peak": 0.24999657273292542,
+      "rms": 0.004203252201054318,
+      "samples": 385920,
+      "seconds": 8.04
     },
     "filterUpdates": [
       {
         "event": "filterUpdated",
         "excludedApps": 1,
-        "t": 1792331873761.45
+        "t": 1792340093630.467
       }
     ],
-    "toneStartedT": 1792331873612.66,
+    "toneStartedT": 1792340093437.9292,
     "leakedWindows100ms": 1,
-    "leakFirstT": 1792331873765.181,
-    "leakLastT": 1792331873765.181,
-    "leakMsAfterToneStart": 152.52
+    "leakFirstT": 1792340093682.836,
+    "leakLastT": 1792340093682.836,
+    "leakMsAfterToneStart": 244.91
   }
 }
