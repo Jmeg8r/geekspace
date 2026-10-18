@@ -67,6 +67,35 @@ leftover dirs in TMPDIR: 1 [gs-prebake-by6C5K]
   contents: backend.log config.json selfhosted.env
 ```
 
+The pre-fix `instanceSecret hits: 1` is also the grep-by-value positive control.
+
+### Post-fix (same harness)
+
+```
+rc=1
+positive control 'prebake work dir': 1
+instanceSecret hits: 0
+adminKey hits: 0
+leftover dirs in TMPDIR: 0 []
+✖ prebake: Error: backend failed to start: EACCES
+shared binary mode: -rwxrwxrwx   ← ~/.cache copy untouched
+```
+
+Success path (real local config, :3210 free, `TMPDIR` pointed at a temp dir): rc=0,
+`✔ prebake complete`, 6 pages seeded, 0 secret hits in output, no `gs-prebake-*` left.
+
+`npm run verify`: rc=0 — oxlint (no findings in `prebake-seed.mjs`), `tsc -b --noEmit`,
+vitest 36 files / 283 tests passed. `snyk test`: 3 pre-existing issues (zod, qs, hono);
+this change touches no dependencies.
+
+## Deviations
+
+- First post-fix run printed `backend exited early (code -13)`: Node sets `exitCode` to
+  `-errno` when it emits the spawn `error`, and that happened during `await isHealthy()`.
+  Moved the spawn-error check after the await so the message names `EACCES`.
+- The `finally`'s stop guard also checks `signalCode` (a child killed by a signal has
+  `exitCode === null`), so it never waits out the 5 s timer for an already-dead child.
+
 ## Reported, not changed: electron/convexBackend.mjs
 
 Same spawn shape (`--instance-secret` in argv, no `error` listener). In the Electron main
