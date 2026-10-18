@@ -1,9 +1,9 @@
 ---
 change: 2026-10-18-day-recorder
-status: draft
+status: accepted
 track: T3
 intent: ./intent.md
-accepted_by:
+accepted_by: james
 linear: pending
 skills_in_force: [design:ux-copy, design:accessibility-review]
 claude_config_sha: 18f3827
