@@ -17,6 +17,20 @@ describe("commitOrdinal", () => {
     expect(commitOrdinal(ROOT)).toBe(expected);
   });
 
+  it("reads the repository at cwd even when git's environment names another (as in a git hook)", () => {
+    const gitDir = spawnSync("git", ["rev-parse", "--absolute-git-dir"], { cwd: ROOT, encoding: "utf8" }).stdout.trim();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-ordinal-"));
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = gitDir;
+    try {
+      expect(() => commitOrdinal(dir)).toThrow(/commit time/i);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("throws outside a git repository", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-ordinal-"));
     try {
