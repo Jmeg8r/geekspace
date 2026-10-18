@@ -1,0 +1,126 @@
+{
+  "silenceBaseline": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "tone-control": {
+    "dbfs": -15.053,
+    "peak": 0.2499999850988388,
+    "excludedProcesses": 0,
+    "excludedBundles": [],
+    "tone": {
+      "startT": 1792347861035.9968,
+      "stopT": 1792347869440.726,
+      "pid": 39076
+    },
+    "window": {
+      "startT": 1792347862403.789,
+      "endT": 1792347866513
+    }
+  },
+  "tone-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 2,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone",
+      "dev.geekspace.spike.tone.helper"
+    ],
+    "tone": {
+      "startT": 1792347869803.055,
+      "stopT": 1792347878208.386,
+      "pid": 39205
+    },
+    "window": {
+      "startT": 1792347871253.274,
+      "endT": 1792347875519
+    }
+  },
+  "tone-windowless-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 2,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone",
+      "dev.geekspace.spike.tone.helper"
+    ],
+    "tone": {
+      "startT": 1792347878598.183,
+      "stopT": 1792347887001.782,
+      "pid": 39303
+    },
+    "window": {
+      "startT": 1792347880059.677,
+      "endT": 1792347884211
+    }
+  },
+  "electron-control": {
+    "dbfs": -15.052,
+    "peak": 0.24999989569187164,
+    "excludedProcesses": 0,
+    "excludedBundles": [],
+    "tone": {
+      "startT": 1792347888142,
+      "stopT": 1792347898145
+    },
+    "window": {
+      "startT": 1792347890190.972,
+      "endT": 1792347894472
+    }
+  },
+  "electron-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 1,
+    "excludedBundles": [
+      "com.github.Electron",
+      "com.github.Electron.helper"
+    ],
+    "tone": {
+      "startT": 1792347898804,
+      "stopT": 1792347908808
+    },
+    "window": {
+      "startT": 1792347901359.768,
+      "endT": 1792347905612
+    }
+  },
+  "late-control": {
+    "updates": [],
+    "toneStartedT": 1792347911619,
+    "leakedWindows100ms": 41,
+    "leakFirstT": 1792347911733.242,
+    "leakLastT": 1792347915733.318
+  },
+  "late-static": {
+    "updates": [],
+    "toneStartedT": 1792347920359,
+    "leakedWindows100ms": 0,
+    "leakFirstT": null,
+    "leakLastT": null
+  },
+  "late-second-instance": {
+    "firstInstance": {
+      "startT": 1792347926449.9978,
+      "stopT": 1792347939057.458,
+      "pid": 39967
+    },
+    "tone": {
+      "startT": 1792347929051.734,
+      "stopT": 1792347933257.231,
+      "pid": 40010
+    },
+    "leakedBeforeSecondStart": 0,
+    "leakedWindows100ms": 29,
+    "summary": {
+      "dbfs": -16.704,
+      "event": "summary",
+      "excludedProcesses": 1,
+      "peak": 0.24999991059303284,
+      "rms": 0.14615484932892203,
+      "samples": 408576
+    }
+  }
+}

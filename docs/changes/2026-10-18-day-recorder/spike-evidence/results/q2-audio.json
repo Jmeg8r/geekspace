@@ -1,0 +1,107 @@
+{
+  "silenceBaseline": {
+    "dbfs": -999,
+    "event": "summary",
+    "excludedApps": 0,
+    "peak": 0,
+    "rms": 0,
+    "samples": 192960,
+    "seconds": 4.02
+  },
+  "control": {
+    "dbfs": -15.051,
+    "event": "summary",
+    "excludedApps": 0,
+    "peak": 0.2500000298023224,
+    "rms": 0.17678008043866233,
+    "samples": 198720,
+    "seconds": 4.14,
+    "tone": {
+      "startT": 1792341549154.9202,
+      "stopT": 1792341557558.8323
+    },
+    "window": {
+      "startT": 1792341550768.935,
+      "endT": 1792341554950
+    }
+  },
+  "excluded": {
+    "dbfs": -999,
+    "event": "summary",
+    "excludedApps": 2,
+    "peak": 0,
+    "rms": 0,
+    "samples": 204480,
+    "seconds": 4.26,
+    "tone": {
+      "startT": 1792341557850.1821,
+      "stopT": 1792341566255.02
+    },
+    "window": {
+      "startT": 1792341559522.755,
+      "endT": 1792341563830
+    }
+  },
+  "excluded-windowless": {
+    "dbfs": -15.051,
+    "event": "summary",
+    "excludedApps": 1,
+    "peak": 0.2500000298023224,
+    "rms": 0.17678351258060102,
+    "samples": 205440,
+    "seconds": 4.28,
+    "tone": {
+      "startT": 1792341566687.487,
+      "stopT": 1792341575091.143
+    },
+    "window": {
+      "startT": 1792341568405.119,
+      "endT": 1792341572702
+    }
+  },
+  "lateLaunchStatic": {
+    "summary": {
+      "dbfs": -16.535,
+      "event": "summary",
+      "excludedApps": 0,
+      "peak": 0.2500000298023224,
+      "rms": 0.14902196470042314,
+      "samples": 399360,
+      "seconds": 8.32
+    },
+    "filterUpdates": [],
+    "toneStartedT": 1792341577839.9912,
+    "leakedWindows100ms": 59,
+    "leakFirstT": 1792341577991.191,
+    "leakLastT": 1792341583772.73,
+    "leakMsAfterToneStart": 5932.74
+  },
+  "lateLaunchFollow": {
+    "summary": {
+      "dbfs": -30.603,
+      "event": "summary",
+      "excludedApps": 1,
+      "peak": 0.24999995529651642,
+      "rms": 0.02950230388289672,
+      "samples": 382080,
+      "seconds": 7.96
+    },
+    "filterUpdates": [
+      {
+        "event": "filterUpdated",
+        "excludedApps": 0,
+        "t": 1792341588531.822
+      },
+      {
+        "event": "filterUpdated",
+        "excludedApps": 1,
+        "t": 1792341589318.973
+      }
+    ],
+    "toneStartedT": 1792341588970.211,
+    "leakedWindows100ms": 3,
+    "leakFirstT": 1792341589088.66,
+    "leakLastT": 1792341589364.627,
+    "leakMsAfterToneStart": 394.42
+  }
+}

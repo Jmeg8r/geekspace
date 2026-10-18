@@ -1,0 +1,120 @@
+{
+  "segments": 6,
+  "segmentMs": 5000,
+  "strategies": {
+    "overlap": {
+      "restartGapMs": [
+        52.1,
+        60.2,
+        51.8,
+        61.3,
+        53
+      ],
+      "wallSpanMs": 30330.3,
+      "decodedTotalMs": 30240,
+      "lostMsPerBoundary": 18.06,
+      "allDecodeAlone": true,
+      "decoded": [
+        {
+          "file": "segment-1.webm",
+          "bytes": 73753,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-2.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-3.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-4.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-5.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-6.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        }
+      ]
+    },
+    "sequential": {
+      "restartGapMs": [
+        63.7,
+        60.3,
+        59.4,
+        59.7,
+        61.1
+      ],
+      "wallSpanMs": 30348.8,
+      "decodedTotalMs": 30240,
+      "lostMsPerBoundary": 21.76,
+      "allDecodeAlone": true,
+      "decoded": [
+        {
+          "file": "segment-1.webm",
+          "bytes": 73439,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-2.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-3.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-4.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-5.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        },
+        {
+          "file": "segment-6.webm",
+          "bytes": 81369,
+          "decodesAlone": true,
+          "decodeError": null,
+          "decodedMs": 5040
+        }
+      ]
+    }
+  }
+}
