@@ -120,3 +120,42 @@ Cost: nobody runs it unless told to. Mitigation: the README's "Other scripts" li
 - **Run it against a copy of James's data dir:** more realistic data, but the probe would
   then depend on (and copy around) personal data; a seeded throwaway is enough to prove the
   mechanism.
+
+## Deviations
+
+- **Spike folded into the first run of the script.** The probe's steps are the spike's steps,
+  so the script was written first and its first run (uncommitted) served as the spike. The
+  real backend (`precompiled-2026-10-10-72ce13c`, convex 1.46.0) answered `wait_for_schema`
+  with `failed` and `tableName: "pages"`, exactly the shape `functionSync` handles; no
+  re-plan.
+- **Assertions reordered.** The first red run (broken module: `failed` treated as
+  `complete`) stopped at the `tableName` assertion. The `finish_push` and marker checks now
+  run first, so a regression is reported by the invariant that matters most.
+- **Finding, not fixed here (out of scope):** the backend's failure message embeds the whole
+  offending document (`Object: {…}` plus the full validator). `functionSync` logs
+  `status.error` untruncated on this path (`MAX_DETAIL_CHARS` applies only to HTTP errors),
+  so a real user's failed update would write that page, including its `content`, into
+  `convex.log`. Proposed as a separate change.
+- **Found by the red run:** with the broken module, the backend itself rejected
+  `finish_push` (HTTP 400, "Schema has already been failed"). So the backend has its own
+  guard, but `functionSync` still must not call it: the probe asserts the module's behavior,
+  not the backend's.
+
+## Proof results (2026-10-17, Mac Studio)
+
+- Red (committed probe at `1daa441`, `functionSync.mjs` locally edited to treat `failed` as
+  `complete`): exit 1, `AssertionError: finish_push was called after a failed schema check`.
+  Edit reverted; `git diff --stat electron/` empty.
+- Green: exit 0. Bundle A `dae8a6a7fd9a` deployed (386 ms); 6 pages seeded; bundle B
+  `65482e2e73af` → status `failed`, `tableName` `pages`, endpoints `start_push,
+  wait_for_schema` only, marker still `dae8a6a7fd9a`, `pages:list` 6 → 6.
+- Secrets: the config's `adminKey` and `instanceSecret` values were grepped for, by value,
+  in all four captured run outputs (first run, two red runs, green) (positive control: a known line matched); absent.
+  Temp dirs removed, nothing listening on :3290 after each run.
+- Green again after a clean `npm ci` in the worktree (the first runs used the main
+  checkout's `node_modules`, convex 1.46.0 in both): exit 0.
+- `npm run verify`: exit 0, 34 files / 252 tests (unchanged; the probe is not in vitest, and
+  oxlint's config doesn't cover `scripts/`). The first attempt failed with 3 worker errors
+  (`Cannot find package 'jsdom'`) because the symlinked main-checkout `node_modules` predates
+  PR #65's `jsdom` devDependency; environmental, fixed by `npm ci`.
+- `snyk test`: 3 issues (zod, hono, qs), all pre-existing; this change adds no dependencies.

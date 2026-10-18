@@ -164,6 +164,7 @@ Other scripts:
 | `npm run package:win` | build self-contained `Geekspace Setup 0.1.0.exe` (NSIS) into `release/` |
 | `npm run migrate:local-data` | copy your dev `.convex` workspace into the packaged app |
 | `npm run deploy:local` | push function changes onto the running standalone app |
+| `npm run probe:schema-failure` | prove a schema-rejected function update leaves the old functions live, on a throwaway backend (:3290; `--config <path>` in a worktree) |
 
 > In **dev**, `npm run dev` runs the backend (data in the repo's `.convex/`) and opens the
 > window only once that backend answers on :3210, so the app attaches to it. The
