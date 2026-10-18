@@ -313,3 +313,39 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   repo) to add the helper as an extra resource, and drove the signed binary through
   `ELECTRON_RUN_AS_NODE` so app code was unchanged. PR 3 makes the `extraResources` entry
   permanent.
+- **2026-10-18, PR 2, `assistantActions` is a typed union, not `before`/`after` blobs.**
+  - v1 actions only *create* things (`createTask`, `createBlock`, `draftLinear`), so undo
+    needs what was created and what it looked like then.
+  - A `v.any()` blob would add a type-erased dictionary, which the repo's review standards
+    reject.
+  - Effects of one proposal share a `groupId`: the task's row id, or the draft's id. One
+    undo reverses the whole group, and the whole group is checked before anything is
+    reversed.
+- **2026-10-18, PR 2, "changed since" uses a row fingerprint, not `updatedAt`.**
+  - Two writes in the same millisecond would compare equal under `updatedAt`.
+  - Instead, a sorted-key fingerprint of title, properties and content is taken *after* the
+    reflow (`convex/lib/dayRecorder.ts` `rowFingerprint`).
+  - A block counts as changed if its start, end or locked flag differ. A draft counts as
+    changed once it is no longer pending.
+- **2026-10-18, PR 2, no daily cap set means the assistant does not run.** The cap amount
+  is still an open spec question, so `assistant.capStatus` reports `reached: true` until
+  James sets one.
+- **2026-10-18, PR 2, media paths are stored as `<day>/<file>` relative to the media root.**
+  - The boundary rejects absolute paths, `..`, separators within the file name, and a day
+    folder that doesn't match the record's own day.
+  - So nothing the purge later resolves can point outside the root. PR 3 still re-checks
+    the resolved path, as defence in depth.
+- **2026-10-18, PR 2, the assistant writes tasks to the oldest visible task-source
+  database.** The spec didn't name one. It is the same notion of a task database the
+  scheduler uses.
+- **2026-10-18, PR 2, Day Recorder settings have their own mutation**
+  (`dayRecorder.updateSettings`). `settings.update` re-plans the schedule on every save,
+  and none of these settings affect the plan.
+- **2026-10-18, PR 2, retention reads through `["purgedAt", time]` indexes.** Segment and
+  screenshot rows are kept forever, because the text outlives the media. A time-only scan
+  would read the whole purged history on every run.
+- **2026-10-18, PR 2, codegen ran against a throwaway local backend.**
+  - The backend had an empty temp database on port 3290, the same pattern as
+    `probe:schema-failure`, so the dev deployment was never contacted.
+  - No backend was running for the PR #64 procedure, and starting `convex dev` would have
+    pushed this branch's schema into James's dev data.

@@ -34,7 +34,7 @@ export function relationIds(value: PropertyValue | undefined): string[] {
   return Array.isArray(value) ? value : [];
 }
 
-function isDateValue(value: PropertyValue): value is DateValue {
+export function isDateValue(value: PropertyValue): value is DateValue {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
