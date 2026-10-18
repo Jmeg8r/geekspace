@@ -32,6 +32,12 @@ function commitment() {
   };
 }
 
+// The same commitment with no block: the scheduler books its time instead.
+function taskOnly() {
+  const { type, title, estimateMin, dueMs } = commitment();
+  return { type, title, estimateMin, dueMs };
+}
+
 describe("assistant.applyActions", () => {
   it("turns a commitment into one task, one locked block and two logged actions", async () => {
     const t = await seeded();
@@ -126,6 +132,50 @@ describe("assistant.undo", () => {
     const block = (await t.run((ctx) => ctx.db.query("timeBlocks").collect())).find((b) => b.taskRowId === rowId);
     if (!block) throw new Error("block missing");
     await t.mutation(api.timeBlocks.move, { blockId: block._id, start: block.start + HOUR_MS, end: block.end + HOUR_MS });
+    await expect(t.mutation(api.assistant.undo, { actionId })).rejects.toThrow(/changed/i);
+  });
+
+  // Codex review of PR 2, round 1: James's edits to blocks the assistant did not log.
+  it("refuses when James has locked a block the scheduler booked for the task", async () => {
+    const t = await seeded();
+    const { groupIds } = await t.mutation(api.assistant.applyActions, { actions: [taskOnly()] });
+    const actions = await t.run((ctx) => ctx.db.query("assistantActions").collect());
+    expect(actions.map((a) => a.kind)).toEqual(["createTask"]);
+    const booked = (await t.run((ctx) => ctx.db.query("timeBlocks").collect())).filter(
+      (b) => b.taskRowId === groupIds[0]
+    );
+    expect(booked.length).toBeGreaterThan(0);
+    expect(booked.every((b) => !b.locked)).toBe(true);
+    await t.mutation(api.timeBlocks.toggleLock, { blockId: booked[0]._id });
+    await expect(t.mutation(api.assistant.undo, { actionId: actions[0]._id })).rejects.toThrow(/changed/i);
+    expect(await t.run((ctx) => ctx.db.query("timeBlocks").collect())).not.toEqual([]);
+  });
+
+  it("still undoes a task whose only blocks are the scheduler's own, unedited", async () => {
+    const t = await seeded();
+    const { groupIds } = await t.mutation(api.assistant.applyActions, { actions: [taskOnly()] });
+    const action = (await t.run((ctx) => ctx.db.query("assistantActions").collect()))[0];
+    await t.mutation(api.assistant.undo, { actionId: action._id });
+    const rowId = groupIds[0];
+    const left = (await t.run((ctx) => ctx.db.query("timeBlocks").collect())).filter((b) => b.taskRowId === rowId);
+    expect(left).toEqual([]);
+  });
+
+  it("refuses when James unlocked the assistant's block and the scheduler replaced it", async () => {
+    const { t, actionId, rowId } = await applied();
+    const block = (await t.run((ctx) => ctx.db.query("timeBlocks").collect())).find((b) => b.taskRowId === rowId);
+    if (!block) throw new Error("block missing");
+    await t.mutation(api.timeBlocks.toggleLock, { blockId: block._id });
+    // Whether the engine kept, moved or replaced the block, the edit must block the undo.
+    await expect(t.mutation(api.assistant.undo, { actionId })).rejects.toThrow(/changed/i);
+    expect(await t.run((ctx) => ctx.db.get(rowId))).not.toBeNull();
+  });
+
+  it("refuses when the assistant's block is gone but its task is still there", async () => {
+    const { t, actionId, rowId } = await applied();
+    const block = (await t.run((ctx) => ctx.db.query("timeBlocks").collect())).find((b) => b.taskRowId === rowId);
+    if (!block) throw new Error("block missing");
+    await t.run((ctx) => ctx.db.delete(block._id));
     await expect(t.mutation(api.assistant.undo, { actionId })).rejects.toThrow(/changed/i);
   });
 

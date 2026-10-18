@@ -196,17 +196,39 @@ export const applyActions = mutation({
   },
 });
 
-/** Why an action can no longer be undone, or null when it still can. */
-async function changedSince(ctx: MutationCtx, action: Doc<"assistantActions">): Promise<string | null> {
+/**
+ * Why an action can no longer be undone, or null when it still can. `group` is every action
+ * of the same proposal: a task's blocks are judged against the blocks the group logged.
+ */
+async function changedSince(
+  ctx: MutationCtx,
+  action: Doc<"assistantActions">,
+  group: Doc<"assistantActions">[]
+): Promise<string | null> {
   switch (action.kind) {
     case "createTask": {
       const row = await ctx.db.get(action.rowId);
-      if (row && rowFingerprint(row) !== action.rowFingerprint) return "the task was changed since";
+      if (!row) return null; // already gone: nothing of James's to lose
+      if (rowFingerprint(row) !== action.rowFingerprint) return "the task was changed since";
+      // Deleting the task deletes every block it has. Unlocked blocks are the scheduler's to
+      // redo, and the group's own blocks are checked below. Any OTHER locked block is one
+      // James dragged or locked by hand (Codex review of PR 2, round 1).
+      const logged = new Set(group.flatMap((a) => (a.kind === "createBlock" ? [a.blockId] : [])));
+      const blocks = await ctx.db
+        .query("timeBlocks")
+        .withIndex("by_task", (q) => q.eq("taskRowId", action.rowId))
+        .collect();
+      if (blocks.some((b) => b.locked && !logged.has(b._id))) return "a time block for the task was changed since";
       return null;
     }
     case "createBlock": {
       const block = await ctx.db.get(action.blockId);
-      if (block && (block.start !== action.start || block.end !== action.end || !block.locked)) {
+      if (!block) {
+        // Gone with its task is fine. Gone while the task remains means it was unlocked and
+        // re-planned, or deleted: a change of James's either way.
+        return (await ctx.db.get(action.taskRowId)) ? "the time block was changed since" : null;
+      }
+      if (block.start !== action.start || block.end !== action.end || !block.locked) {
         return "the time block was changed since";
       }
       return null;
@@ -231,7 +253,7 @@ export const undo = mutation({
       .collect();
     // Check the whole group first: a partial undo would leave a block without its task.
     for (const member of group) {
-      const reason = await changedSince(ctx, member);
+      const reason = await changedSince(ctx, member, group);
       if (reason) throw new Error(`Can't undo: ${reason}. Undo it by hand instead.`);
     }
     let touchedTasks = false;
