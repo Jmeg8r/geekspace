@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "../convex/schema";
 import { api } from "../convex/_generated/api";
-import type { Id } from "../convex/_generated/dataModel";
+import type { Doc, Id } from "../convex/_generated/dataModel";
+import type { PaginationResult } from "convex/server";
 
 // WHAT: the Day Recorder assistant's writes into Geekspace. A commitment becomes a task plus
 // a LOCKED time block, every effect is logged in assistantActions, the scheduler keeps the
@@ -194,6 +195,50 @@ describe("assistant.undo", () => {
     await t.mutation(api.assistant.undo, { actionId: action._id });
     const drafts = await t.run((ctx) => ctx.db.query("externalDrafts").collect());
     expect(drafts[0].status).toBe("discarded");
+  });
+});
+
+// Codex review of PR 2, round 2: lists page through everything instead of stopping at a cap.
+describe("assistant lists paginate", () => {
+  it("returns every action across pages, none twice", async () => {
+    const t = await seeded();
+    const since = Date.now() - 1;
+    const proposals = Array.from({ length: 15 }, (_, i) => ({
+      type: "draftLinear" as const,
+      issueRef: `GEEK-${i + 1}`,
+      body: `Update ${i + 1}`,
+    }));
+    await t.mutation(api.assistant.applyActions, { actions: proposals });
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let pages = 0; pages < 10; pages++) {
+      const page: PaginationResult<Doc<"assistantActions">> = await t.query(api.assistant.listActions, {
+        since,
+        paginationOpts: { numItems: 4, cursor },
+      });
+      seen.push(...page.page.map((a) => a._id));
+      if (page.isDone) break;
+      cursor = page.continueCursor;
+    }
+    expect(seen).toHaveLength(15);
+    expect(new Set(seen).size).toBe(15);
+  });
+
+  it("returns every pending draft across pages", async () => {
+    const t = await seeded();
+    const proposals = Array.from({ length: 7 }, (_, i) => ({
+      type: "draftLinear" as const,
+      issueRef: `GEEK-${i + 1}`,
+      body: `Update ${i + 1}`,
+    }));
+    await t.mutation(api.assistant.applyActions, { actions: proposals });
+    const first = await t.query(api.assistant.listDrafts, { status: "pending", paginationOpts: { numItems: 5, cursor: null } });
+    expect(first.isDone).toBe(false);
+    const second = await t.query(api.assistant.listDrafts, {
+      status: "pending",
+      paginationOpts: { numItems: 5, cursor: first.continueCursor },
+    });
+    expect([...first.page, ...second.page].map((d) => d.issueRef).sort()).toEqual(proposals.map((p) => p.issueRef).sort());
   });
 });
 

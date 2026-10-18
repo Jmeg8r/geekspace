@@ -1,5 +1,6 @@
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
+import { paginationOptsValidator, type PaginationOptions } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { PropertyDef } from "./lib/types";
 import { isPageHidden } from "./lib/pageTree";
@@ -27,7 +28,15 @@ import {
 
 const MAX_ACTIONS_PER_CALL = 20;
 const MAX_ESTIMATE_MIN = 40 * 60;
-const MAX_LIST = 200;
+// The most items one page may ask for. Lists are paginated, never truncated: a capped list
+// would silently drop later actions from the review (Codex review of PR 2, round 2).
+const MAX_PAGE = 200;
+
+function assertPage(opts: PaginationOptions): void {
+  if (!Number.isInteger(opts.numItems) || opts.numItems < 1 || opts.numItems > MAX_PAGE) {
+    throw new Error(`Page size must be 1–${MAX_PAGE}, got ${opts.numItems}`);
+  }
+}
 
 const source = {
   sourceSegmentId: v.optional(v.id("captureSegments")),
@@ -275,13 +284,14 @@ export const undo = mutation({
 });
 
 export const listActions = query({
-  args: { since: v.number() },
+  args: { since: v.number(), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     assertTime("since", args.since);
+    assertPage(args.paginationOpts);
     return ctx.db
       .query("assistantActions")
       .withIndex("by_at", (q) => q.gte("at", args.since))
-      .take(MAX_LIST);
+      .paginate(args.paginationOpts);
   },
 });
 
@@ -296,12 +306,14 @@ const NEXT = {
 } satisfies Record<DraftStatus, readonly DraftStatus[]>;
 
 export const listDrafts = query({
-  args: { status: draftStatus },
-  handler: async (ctx, args) =>
-    ctx.db
+  args: { status: draftStatus, paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    assertPage(args.paginationOpts);
+    return ctx.db
       .query("externalDrafts")
       .withIndex("by_status", (q) => q.eq("status", args.status))
-      .take(MAX_LIST),
+      .paginate(args.paginationOpts);
+  },
 });
 
 export const setDraftStatus = mutation({
