@@ -28,6 +28,14 @@ is in front.**
 - *Cost:* a Swift toolchain in the Mac build. The ubuntu-only CI can't compile it, so CI
   checks only its JS interface, using a fake helper.
 - *Resolution:* **Accepted (James, 2026-10-18):** use the Swift helper.
+- *Spike (PR 1, spike-findings.md Q1, Q2):* SCK window exclusion passes. SCK **audio**
+  exclusion fails for Chromium/Electron apps, whose audio plays from a helper process SCK
+  can't exclude. **Changed (James, 2026-10-18):** system audio comes from a CoreAudio
+  process tap that excludes denylisted apps by bundle ID (each entry plus `<id>.helper`)
+  and by their live process objects. SCK is kept for screenshots only. The spike proved
+  silence for helpers, windowless apps, late launches and concurrent instances. One case
+  still leaks: a second instance that starts audio after the tap exists. Closing it
+  (watcher-driven rebuild plus a hold-back buffer) is PR 3's first proof obligation.
 
 **F2. The room mic hears a denylisted work call played through speakers.**
 - *Problem:* ScreenCaptureKit can drop a denylisted app's system audio, but the mic still
@@ -37,6 +45,9 @@ is in front.**
   before this is relied on. If it can't be proven, fall back to a documented rule: "use
   headphones for denylisted calls".
 - *Resolution:* **Accepted (James, 2026-10-18):** auto-pause the mic, proven in the spike; fall back to the headphones rule.
+- *Spike (Q3):* **proven; no fallback needed.** Detection is −26 ms to +125 ms, but only by
+  polling (100 ms, 1.2% of a core): on macOS 27.0 the input/output listeners never fire.
+  Helper processes map to their app by bundle prefix.
 
 **F3. The app cannot speak a notice into another app's call.**
 - *Source:* intent open question 1 and the "call notice" success signal.
@@ -57,6 +68,10 @@ is in front.**
 - *Recommendation:* use a distinct key name, kept in the macOS Keychain through Electron
   `safeStorage` and entered in Settings. Nothing goes into `.env.local`.
 - *Resolution:* **Accepted (James, 2026-10-18):** Keychain under a distinct name.
+- *Spike (Q8):* **confirmed.** With `ANTHROPIC_API_KEY` set, the SDK sends `x-api-key`
+  instead of the subscription OAuth token. The key is named
+  `GEEKSPACE_DAY_RECORDER_CLAUDE_KEY` and stored as a `safeStorage` blob at
+  `<userData>/day-recorder/claude-key.enc`, never in `process.env`.
 
 **F5. Policy not applied: `security-review` and `gstack-cso`.**
 - *Problem:* both audit existing code or a diff, and this change has no code yet.
@@ -73,6 +88,9 @@ is in front.**
   and transcribed. Claude calls go only through the Messages API with zero retention if
   that option is available on the account (to be checked).
 - *Resolution:* **Accepted (James, 2026-10-18):** both, the notice wording and zero-retention API use if the account offers it.
+- *Spike (Q10):* **ZDR is not available** on James's organization (console check; ZDR is
+  enabled per organization through Anthropic sales). Requests follow the standard commercial
+  retention policy; the notice wording stands.
 
 **F7. Encryption at rest.**
 - *Source:* intent open question 3, still open.
@@ -87,6 +105,8 @@ is in front.**
   to need no admin rights, to be verified). Settings shows whether the exclusion holds.
   Derived text in Convex is still backed up, which is intended because it is kept forever.
 - *Resolution:* **Accepted (James, 2026-10-18):** exclude the media root from Time Machine.
+- *Spike (Q9):* **verified** without root: `tmutil addexclusion` (sticky form) plus
+  `tmutil isexcluded`. The `-p` fixed-path form needs root and is not used.
 
 ## Requirements
 
@@ -121,15 +141,17 @@ Each requirement traces to the intent.
 - **R5. Call notice.** No call audio is written without a `noticeGiven` event (F3).
   *Traces to:* open question 1.
 - **R6. Screenshots and OCR.**
-  - A screenshot is taken every `SHOT_SEC` (default 30), skipped when the frame is
-    unchanged (a perceptual hash).
+  - A screenshot is taken every `SHOT_SEC` (default **30**, settled by the spike: 12 MB/hour,
+    3 GB per 30 days, ~1% of one core), skipped when the frame is unchanged (a 32x32
+    difference hash within 8 bits of the last kept frame).
   - Stored as HEIC at reduced resolution.
   - OCR is local (Vision). OCR text goes into Convex; the image stays on disk.
   - *Traces to:* intent, Capture.
 - **R7. Local transcription.**
   - Each closed audio segment is transcribed by whisper.cpp, reusing the
     `meetingProcessor.mjs` toolchain.
-  - The model size is chosen in the spike (the Mac Studio has the headroom).
+  - The model is **`small.en`** (spike Q6: 0% WER on clean and ~6 dB-SNR synthetic speech,
+    against 1.3–1.9% for `base.en`; 0.03× realtime on the Mac Studio).
   - Transcript rows link to their segment and time range.
   - *Traces to:* intent, Capture.
 - **R8. Claude reasoning.**
@@ -165,8 +187,16 @@ Each requirement traces to the intent.
 
 **Processes.**
 - **`gs-capture` (Swift, F1).**
-  - Captures ScreenCaptureKit screenshots and system audio with the denylist filter, and
-    runs Vision OCR.
+  - Captures ScreenCaptureKit screenshots with the denylist filter, rebuilt from all apps
+    (not on-screen ones only) for every frame, and runs Vision OCR.
+  - Captures system audio through a CoreAudio process tap (macOS 26+) that excludes the
+    denylist by bundle ID (each entry plus `<id>.helper`) and by its live process objects.
+    When the process watcher sees a new process object for a denylisted bundle, the helper
+    discards the system audio it holds back and rebuilds the tap, because a live tap can't
+    be updated. The aggregate device has `TapAutoStart` off: with it on, the tap delivers
+    nothing and reports no error.
+  - Every ScreenCaptureKit call has a 10 s timeout that exits non-zero, because a hung call
+    blocked capture in every process (spike Q1).
   - Watches CoreAudio processes for the F2 mic pause and for call detection (F3).
   - Emits JSON lines on stdout. It is spawned and supervised by
     `electron/dayRecorder.mjs`, which follows the backendProcess error-listener pattern
@@ -250,12 +280,16 @@ write-only: there is no getter.
 - **Claude output is untrusted.** Model replies are parsed against a zod schema of allowed
   actions (create task, block time, draft Linear). Anything else is rejected and logged.
   The model cannot invoke arbitrary mutations.
-- **Entitlements (unverified, the spike settles it).** It is not yet established which
-  entitlement or usage-description keys ScreenCaptureKit screen and audio capture, and
-  CoreAudio process monitoring, need under Hardened Runtime. The spike lists the exact keys
-  and proves them on a **signed** build, because a dev build passing proves nothing (repo
-  review standard: this exact failure already happened with the mic). The helper is signed
-  with the app's identity and carries the same entitlements.
+- **Entitlements (settled by the spike, Q7, on a signed build).**
+  - No new entitlement. The existing set covers SCK screenshots, CoreAudio process objects
+    and the process tap. `com.apple.security.device.audio-input` stays for the mic.
+  - The helper is signed with the app's identity and inherits `entitlementsInherit`
+    automatically (`codesign -d --entitlements -` shows the same five keys).
+  - TCC: Screen & System Audio Recording (screenshots fail without it), plus System Audio
+    Recording for the tap. Whether the tap needs its own grant is not isolated yet; PR 3
+    checks on a clean TCC state.
+  - Info.plist: set a real `NSAudioCaptureUsageDescription` in `extendInfo` (electron-builder
+    injects a generic default). Screen recording has no usage key.
 - **Public repo.** Fixtures are synthetic and live under `tests/fixtures/day-recorder/`,
   each file headed `SYNTHETIC`. The media root is outside the repo.
 
@@ -304,8 +338,11 @@ These seed plan.md's Proof section.
   by:* James. v1 proposes bundle ID only.
 - **Hours.** Should capture also stop outside set hours? *Answered by:* James.
 - **Call-app list for F3.** Proposed: FaceTime, Zoom, Teams, Slack, plus any browser
-  holding the mic. *Answered by:* the spike, which checks that detection is reliable.
-- **Whisper model size and `SHOT_SEC`.** *Answered by:* the spike, which measures storage
-  and CPU.
+  holding the mic. *Spike (Q4):* Zoom is detected (`us.zoom.xos`, start and end). A Chromium
+  app is detected through its `<id>.helper` process. FaceTime, Teams and Slack are not yet
+  run; FaceTime runs through `avconferenced`, which reported mic input with no call, so it
+  needs its own test. PR 4 tests all three.
+- ~~**Whisper model size and `SHOT_SEC`.**~~ **Answered by the spike:** `small.en` and
+  `SHOT_SEC` 30 (spike-findings.md Q6).
 - **Should Meetings move to disk storage like the Day Recorder?** Deferred to a later
   change. *Answered by:* James.
