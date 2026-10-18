@@ -130,3 +130,8 @@ checkout instead. A marker without an ordinal means "unknown age" and deploys, a
   Electron holds SIGTERM until a modal closes, so James clicked Quit on both probe dialogs.
   The worktree also needed `npm ci` and a copy of the gitignored
   `.convex/local/default/config.json` before prebake would run (environment, not code).
+- **`commitOrdinal` drops inherited `GIT_DIR` and friends.** The pre-push hook failed the
+  "throws outside a git repository" test: git hooks export `GIT_DIR`, so `git log` ran
+  against the hook's repository whatever `cwd` said. A build launched from a hook (or any
+  shell with `GIT_DIR` set) would have stamped another repo's commit time. Now covered by
+  its own test; `npm run verify` after the fix: 35 files / 275 tests.
