@@ -1,9 +1,9 @@
 ---
 change: 2026-10-18-day-recorder
-status: draft
+status: accepted
 track: T3
 author: james
-accepted_by:
+accepted_by: james
 linear: pending
 source: conversation
 ---
