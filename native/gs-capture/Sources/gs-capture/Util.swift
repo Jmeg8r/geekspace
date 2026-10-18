@@ -70,23 +70,15 @@ func cpuSeconds() -> Double {
 
 func round3(_ value: Double) -> Double { (value * 1000).rounded() / 1000 }
 
-struct TimeoutError: LocalizedError {
-    let what: String
-    let seconds: Double
-    var errorDescription: String? { "\(what) did not return within \(seconds)s (ScreenCaptureKit hung)" }
-}
-
-/// Races `operation` against a timer. ScreenCaptureKit calls can block forever without
-/// throwing, so every capture call goes through this and a hang becomes a loud failure.
-func withTimeout<T>(seconds: Double, what: String, _ operation: @escaping () async throws -> T) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask { try await operation() }
-        group.addTask {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
-            throw TimeoutError(what: what, seconds: seconds)
-        }
-        defer { group.cancelAll() }
-        guard let first = try await group.next() else { throw TimeoutError(what: what, seconds: seconds) }
-        return first
+/// Runs `operation` under a watchdog that EXITS THE PROCESS if it has not returned within
+/// `seconds`. A task-group race is not enough: ScreenCaptureKit calls hang without
+/// honouring cancellation, and a task group still waits for its hung child (Codex review of
+/// PR 71). Exiting non-zero is what lets the supervisor show "Not recording" (spec R3).
+func withTimeout<T>(seconds: Double, what: String, _ operation: () async throws -> T) async rethrows -> T {
+    let watchdog = DispatchWorkItem {
+        fail("\(what) did not return within \(seconds)s (ScreenCaptureKit hung)")
     }
+    DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: watchdog)
+    defer { watchdog.cancel() }
+    return try await operation()
 }

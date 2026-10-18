@@ -106,7 +106,9 @@ enum SystemAudio {
             let (fresh, _, count) = Screen.filter(await Screen.content(), excluding: exclude)
             if count != currentCount {
                 do {
-                    try await stream.updateContentFilter(fresh)
+                    try await withTimeout(seconds: Screen.captureTimeoutSec, what: "updateContentFilter") {
+                        try await stream.updateContentFilter(fresh)
+                    }
                     emit(["event": "filterUpdated", "t": round3(nowMs()), "excludedApps": count])
                     currentCount = count
                 } catch {

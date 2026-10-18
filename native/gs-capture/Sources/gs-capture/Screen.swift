@@ -16,7 +16,9 @@ enum Screen {
     /// Measured in the spike (spike-findings.md, Q2): -15 dBFS of tone leaked through.
     static func content() async -> SCShareableContent {
         do {
-            return try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            return try await withTimeout(seconds: captureTimeoutSec, what: "SCShareableContent") {
+                try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            }
         } catch {
             fail("SCShareableContent failed (Screen Recording permission?): \(error.localizedDescription)")
         }
@@ -128,20 +130,23 @@ enum Screen {
             let encodeMs = nowMs() - encodeStart
             let skipped = lastKept.map { hamming($0, hash) <= threshold } ?? false
             var ocrMs = 0.0
+            var ocrCpu = 0.0
             var ocrChars = 0
             if !skipped {
                 lastKept = hash
                 let path = "\(dir)/frame-\(String(format: "%05d", index)).heic"
                 FileManager.default.createFile(atPath: path, contents: data)
                 if runOCR {
+                    let ocrCpuBefore = cpuSeconds()
                     let result = OCR.recognize(image, fast: false)
                     ocrMs = result.ms
+                    ocrCpu = cpuSeconds() - ocrCpuBefore
                     ocrChars = result.text.count
                 }
             }
             emit(["i": index, "t": round3((tickStart - start) / 1000), "captureMs": round3(captureMs),
                   "encodeMs": round3(encodeMs), "bytes": data.count, "hash": hex(hash),
-                  "skipped": skipped, "ocrMs": round3(ocrMs), "ocrChars": ocrChars,
+                  "skipped": skipped, "ocrMs": round3(ocrMs), "ocrCpuSec": round3(ocrCpu), "ocrChars": ocrChars,
                   "cpuSec": round3(cpuSeconds() - cpuBefore)])
             index += 1
             let wait = interval * 1000 - (nowMs() - tickStart)
