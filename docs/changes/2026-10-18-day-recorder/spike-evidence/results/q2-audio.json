@@ -5,24 +5,24 @@
     "excludedApps": 0,
     "peak": 0,
     "rms": 0,
-    "samples": 198720,
-    "seconds": 4.14
+    "samples": 192960,
+    "seconds": 4.02
   },
   "control": {
-    "dbfs": -15.052,
+    "dbfs": -15.051,
     "event": "summary",
     "excludedApps": 0,
     "peak": 0.2500000298023224,
-    "rms": 0.1767694268385247,
-    "samples": 202560,
-    "seconds": 4.22,
+    "rms": 0.17678008043866233,
+    "samples": 198720,
+    "seconds": 4.14,
     "tone": {
-      "startT": 1792340383607.878,
-      "stopT": 1792340392011.477
+      "startT": 1792341549154.9202,
+      "stopT": 1792341557558.8323
     },
     "window": {
-      "startT": 1792340385219.591,
-      "endT": 1792340389486
+      "startT": 1792341550768.935,
+      "endT": 1792341554950
     }
   },
   "excluded": {
@@ -31,77 +31,77 @@
     "excludedApps": 2,
     "peak": 0,
     "rms": 0,
-    "samples": 193920,
-    "seconds": 4.04,
+    "samples": 204480,
+    "seconds": 4.26,
     "tone": {
-      "startT": 1792340392374.146,
-      "stopT": 1792340400778.2512
+      "startT": 1792341557850.1821,
+      "stopT": 1792341566255.02
     },
     "window": {
-      "startT": 1792340394094.989,
-      "endT": 1792340398172
+      "startT": 1792341559522.755,
+      "endT": 1792341563830
     }
   },
   "excluded-windowless": {
-    "dbfs": -15.052,
+    "dbfs": -15.051,
     "event": "summary",
     "excludedApps": 1,
     "peak": 0.2500000298023224,
-    "rms": 0.17677278435217303,
-    "samples": 198720,
-    "seconds": 4.14,
+    "rms": 0.17678351258060102,
+    "samples": 205440,
+    "seconds": 4.28,
     "tone": {
-      "startT": 1792340401034.2542,
-      "stopT": 1792340409438.077
+      "startT": 1792341566687.487,
+      "stopT": 1792341575091.143
     },
     "window": {
-      "startT": 1792340402679.956,
-      "endT": 1792340406872
+      "startT": 1792341568405.119,
+      "endT": 1792341572702
     }
   },
   "lateLaunchStatic": {
     "summary": {
-      "dbfs": -16.243,
+      "dbfs": -16.535,
       "event": "summary",
       "excludedApps": 0,
       "peak": 0.2500000298023224,
-      "rms": 0.1541180395088458,
-      "samples": 396480,
-      "seconds": 8.26
+      "rms": 0.14902196470042314,
+      "samples": 399360,
+      "seconds": 8.32
     },
     "filterUpdates": [],
-    "toneStartedT": 1792340411801.1921,
-    "leakedWindows100ms": 63,
-    "leakFirstT": 1792340411866.599,
-    "leakLastT": 1792340418053.476,
-    "leakMsAfterToneStart": 6252.28
+    "toneStartedT": 1792341577839.9912,
+    "leakedWindows100ms": 59,
+    "leakFirstT": 1792341577991.191,
+    "leakLastT": 1792341583772.73,
+    "leakMsAfterToneStart": 5932.74
   },
   "lateLaunchFollow": {
     "summary": {
-      "dbfs": -30.851,
+      "dbfs": -30.603,
       "event": "summary",
       "excludedApps": 1,
       "peak": 0.24999995529651642,
-      "rms": 0.02867090442658667,
-      "samples": 375360,
-      "seconds": 7.82
+      "rms": 0.02950230388289672,
+      "samples": 382080,
+      "seconds": 7.96
     },
     "filterUpdates": [
       {
         "event": "filterUpdated",
         "excludedApps": 0,
-        "t": 1792340422572.179
+        "t": 1792341588531.822
       },
       {
         "event": "filterUpdated",
         "excludedApps": 1,
-        "t": 1792340423007.902
+        "t": 1792341589318.973
       }
     ],
-    "toneStartedT": 1792340422685.542,
+    "toneStartedT": 1792341588970.211,
     "leakedWindows100ms": 3,
-    "leakFirstT": 1792340422743.866,
-    "leakLastT": 1792340423009.482,
-    "leakMsAfterToneStart": 323.94
+    "leakFirstT": 1792341589088.66,
+    "leakLastT": 1792341589364.627,
+    "leakMsAfterToneStart": 394.42
   }
 }

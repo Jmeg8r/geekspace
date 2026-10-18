@@ -37,6 +37,7 @@ const TONE_WARMUP_MS = 1_500;
 const LATE_LAUNCH_MS = 2_000;
 const TONE_LOG_GRACE_MS = 5_000;
 const TONE_LOG_POLL_MS = 200;
+const CAPTURE_LIVE_TIMEOUT_MS = 15_000;
 // Long enough for the first instance to stop playing but not to exit (it lingers 2 s).
 const SECOND_INSTANCE_GAP_MS = 1_300;
 const FOLLOW_MS = 200;
@@ -87,6 +88,16 @@ function save(name, result) {
   console.log(JSON.stringify(result, null, 2));
 }
 
+/** Resolves once a background helper has printed its "started" line (capture is live). */
+async function captureLive(handle, timeoutMs = CAPTURE_LIVE_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (handle.lines.some((line) => line.event === "started" || line.event === "watching")) return;
+    await sleep(TONE_LOG_POLL_MS / 4);
+  }
+  throw new Error(`capture did not report started within ${timeoutMs} ms`);
+}
+
 /**
  * Start a helper subcommand in the background, collecting its JSON lines. With `logFile`,
  * every line is also appended to disk as it arrives, so a long run that dies or hangs
@@ -135,19 +146,17 @@ const readTone = (log) => (fs.existsSync(log) ? jsonLines(fs.readFileSync(log, "
 function electronTone(seconds) {
   const child = spawn(path.join(ROOT, "node_modules", ".bin", "electron"), [path.join(ROOT, "scripts", "spike", "web-tone.cjs")], {
     env: { ...process.env, GS_TONE_SECONDS: String(seconds) }, stdio: ["ignore", "pipe", "inherit"] });
-  let startT;
   let out = "";
-  child.stdout.on("data", (chunk) => {
-    out += chunk;
-    const line = out.split("\n").find((l) => l.includes('"started"'));
-    if (line && startT === undefined) startT = JSON.parse(line).t;
-  });
+  child.stdout.on("data", (chunk) => { out += chunk; });
   const interval = new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("close", (code) => {
       if (code !== 0) return reject(new Error(`electron tone exited ${code}`));
-      if (startT === undefined) return reject(new Error("electron tone never reported playback start"));
-      resolve({ startT, stopT: Date.now() });
+      const events = jsonLines(out);
+      const started = events.find((event) => event.event === "started");
+      const stopped = events.find((event) => event.event === "stopped");
+      if (!started || !stopped) return reject(new Error("electron tone did not report both playback start and stop"));
+      resolve({ startT: started.t, stopT: stopped.t });
     });
   });
   return { interval };
@@ -175,14 +184,14 @@ function captureWindow(lines, endT) {
 
 /**
  * A tone is evidence only if it was audible during the capture: `cover` (static runs)
- * needs it across the whole window; `overlap` (late launches, which start mid-capture
- * by design) needs any intersection. Starting before the window ends is not enough: a
+ * needs it across the whole window; `late` (late launches) needs the tone to START strictly
+ * inside the window, so the launch really happened mid-capture. Starting before the window ends is not enough: a
  * short tone can finish before a slow capture starts (Codex review of PR 71).
  */
 function requireAudible(label, tone, window, mode) {
   const ok = mode === "cover"
     ? tone.startT <= window.startT && tone.stopT >= window.endT
-    : tone.startT < window.endT && tone.stopT > window.startT;
+    : tone.startT > window.startT && tone.startT < window.endT;
   if (!ok) {
     throw new Error(`${label}: tone [${tone.startT}, ${tone.stopT}] does not ${mode} capture [${window.startT}, ${window.endT}]`);
   }
@@ -283,10 +292,11 @@ const commands = {
     // starts is not in it. Measure the leak with a static filter, then with a re-listing one.
     for (const [tag, follow] of [["lateLaunchStatic", []], ["lateLaunchFollow", ["--follow-ms", FOLLOW_MS]]]) {
       const late = background(["audio", "--seconds", AUDIO_SECONDS * 2, "--exclude", TONE_BUNDLE_ID, ...follow]);
+      await captureLive(late);
       await sleep(LATE_LAUNCH_MS);
       const lateLog = launchTone("play", TONE_SECONDS, `q2-${tag}`);
       const lines = await late.done;
-      const tone = requireAudible(tag, await spikeToneInterval(lateLog, TONE_SECONDS), captureWindow(lines), "overlap");
+      const tone = requireAudible(tag, await spikeToneInterval(lateLog, TONE_SECONDS), captureWindow(lines), "late");
       const started = { t: tone.startT };
       const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
       result[tag] = {
@@ -370,6 +380,7 @@ const commands = {
       ["late-follow", ELECTRON_BUNDLE_ID, ["--follow-ms", FOLLOW_MS]]]) {
       if (by.length && follow.length) continue;
       const late = background(["tap", "--seconds", AUDIO_SECONDS * 2, "--exclude", exclude, ...by, ...follow]);
+      await captureLive(late);
       await sleep(LATE_LAUNCH_MS);
       const { interval } = electronTone(AUDIO_SECONDS);
       let lines;
@@ -381,7 +392,7 @@ const commands = {
         result[tag] = { error: error.message };
         continue;
       }
-      const tone = requireAudible(tag, await interval, captureWindow(lines), "overlap");
+      const tone = requireAudible(tag, await interval, captureWindow(lines), "late");
       const started = { t: tone.startT };
       const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
       result[tag] = { updates: lines.filter((line) => line.event === "tapUpdated"), toneStartedT: started?.t ?? null,
@@ -393,10 +404,11 @@ const commands = {
       launchTone("play", 1, "tap-first-instance");
       await sleep(SECOND_INSTANCE_GAP_MS);
       const late = background(["tap", "--seconds", AUDIO_SECONDS, "--exclude", TONE_BUNDLE_ID, ...by]);
+      await captureLive(late);
       await sleep(LATE_LAUNCH_MS / 2);
       const log = launchTone("play", AUDIO_SECONDS, "tap-second-instance");
       const lines = await late.done;
-      const tone = requireAudible("second-instance", await spikeToneInterval(log, AUDIO_SECONDS), captureWindow(lines), "overlap");
+      const tone = requireAudible("second-instance", await spikeToneInterval(log, AUDIO_SECONDS), captureWindow(lines), "late");
       const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
       result["late-second-instance"] = { tone, leakedWindows100ms: loud.length,
         summary: lines.find((line) => line.event === "summary") };

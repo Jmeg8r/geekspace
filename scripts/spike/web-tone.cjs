@@ -36,7 +36,12 @@ app.whenReady().then(async () => {
       return Date.now();
     })()`);
     console.log(JSON.stringify({ event: "started", t: started, pid: process.pid }));
-    setTimeout(() => app.exit(0), SECONDS * 1000);
+    setTimeout(() => {
+      // The parent can't time the exit itself while it is blocked in a synchronous capture,
+      // so the child stamps its own playback stop (Codex review of PR 71).
+      console.log(JSON.stringify({ event: "stopped", t: Date.now() }));
+      app.exit(0);
+    }, SECONDS * 1000);
   } catch (error) {
     console.error(`web-tone failed: ${error.stack ?? error}`);
     app.exit(1);

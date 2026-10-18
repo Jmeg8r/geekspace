@@ -1,38 +1,47 @@
 {
   "app": "com.github.Electron",
   "tone": {
-    "startT": 1792340363818,
-    "stopT": 1792340373893
+    "startT": 1792341527340,
+    "stopT": 1792341537346
   },
   "control": {
-    "dbfs": -15.051,
+    "dbfs": -18.503,
     "excludedApps": 0,
     "window": {
-      "startT": 1792340366052.509,
-      "endT": 1792340368160
+      "startT": 1792341529539.894,
+      "endT": 1792341531636
     }
   },
   "excluded": {
-    "dbfs": -15.051,
-    "peak": 0.24999994039535522,
+    "dbfs": -16.08,
+    "peak": 0.266676664352417,
     "excludedApps": 1,
     "window": {
-      "startT": 1792340368592.587,
-      "endT": 1792340370738
+      "startT": 1792341532070.963,
+      "endT": 1792341534186
     }
   },
   "coreAudio": [
     {
-      "t": 1792340363844.304,
+      "t": 1792341526226.326,
+      "reason": "initial",
+      "bundle": "dev.geekspace.spike.tone",
+      "pid": 33498,
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "input": false,
+      "output": true
+    },
+    {
+      "t": 1792341527385.374,
       "reason": "listener",
       "bundle": "com.github.Electron.helper",
-      "pid": 13801,
+      "pid": 33556,
       "responsibleBundle": "",
       "input": false,
       "output": true
     },
     {
-      "t": 1792340366088.942,
+      "t": 1792341529564.388,
       "reason": "poll",
       "bundle": "com.apple.replayd",
       "pid": 40656,
@@ -41,7 +50,7 @@
       "output": false
     },
     {
-      "t": 1792340368257.091,
+      "t": 1792341531643.163,
       "reason": "poll",
       "bundle": "com.apple.replayd",
       "pid": 40656,
@@ -50,7 +59,7 @@
       "output": false
     },
     {
-      "t": 1792340368642.212,
+      "t": 1792341532064.513,
       "reason": "poll",
       "bundle": "com.apple.replayd",
       "pid": 40656,
@@ -59,7 +68,16 @@
       "output": false
     },
     {
-      "t": 1792340370787.417,
+      "t": 1792341532838.455,
+      "reason": "poll",
+      "bundle": "dev.geekspace.spike.tone",
+      "pid": 33498,
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "input": false,
+      "output": false
+    },
+    {
+      "t": 1792341534250.237,
       "reason": "poll",
       "bundle": "com.apple.replayd",
       "pid": 40656,

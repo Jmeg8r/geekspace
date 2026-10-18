@@ -7,16 +7,16 @@
   },
   "tone-control": {
     "dbfs": -15.053,
-    "peak": 0.25,
+    "peak": 0.2519746422767639,
     "excludedProcesses": 0,
     "excludedBundles": [],
     "tone": {
-      "startT": 1792340692891.6777,
-      "stopT": 1792340701296.1887
+      "startT": 1792341438144.212,
+      "stopT": 1792341446549.1882
     },
     "window": {
-      "startT": 1792340694326.731,
-      "endT": 1792340698605
+      "startT": 1792341439592.505,
+      "endT": 1792341443637
     }
   },
   "tone-excluded": {
@@ -28,12 +28,12 @@
       "dev.geekspace.spike.tone.helper"
     ],
     "tone": {
-      "startT": 1792340701729.5972,
-      "stopT": 1792340710124.1501
+      "startT": 1792341446978.374,
+      "stopT": 1792341455381.8801
     },
     "window": {
-      "startT": 1792340703138.323,
-      "endT": 1792340707365
+      "startT": 1792341448360.886,
+      "endT": 1792341452473
     }
   },
   "tone-windowless-excluded": {
@@ -45,26 +45,26 @@
       "dev.geekspace.spike.tone.helper"
     ],
     "tone": {
-      "startT": 1792340710437.804,
-      "stopT": 1792340718843.1511
+      "startT": 1792341455721.509,
+      "stopT": 1792341464124.028
     },
     "window": {
-      "startT": 1792340711913.418,
-      "endT": 1792340716151
+      "startT": 1792341457199.796,
+      "endT": 1792341461462
     }
   },
   "electron-control": {
-    "dbfs": -15.052,
-    "peak": 0.2500487267971039,
+    "dbfs": -15.053,
+    "peak": 0.24999994039535522,
     "excludedProcesses": 0,
     "excludedBundles": [],
     "tone": {
-      "startT": 1792340720029,
-      "stopT": 1792340730090
+      "startT": 1792341465257,
+      "stopT": 1792341475260
     },
     "window": {
-      "startT": 1792340722125.578,
-      "endT": 1792340726202
+      "startT": 1792341467431.795,
+      "endT": 1792341471479
     }
   },
   "electron-excluded": {
@@ -76,41 +76,41 @@
       "com.github.Electron.helper"
     ],
     "tone": {
-      "startT": 1792340730692,
-      "stopT": 1792340740755
+      "startT": 1792341475934,
+      "stopT": 1792341485936
     },
     "window": {
-      "startT": 1792340733227.013,
-      "endT": 1792340737497
+      "startT": 1792341478452.817,
+      "endT": 1792341482482
     }
   },
   "late-control": {
     "updates": [],
-    "toneStartedT": 1792340743459,
-    "leakedWindows100ms": 41,
-    "leakFirstT": 1792340743607.264,
-    "leakLastT": 1792340747607.288
+    "toneStartedT": 1792341488777,
+    "leakedWindows100ms": 42,
+    "leakFirstT": 1792341488829.496,
+    "leakLastT": 1792341492925.495
   },
   "late-static": {
     "updates": [],
-    "toneStartedT": 1792340751774,
+    "toneStartedT": 1792341497437,
     "leakedWindows100ms": 0,
     "leakFirstT": null,
     "leakLastT": null
   },
   "late-second-instance": {
     "tone": {
-      "startT": 1792340760411.623,
-      "stopT": 1792340764610.095
+      "startT": 1792341506124.6672,
+      "stopT": 1792341510325.1018
     },
-    "leakedWindows100ms": 31,
+    "leakedWindows100ms": 27,
     "summary": {
-      "dbfs": -16.462,
+      "dbfs": -16.771,
       "event": "summary",
       "excludedProcesses": 1,
-      "peak": 0.2499999850988388,
-      "rms": 0.1502858011070331,
-      "samples": 403456
+      "peak": 0.2499999701976776,
+      "rms": 0.1450332899087054,
+      "samples": 386048
     }
   }
 }
