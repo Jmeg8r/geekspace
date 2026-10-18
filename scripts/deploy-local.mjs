@@ -11,7 +11,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { invalidateMarker } from "../electron/functionSync.mjs";
+import { describeOrdinal, recordExternalDeploy } from "../electron/functionSync.mjs";
+import { commitOrdinal } from "./lib/commitOrdinal.mjs";
 import { packagedConvexDir } from "./lib/paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,10 +25,8 @@ const CONVEX_CLI = path.join(ROOT, "node_modules", "convex", "bin", "main.js");
 
 // Prefer the running app's data dir; fall back to the repo's dev config. All
 // share the same instance identity, so the admin key is valid either way.
-const CANDIDATES = [
-  path.join(packagedConvexDir(), "config.json"),
-  path.join(ROOT, ".convex", "local", "default", "config.json"),
-];
+const PACKAGED_CONFIG = path.join(packagedConvexDir(), "config.json");
+const CANDIDATES = [PACKAGED_CONFIG, path.join(ROOT, ".convex", "local", "default", "config.json")];
 const cfgPath = CANDIDATES.find((p) => fs.existsSync(p));
 if (!cfgPath) {
   console.error("✖ deploy:local: no Convex config.json found (run the app or `npm run dev` once).");
@@ -42,11 +41,17 @@ fs.writeFileSync(
 );
 
 // WHY before deploying: this replaces whatever functions the running app has, so the
-// packaged app's record of which bundle it deployed is no longer true. Forgetting it
-// makes the next packaged launch redeploy its own bundle instead of trusting a stale
-// marker. Done first so a deploy that dies halfway still leaves no false record.
-if (invalidateMarker(packagedConvexDir())) {
-  console.log("• cleared the packaged app's functions marker (next launch redeploys its bundle)");
+// packaged app's record of which bundle it deployed is no longer true. The new record
+// has no hash (the next packaged launch redeploys its bundle) but carries this
+// checkout's commit time, so a packaged build OLDER than this code refuses to replace
+// it. Done first so a deploy that dies halfway still leaves no false hash. Only for the
+// packaged data dir: on the dev fallback the packaged app's functions are untouched.
+if (cfgPath === PACKAGED_CONFIG) {
+  const ordinal = commitOrdinal(ROOT);
+  recordExternalDeploy(packagedConvexDir(), ordinal);
+  console.log(
+    `• marked the packaged app's functions as code of ${describeOrdinal(ordinal)} (next launch redeploys its bundle unless it is older)`
+  );
 }
 
 try {

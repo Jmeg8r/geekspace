@@ -5,7 +5,9 @@
 // pages:get blanked the window). The payload is baked by prebake because bundling at
 // runtime needs esbuild, which can't read inside the asar. No Electron import here, so
 // prebake and the tests run the exact code the packaged app runs.
-// See docs/changes/2026-10-17-function-sync/.
+// Each bundle carries an ordinal (the committer time of the commit it was built from) so an
+// older build refuses to replace newer functions. See docs/changes/2026-10-17-function-sync/
+// and docs/changes/2026-10-17-function-sync-no-downgrade/.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -31,6 +33,17 @@ export class SyncError extends Error {
   }
 }
 
+const isOrdinal = (value) => Number.isInteger(value) && value > 0;
+
+function requireOrdinal(ordinal) {
+  if (!isOrdinal(ordinal)) throw new Error(`Build ordinal must be a positive integer, got ${JSON.stringify(ordinal)}`);
+}
+
+/** Commit-time seconds as a readable date, for logs and the downgrade dialog. */
+export function describeOrdinal(ordinal) {
+  return isOrdinal(ordinal) ? new Date(ordinal * 1000).toISOString() : "unknown";
+}
+
 export function hashRequest(json) {
   return crypto.createHash("sha256").update(json).digest("hex");
 }
@@ -42,17 +55,21 @@ export function stripAdminKey(request) {
 }
 
 /** Write the payload and its manifest (build time). Returns the hash. */
-export function writeBundle(dir, request, { convexVersion }) {
+export function writeBundle(dir, request, { convexVersion, ordinal }) {
   if ("adminKey" in request) throw new Error("Refusing to bundle a deploy payload that holds an admin key");
+  requireOrdinal(ordinal);
   const json = JSON.stringify(request);
   const hash = hashRequest(json);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, REQUEST_FILE), json);
-  fs.writeFileSync(path.join(dir, MANIFEST_FILE), JSON.stringify({ hash, convexVersion }, null, 2) + "\n");
+  fs.writeFileSync(path.join(dir, MANIFEST_FILE), JSON.stringify({ hash, convexVersion, ordinal }, null, 2) + "\n");
   return hash;
 }
 
-/** Read the shipped payload. Throws on a leaked admin key or a payload/manifest mismatch. */
+/**
+ * Read the shipped payload. Throws on a leaked admin key or a payload/manifest mismatch.
+ * `ordinal` is null for a manifest written before ordinals existed.
+ */
 export function readBundle(dir) {
   const json = fs.readFileSync(path.join(dir, REQUEST_FILE), "utf8");
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, MANIFEST_FILE), "utf8"));
@@ -62,13 +79,21 @@ export function readBundle(dir) {
   if (manifest.hash !== hash) {
     throw new Error(`Bundled functions do not match their manifest hash (${dir})`);
   }
-  return { hash, request };
+  return { hash, request, ordinal: isOrdinal(manifest.ordinal) ? manifest.ordinal : null };
 }
 
-/** The hash of the functions this data dir last deployed, or null if unknown. */
+/**
+ * What this data dir last deployed: `{ hash, ordinal }`, either of which may be null
+ * (unknown), or null when there is no readable marker at all.
+ */
 export function readMarker(dataDir) {
   try {
-    return JSON.parse(fs.readFileSync(path.join(dataDir, MARKER_FILE), "utf8")).hash ?? null;
+    const marker = JSON.parse(fs.readFileSync(path.join(dataDir, MARKER_FILE), "utf8"));
+    return {
+      hash: typeof marker?.hash === "string" ? marker.hash : null,
+      // Markers written before ordinals have none: unknown age, so any bundle may deploy.
+      ordinal: isOrdinal(marker?.ordinal) ? marker.ordinal : null,
+    };
   } catch (err) {
     // Missing = never synced (a data dir older than this feature). Unparseable = treat the
     // same: redeploying is idempotent, so the safe reading of "unknown" is "out of date".
@@ -78,26 +103,25 @@ export function readMarker(dataDir) {
 }
 
 /**
- * Forget which functions this data dir runs, so the next launch redeploys the bundle.
- * For anything that deploys outside this module (`npm run deploy:local`). Returns true
- * when a marker was removed.
+ * Temp file + rename, so a crash mid-write can't leave a marker naming the wrong build.
+ * `ordinal` null records "unknown age" (a bundle from before ordinals).
  */
-export function invalidateMarker(dataDir) {
-  try {
-    fs.unlinkSync(path.join(dataDir, MARKER_FILE));
-    return true;
-  } catch (err) {
-    if (err.code === "ENOENT") return false;
-    throw err;
-  }
-}
-
-/** Temp file + rename, so a crash mid-write can't leave a marker naming the wrong build. */
-export function writeMarker(dataDir, hash, { now = Date.now } = {}) {
+export function writeMarker(dataDir, { hash, ordinal }, { now = Date.now } = {}) {
+  if (ordinal !== null) requireOrdinal(ordinal);
   const target = path.join(dataDir, MARKER_FILE);
   const temp = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify({ hash, deployedAt: new Date(now()).toISOString() }, null, 2) + "\n");
+  fs.writeFileSync(temp, JSON.stringify({ hash, ordinal, deployedAt: new Date(now()).toISOString() }, null, 2) + "\n");
   fs.renameSync(temp, target);
+}
+
+/**
+ * Record a deploy made outside this module (`npm run deploy:local`): the hash is unknown,
+ * so the next launch redeploys its bundle, but only if that bundle is no older than
+ * `ordinal`, the age of the code that was pushed.
+ */
+export function recordExternalDeploy(dataDir, ordinal, options) {
+  requireOrdinal(ordinal);
+  writeMarker(dataDir, { hash: null, ordinal }, options);
 }
 
 async function post(fetchImpl, url, adminKey, endpoint, body, signal) {
@@ -166,11 +190,22 @@ export async function pushFunctions({ url, adminKey, request, fetch: fetchImpl =
 }
 
 /**
- * Deploy the bundled functions if the data dir runs anything else. Never throws: the
- * result says what happened so the caller can tell the user.
- * @returns {Promise<{status: "current"|"deployed"|"skipped"|"failed", hash?: string, error?: Error}>}
+ * Is a bundle of this ordinal older than what the data dir runs? Only a live ordinal makes
+ * it so: a marker of unknown age deploys, as it did before ordinals. A bundle without one
+ * predates every marker that has one, so it counts as older.
  */
-export async function syncFunctions({ dataDir, bundleDir, url, adminKey, fetch: fetchImpl = fetch, log, requireBundle = false, deadlineMs, now = Date.now }) {
+function isOlder(bundleOrdinal, liveOrdinal) {
+  if (liveOrdinal === null) return false;
+  return bundleOrdinal === null || bundleOrdinal < liveOrdinal;
+}
+
+/**
+ * Deploy the bundled functions if the data dir runs anything else, unless the bundle is
+ * older than what it runs ("downgrade"; `allowDowngrade` deploys anyway). Never throws:
+ * the result says what happened so the caller can tell the user.
+ * @returns {Promise<{status: "current"|"deployed"|"downgrade"|"skipped"|"failed", hash?: string, bundleOrdinal?: number|null, liveOrdinal?: number, error?: Error}>}
+ */
+export async function syncFunctions({ dataDir, bundleDir, url, adminKey, fetch: fetchImpl = fetch, log, requireBundle = false, allowDowngrade = false, deadlineMs, now = Date.now }) {
   if (!fs.existsSync(path.join(bundleDir, REQUEST_FILE))) {
     const message = `No bundled functions at ${bundleDir}`;
     if (requireBundle) {
@@ -190,14 +225,25 @@ export async function syncFunctions({ dataDir, bundleDir, url, adminKey, fetch: 
     const bundle = readBundle(bundleDir);
     hash = bundle.hash;
     const short = hash.slice(0, HASH_PREFIX_CHARS);
-    if (readMarker(dataDir) === hash) {
+    const live = readMarker(dataDir);
+    if (live?.hash === hash) {
       log(`Functions current (${short}).`);
       return { status: "current", hash };
+    }
+    const bundleOrdinal = bundle.ordinal;
+    const liveOrdinal = live?.ordinal ?? null;
+    if (isOlder(bundleOrdinal, liveOrdinal)) {
+      const ages = `bundle built from code of ${describeOrdinal(bundleOrdinal)}, data dir runs code of ${describeOrdinal(liveOrdinal)}`;
+      if (!allowDowngrade) {
+        log(`WARNING: bundled functions ${short} are older than the live ones (${ages}); skipping the deploy and keeping the newer functions.`);
+        return { status: "downgrade", hash, bundleOrdinal, liveOrdinal };
+      }
+      log(`WARNING: downgrade forced by GEEKSPACE_ALLOW_FUNCTION_DOWNGRADE (${ages}).`);
     }
     log(`Deploying bundled functions ${short}…`);
     const startedAt = now();
     await pushFunctions({ url, adminKey, request: bundle.request, fetch: fetchImpl, deadlineMs, now });
-    writeMarker(dataDir, hash, { now });
+    writeMarker(dataDir, { hash, ordinal: bundleOrdinal }, { now });
     log(`Deployed functions ${short} in ${now() - startedAt}ms.`);
     return { status: "deployed", hash };
   } catch (err) {

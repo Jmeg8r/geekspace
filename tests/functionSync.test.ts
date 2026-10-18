@@ -84,7 +84,9 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
 const markerPath = () => path.join(dataDir(), "functions.json");
-const writeMarkerFile = (marker: object) => fs.writeFileSync(markerPath(), JSON.stringify(marker));
+// A functions.json as found on disk, including shapes older or broken builds left.
+type RawMarker = { hash?: string | number; ordinal?: number | string; deployedAt?: string };
+const writeMarkerFile = (marker: RawMarker) => fs.writeFileSync(markerPath(), JSON.stringify(marker));
 
 const sync = (fetchImpl: ReturnType<typeof fakeBackend>["fetchImpl"], extra = {}) =>
   syncFunctions({ dataDir: dataDir(), bundleDir: bundleDir(), url: URL, adminKey: ADMIN_KEY, fetch: fetchImpl, log, ...extra });
@@ -111,9 +113,8 @@ describe("bundle", () => {
   });
 
   it.each([undefined, 0, -1, 1.5, "1792245754"])("refuses to bundle without a positive integer ordinal (%s)", (ordinal) => {
-    // SAFETY: deliberately wrong types, to prove the build-time check rejects them.
-    const options = { convexVersion: "1.46.0", ordinal } as unknown as { convexVersion: string; ordinal: number };
-    expect(() => writeBundle(path.join(root, "bad"), REQUEST, options)).toThrow(/ordinal/i);
+    // @ts-expect-error -- deliberately wrong types, to prove the build-time check rejects them.
+    expect(() => writeBundle(path.join(root, "bad"), REQUEST, { convexVersion: "1.46.0", ordinal })).toThrow(/ordinal/i);
   });
 
   it("reads a manifest from before ordinals as having none", () => {
