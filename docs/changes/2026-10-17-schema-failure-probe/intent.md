@@ -1,8 +1,9 @@
 ---
 change: 2026-10-17-schema-failure-probe
-status: draft
+status: accepted
 track: T1
 author: claude
+accepted_by: james
 linear: pending
 source: side session from the function-sync follow-up (forge PR #65)
 ---
