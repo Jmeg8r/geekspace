@@ -430,35 +430,46 @@ const commands = {
     const threshold = Number(process.env.GS_SPIKE_HAMMING ?? 8);
     const bits = (hex) => [...hex].flatMap((c) => parseInt(c, 16).toString(2).padStart(4, "0").split("").map(Number));
     const distance = (a, b) => a.reduce((sum, bit, i) => sum + (bit !== b[i] ? 1 : 0), 0);
-    const spanHours = (frames.length * SHOT_INTERVALS_SEC[0]) / SECONDS_PER_HOUR;
+    // Measured span (last tick start + one interval), not ticks x interval: slow ticks
+    // stretch the real hour.
+    const spanHours = (frames.at(-1).t + SHOT_INTERVALS_SEC[0]) / SECONDS_PER_HOUR;
     const result = { frames: frames.length, spanMinutes: round(spanHours * 60, 1), hammingThreshold: threshold, intervals: {} };
+    // CPU per tick splits into a base part (capture, hash, encode) paid by every tick, and
+    // OCR paid only by kept frames. A frame the 2x/4x replay keeps but the 15 s run skipped
+    // was never OCR'd, so it is charged the mean measured OCR CPU (Codex review of PR 71).
+    const ocrFrames = frames.filter((f) => !f.skipped && f.ocrCpuSec !== undefined);
+    const meanOcrCpu = ocrFrames.length ? ocrFrames.reduce((sum, f) => sum + f.ocrCpuSec, 0) / ocrFrames.length : null;
+    if (meanOcrCpu === null) throw new Error("no ocrCpuSec in shots.jsonl: re-run `shots` with the current helper");
+    const baseCpu = (f) => f.cpuSec - (f.ocrCpuSec ?? 0);
     for (const interval of SHOT_INTERVALS_SEC) {
       const step = interval / SHOT_INTERVALS_SEC[0];
+      const ticks = frames.filter((f) => f.i % step === 0);
       let last = null;
       let kept = 0;
       let bytes = 0;
       let cpu = 0;
-      for (const frame of frames.filter((f) => f.i % step === 0)) {
+      for (const frame of ticks) {
         const hash = bits(frame.hash);
-        // Every tick pays capture + hash + encode; only kept frames pay storage and OCR.
-        cpu += frame.cpuSec;
-        if (last && distance(last, hash) <= threshold) {
-          cpu -= frame.ocrMs / 1000;
-          continue;
-        }
+        cpu += baseCpu(frame);
+        if (last && distance(last, hash) <= threshold) continue;
         last = hash;
         kept += 1;
         bytes += frame.bytes;
+        cpu += frame.skipped ? meanOcrCpu : frame.ocrCpuSec;
       }
       const perHourMb = bytes / BYTES_PER_MB / spanHours;
       result.intervals[interval] = {
-        ticks: frames.filter((f) => f.i % step === 0).length, kept,
+        ticks: ticks.length, kept,
         mbPerHour: round(perHourMb), mbPer8hDay: round(perHourMb * WORK_HOURS_PER_DAY),
         gbPer30Days: round((perHourMb * WORK_HOURS_PER_DAY * RETENTION_DAYS) / 1000),
         helperCpuSecPerHour: round(cpu / spanHours, 1),
         helperCpuPercentOfOneCore: round((cpu / (spanHours * SECONDS_PER_HOUR)) * 100, 3),
       };
     }
+    result.cpuModel = {
+      meanBaseCpuSecPerTick: round(frames.reduce((sum, f) => sum + baseCpu(f), 0) / frames.length, 4),
+      meanOcrCpuSecPerKeptFrame: round(meanOcrCpu, 4), ocrMeasuredFrames: ocrFrames.length,
+    };
     const kept = frames.filter((f) => !f.skipped);
     result.perFrame = {
       meanCaptureMs: round(frames.reduce((s, f) => s + f.captureMs, 0) / frames.length),
