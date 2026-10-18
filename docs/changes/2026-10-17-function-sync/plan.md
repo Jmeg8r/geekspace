@@ -215,6 +215,8 @@ CLI, no repo at runtime. Prebake itself pushes through the same module, so every
   violate the schema wasn't worth the risk), the error-boundary fallback screens
   (jsdom-tested; nothing in the current build throws on demand), and Windows
   (`package:win` not run here).
+  The schema-failure *sync path* (not the dialog) is now proven against a real backend by
+  `npm run probe:schema-failure`; see `docs/changes/2026-10-17-schema-failure-probe/`.
 
 ## Deviations after Codex review (4 rounds, PR #65 comment)
 
