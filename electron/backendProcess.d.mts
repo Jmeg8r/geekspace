@@ -4,6 +4,7 @@ import type { ChildProcess } from "node:child_process";
 export interface Backend {
   child: ChildProcess | null;
   exitInfo: { code: number | null; signal: NodeJS.Signals | null } | null;
+  spawnError: NodeJS.ErrnoException | null;
 }
 
 export function spawnBackend(

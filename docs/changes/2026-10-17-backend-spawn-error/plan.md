@@ -9,7 +9,9 @@ linear: pending
 
 ## Files that change
 
-- `electron/convexBackend.mjs` — the only code change.
+- `electron/backendProcess.mjs` (+ `.d.mts`) — new: spawn / waitHealthy / stop, no Electron
+  import (see **Deviations**).
+- `electron/convexBackend.mjs` — drives `backendProcess.mjs`.
 - `tests/convexBackend.test.ts` — new unit test.
 - `docs/changes/2026-10-17-backend-spawn-error/` — this folder, including `probe/`.
 
@@ -67,10 +69,49 @@ grep-by-value positive control (config.json): 1
 [probe +35.3s] stopBackend + killBackendSync returned
 ```
 
-### Post-fix
+### Failing-first control
 
-_(filled in during step 4)_
+Commit `refactor(convexBackend): extract …` has the extracted module *without* the fix:
+`npx vitest run tests/convexBackend.test.ts` → 1 failed, 2 passed —
+`expected 'still waiting' to be 'Convex backend failed to start: EACCES. See /logs/convex.log'`.
+The spawn and early-exit tests pass, so the extraction alone preserves behaviour.
+
+### Post-fix (same harness)
+
+```
+rc=0 wall=1s
+positive control '[probe': 3
+secret hits in stdout/stderr: 0
+secret hits in convex.log: 0
+grep-by-value positive control (config.json): 1
+[probe +0.1s] uncaughtException listeners: 1
+[convexBackend] Backend failed to start: EACCES
+[probe +0.1s] startOrAttach rejected: Convex backend failed to start: EACCES. See $A/Geekspace/logs/convex.log
+[probe +0.1s] stopBackend + killBackendSync returned
+```
+
+No `showErrorBox` (no uncaught exception); 35 s → 0.1 s.
+
+Success path (real pinned binary used read-only via `GEEKSPACE_CONVEX_BINARY`, random
+64-hex secret, temp appData, :3210 free): `Backend healthy on :3210` at +0.4 s,
+`startOrAttach resolved`, SIGTERM stop exits at once, 0 secret hits. Shared binary mode
+`-rwxrwxrwx` before and after (never chmodded).
+
+`npm run verify`: rc=0 — oxlint (no findings in the changed files), `tsc -b --noEmit`,
+vitest 37 files / 286 tests passed. `snyk test`: the same 3 pre-existing issues as PR #68
+(zod, qs, hono); this change touches no dependencies.
 
 ## Deviations
 
-_(none yet)_
+- **Extracted `electron/backendProcess.mjs`.** The plan's test mocked `electron` with
+  `vi.mock`; oxlint's anti-slop `no-module-mocking` is an error and the repo has no module
+  mocks. Followed the repo's pattern instead (Electron-free module + `.d.mts`, like
+  `dataDirectory.mjs` / `functionSync.mjs`): spawn, `waitHealthy`, stop and sync-kill
+  moved there with `isHealthy` / `log` injected, and the test drives real child processes
+  (a 0644 file, `node -e` long-running, `node -e process.exit(3)`). `convexBackend.mjs`
+  keeps paths, config, attach and function sync. The earlier `vi.mock` test commit stays
+  in history; the next commit replaces it.
+- The dummy secret in the first test draft was high-entropy and tripped gitleaks + Aikido
+  in pre-commit; replaced with an obviously-placeholder value (not bypassed).
+- The unit test proves "no uncaught exception" with a `process` listener; the Electron
+  crash dialog itself is covered by the real-Electron probe, not by vitest.
