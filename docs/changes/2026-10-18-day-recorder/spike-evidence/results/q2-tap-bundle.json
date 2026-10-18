@@ -1,0 +1,61 @@
+{
+  "silenceBaseline": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "tone-control": {
+    "dbfs": -15.053,
+    "peak": 0.24999994039535522,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "tone-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 0,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone",
+      "dev.geekspace.spike.tone.helper"
+    ]
+  },
+  "tone-windowless-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 0,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone",
+      "dev.geekspace.spike.tone.helper"
+    ]
+  },
+  "electron-control": {
+    "dbfs": -15.052,
+    "peak": 0.2500116229057312,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "electron-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 0,
+    "excludedBundles": [
+      "com.github.Electron",
+      "com.github.Electron.helper"
+    ]
+  },
+  "late-control": {
+    "updates": [],
+    "toneStartedT": 1792335473434,
+    "leakedWindows100ms": 41,
+    "leakFirstT": 1792335473562.603,
+    "leakLastT": 1792335477562.655
+  },
+  "late-static": {
+    "updates": [],
+    "toneStartedT": 1792335482161,
+    "leakedWindows100ms": 0,
+    "leakFirstT": null,
+    "leakLastT": null
+  }
+}

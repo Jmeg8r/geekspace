@@ -1,0 +1,64 @@
+{
+  "app": "com.github.Electron",
+  "started": {
+    "event": "started",
+    "t": 1792334150030,
+    "pid": 58778
+  },
+  "control": {
+    "dbfs": -15.052,
+    "excludedApps": 0
+  },
+  "excluded": {
+    "dbfs": -15.052,
+    "peak": 0.2499999701976776,
+    "excludedApps": 1
+  },
+  "coreAudio": [
+    {
+      "t": 1792334149985.179,
+      "reason": "listener",
+      "bundle": "com.github.Electron.helper",
+      "pid": 58788,
+      "responsibleBundle": "",
+      "input": false,
+      "output": true
+    },
+    {
+      "t": 1792334152712.27,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": true,
+      "output": false
+    },
+    {
+      "t": 1792334154792.575,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": false,
+      "output": false
+    },
+    {
+      "t": 1792334155206.697,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": true,
+      "output": false
+    },
+    {
+      "t": 1792334157369.406,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": false,
+      "output": false
+    }
+  ]
+}

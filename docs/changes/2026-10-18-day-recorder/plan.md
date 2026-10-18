@@ -73,6 +73,9 @@ use the F2 headphones fallback and record it under Deviations.
 **Output:** findings, settled values for `SHOT_SEC`, the whisper model and the entitlement
 keys, and updates to spec.md and plan.md in the same PR.
 
+**Done (2026-10-18):** see `spike-findings.md`. (1) and (3) passed. (2) failed for
+Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (Deviations).
+
 ### PR 2 — Data layer (`feat/day-recorder-data`)
 
 **Files:**
@@ -106,10 +109,18 @@ keys, and updates to spec.md and plan.md in the same PR.
 
 **Files:**
 - `native/gs-capture/` in production form:
-  - SCK screenshots with the denylist filter, HEIC output, perceptual-hash skipping;
-  - SCK system audio segments;
-  - Vision OCR;
-  - process-audio watcher;
+  - SCK screenshots with the denylist filter, HEIC output, perceptual-hash skipping; the
+    filter is rebuilt each frame from ALL apps (`onScreenWindowsOnly: false`), and the
+    menu-bar band is blanked while a denylisted app is frontmost (spike Q1);
+  - system audio from a CoreAudio process tap that excludes the denylist by bundle ID
+    (`<id>` and `<id>.helper`, plus any child-process bundles the watcher reports), with
+    `TapAutoStart` off; a tap that delivers no samples fails loudly (spike Q2);
+  - Vision OCR, accurate, at point resolution, retried once on a luminance-thresholded copy
+    when a frame yields few lines (spike Q5);
+  - a process-audio watcher that polls every 100 ms (listeners alone miss mic use on macOS
+    27.0) and ignores `replayd`, `avconferenced` and our own processes (spike Q3, Q4);
+  - a 10 s timeout on every SCK call, exiting non-zero so the supervisor shows
+    "Not recording" (spike Q1);
   - JSON-lines protocol on stdout.
 - `scripts/build-gs-capture.mjs`, run by `package`: runs `swiftc` on darwin only, and
   signing is inherited through `extraResources`.
@@ -131,8 +142,11 @@ keys, and updates to spec.md and plan.md in the same PR.
   `fromApp` guard.
 - `electron/preload.cjs`: the narrow `dayRecorder` namespace from the spec.
   `setApiKey` is write-only.
-- `package.json`: `extraResources` gains the helper, and `extendInfo` and
-  `build/entitlements.mac.plist` gain the keys PR 1 settled, each with a WHY comment.
+- `package.json`: `mac.extraResources` gains the helper (electron-builder then signs it with
+  `entitlementsInherit`; spike Q7), and `extendInfo` gains a real
+  `NSAudioCaptureUsageDescription`. `build/entitlements.mac.plist` needs no new key (spike
+  Q7). The helper's deployment target is macOS 26 (bundle-ID taps). Proof includes the tap
+  on a clean TCC state, to settle whether it needs its own grant.
 - **UI:**
   - `src/components/dayRecorder/` holds the indicator, the Settings section (enable,
     denylist editor, cap, intervals, the FileVault and Time Machine status) and the state
@@ -271,3 +285,23 @@ keys, and updates to spec.md and plan.md in the same PR.
 
 ## Deviations
 <!-- appended during implementation -->
+
+- **2026-10-18, PR 1, gate (2) tripped → system audio re-planned (James).**
+  ScreenCaptureKit's app filter did not exclude audio from Chromium/Electron apps: −15 dBFS
+  leaked, 3 of 3 runs, because the audio plays from a windowless helper SCK cannot list. It
+  also missed windowless apps and leaked about 150 ms when a denylisted app launched
+  mid-stream. James chose to prototype a CoreAudio process tap. Excluding by bundle ID
+  (`<id>` + `<id>.helper`, macOS 26+) was silent in every case, including late launches,
+  on the signed build. **Change:** PR 3 takes system audio from the tap; SCK keeps
+  screenshots. The helper's minimum macOS rises from 14 to 26. That fits v1, which is Mac
+  Studio only (macOS 27). F1's intent ("never captured") holds.
+- **2026-10-18, PR 1, gate (3) passed; no headphones fallback.** CoreAudio process objects
+  report audio use, but only by 100 ms polling on macOS 27.0 (listeners miss the mic).
+  PR 4's mic pause and call detector poll.
+- **2026-10-18, PR 1, Q4 partly run.** Zoom and a Chromium stand-in were tested. FaceTime,
+  Teams and Slack were not, so PR 4's Proof adds one test call each to the existing FaceTime
+  call. FaceTime goes through `avconferenced`, which showed mic input with no call active.
+- **2026-10-18, PR 1, the spike build used a temporary electron-builder config** (outside the
+  repo) to add the helper as an extra resource, and drove the signed binary through
+  `ELECTRON_RUN_AS_NODE` so app code was unchanged. PR 3 makes the `extraResources` entry
+  permanent.
