@@ -139,6 +139,16 @@ export function recordExternalDeploy(dataDir, ordinal, options) {
   writeMarker(dataDir, { hash: null, ordinal }, options);
 }
 
+/**
+ * The first line of a wait_for_schema failure: document ID, table, and the field at fault.
+ * WHY only that line: the rest is the offending document and the whole validator (the
+ * user's page, content included), and the next failure shape may dump a value elsewhere.
+ */
+function schemaFailureDetail(error) {
+  if (typeof error !== "string" || !error.trim()) return "no detail from the backend";
+  return error.trim().split("\n", 1)[0].trim().slice(0, MAX_DETAIL_CHARS);
+}
+
 async function post(fetchImpl, url, adminKey, endpoint, body, signal) {
   const res = await fetchImpl(`${url}${endpoint}`, {
     method: "POST",
@@ -186,7 +196,7 @@ export async function pushFunctions({ url, adminKey, request, fetch: fetchImpl =
       if (status.type === "complete") break;
       if (status.type === "failed") {
         const where = status.tableName ? ` (table "${status.tableName}")` : "";
-        throw new SyncError(`Schema validation failed${where}: ${status.error}`, { tableName: status.tableName });
+        throw new SyncError(`Schema validation failed${where}: ${schemaFailureDetail(status.error)}`, { tableName: status.tableName });
       }
       if (status.type === "raceDetected") throw new SyncError("Schema was overwritten by another push");
       if (status.type !== "inProgress") throw new SyncError(`Unexpected schema status: ${JSON.stringify(status).slice(0, MAX_DETAIL_CHARS)}`);
