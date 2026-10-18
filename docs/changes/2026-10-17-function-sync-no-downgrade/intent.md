@@ -1,9 +1,9 @@
 ---
 change: 2026-10-17-function-sync-no-downgrade
-status: draft
+status: accepted
 track: T1
 author: claude
-accepted_by: pending
+accepted_by: james
 linear: pending
 source: follow-up to forge PR #65 (function sync), whose intent left downgrades out of scope
 ---

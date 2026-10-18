@@ -1,7 +1,8 @@
 ---
 change: 2026-10-17-function-sync-no-downgrade
-status: draft
+status: accepted
 track: T1
+accepted_by: james
 intent: ./intent.md
 linear: pending
 ---
