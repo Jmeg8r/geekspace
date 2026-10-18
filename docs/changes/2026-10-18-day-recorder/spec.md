@@ -101,6 +101,8 @@ Each requirement traces to the intent.
 - **R2. Rolling audio segments.**
   - Mic and system audio are written as segments of `SEGMENT_SEC` (default 300) to the
     media root.
+  - Every segment decodes on its own. Each file is a complete container with its own
+    headers, so any segment can be transcribed without the ones before it.
   - No more than one segment is held in memory, so renderer and helper memory stay flat
     over 8 hours.
   - *Traces to:* success signal, flat memory.
@@ -169,10 +171,17 @@ Each requirement traces to the intent.
   - Emits JSON lines on stdout. It is spawned and supervised by
     `electron/dayRecorder.mjs`, which follows the backendProcess error-listener pattern
     from PR #69: a spawn error is reported, never left to hang.
-- **Mic capture.** A hidden `BrowserWindow` (`capture.html`) runs `MediaRecorder` with a
-  `SEGMENT_SEC` timeslice. Each chunk is sent over IPC to the main process, which appends
-  it to the current segment file. The hidden window survives navigation in the main window.
-  `recorder.ts` is not changed; Meetings keeps its own path.
+- **Mic capture.** A hidden `BrowserWindow` (`capture.html`) runs `MediaRecorder`, and
+  **stops and restarts it** at every `SEGMENT_SEC` boundary.
+  - *Why:* timeslice chunks belong to one continuous WebM stream, and only the first chunk
+    carries the container header. Stopping finalizes the file, so each segment decodes
+    independently (Codex review of PR #70).
+  - Smaller timeslice chunks within a segment are sent over IPC to the main process, which
+    appends them to that segment's file, so memory stays bounded.
+  - A new recorder starts on the same `MediaStream`, so the gap at each boundary is
+    measured in milliseconds (measured in the spike).
+  - The hidden window survives navigation in the main window. `recorder.ts` is not changed;
+    Meetings keeps its own path.
 - **Main process (`electron/dayRecorder.mjs`).**
   - Owns the media root, which is `<app data>/day-recorder/YYYY-MM-DD/`.
   - Owns the transcription queue, the Claude batcher (`electron/dayAssistant.mjs`), the

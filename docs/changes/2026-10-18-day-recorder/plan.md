@@ -122,8 +122,11 @@ keys, and updates to spec.md and plan.md in the same PR.
   - the purge job, which resolves each path and refuses anything outside the media root;
   - the tray indicator.
 - `electron/capture.html` plus `src/capture/micCapture.ts`: a hidden-window `MediaRecorder`
-  with a `SEGMENT_SEC` timeslice, streaming chunks over IPC to the main process for
-  appending. The silence floor is reused from `src/lib/recorder.ts` (export `SILENCE_LEVEL`).
+  that is stopped and restarted on the same stream at each `SEGMENT_SEC` boundary, so every
+  segment is a complete, independently decodable WebM. Small timeslice chunks stream over
+  IPC to the main process for appending within a segment. The silence floor is reused from
+  `src/lib/recorder.ts` (export `SILENCE_LEVEL`). The system-audio segments from
+  `gs-capture` follow the same rule: one finalized file per segment.
 - `electron/main.mjs`: register `gs:dayRecorder:*` through the existing `handle()` with its
   `fromApp` guard.
 - `electron/preload.cjs`: the narrow `dayRecorder` namespace from the spec.
@@ -144,7 +147,16 @@ keys, and updates to spec.md and plan.md in the same PR.
   - malformed lines are dropped;
   - the denylist is passed on argv.
 - `tests/dayRecorderPurge.test.ts`: 31 vs 29 days; a path outside the root is refused.
-- `tests/micCapture.test.ts`: a segment rolls over at `SEGMENT_SEC`; silence raises a warning.
+- `tests/micCapture.test.ts`: a segment rolls over at `SEGMENT_SEC`, with stop and restart
+  each time; silence raises a warning.
+- `scripts/probe-segment-decode.mjs` (`npm run probe:segment-decode`): the **second**
+  segment of a two-segment recording decodes and converts to 16 kHz wav through the
+  `meetingProcessor.mjs` ffmpeg path, without access to the first segment.
+  - This is Codex's PR #70 finding.
+  - It is a probe, not a vitest suite, for the same reason as `probe:schema-failure`: a
+    suite would silently skip on CI, where there is no ffmpeg. The probe exits non-zero if
+    ffmpeg is missing.
+  - It runs in PR 3's Proof, and the spike measures the restart gap.
 
 ### PR 4 — Call notice and mic pause (`feat/day-recorder-calls`)
 
