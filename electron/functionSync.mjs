@@ -115,6 +115,21 @@ export function writeMarker(dataDir, { hash, ordinal }, { now = Date.now } = {})
 }
 
 /**
+ * Forget which functions this data dir runs, so the next launch redeploys whatever bundle
+ * it has. For a deploy made outside this module that can't be attributed to this data dir
+ * (see `npm run deploy:local`). Returns true when a marker was removed.
+ */
+export function invalidateMarker(dataDir) {
+  try {
+    fs.unlinkSync(path.join(dataDir, MARKER_FILE));
+    return true;
+  } catch (err) {
+    if (err.code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/**
  * Record a deploy made outside this module (`npm run deploy:local`): the hash is unknown,
  * so the next launch redeploys its bundle, but only if that bundle is no older than
  * `ordinal`, the age of the code that was pushed.
@@ -226,12 +241,20 @@ export async function syncFunctions({ dataDir, bundleDir, url, adminKey, fetch: 
     hash = bundle.hash;
     const short = hash.slice(0, HASH_PREFIX_CHARS);
     const live = readMarker(dataDir);
-    if (live?.hash === hash) {
-      log(`Functions current (${short}).`);
-      return { status: "current", hash };
-    }
     const bundleOrdinal = bundle.ordinal;
     const liveOrdinal = live?.ordinal ?? null;
+    if (live?.hash === hash) {
+      // Same functions, but this build may be newer (or the marker predates ordinals).
+      // Record the newer age so a later, different bundle in between is still refused.
+      // Never lowers it: an older build of identical functions says nothing new.
+      if (bundleOrdinal !== null && (liveOrdinal === null || bundleOrdinal > liveOrdinal)) {
+        writeMarker(dataDir, { hash, ordinal: bundleOrdinal }, { now });
+        log(`Functions current (${short}); recorded them as code of ${describeOrdinal(bundleOrdinal)}.`);
+      } else {
+        log(`Functions current (${short}).`);
+      }
+      return { status: "current", hash };
+    }
     if (isOlder(bundleOrdinal, liveOrdinal)) {
       const ages = `bundle built from code of ${describeOrdinal(bundleOrdinal)}, data dir runs code of ${describeOrdinal(liveOrdinal)}`;
       if (!allowDowngrade) {

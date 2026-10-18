@@ -6,6 +6,7 @@ import {
   SyncError,
   hashRequest,
   readBundle,
+  invalidateMarker,
   readMarker,
   recordExternalDeploy,
   stripAdminKey,
@@ -138,6 +139,17 @@ describe("readMarker", () => {
   it("reads fields of the wrong type as unknown", () => {
     writeMarkerFile({ hash: 42, ordinal: "tomorrow" });
     expect(readMarker(dataDir())).toEqual({ hash: null, ordinal: null });
+  });
+});
+
+describe("invalidateMarker", () => {
+  it("removes the marker so the next launch redeploys, and tolerates none", async () => {
+    await sync(fakeBackend(happyReplies()).fetchImpl);
+    expect(invalidateMarker(dataDir())).toBe(true);
+    expect(readMarker(dataDir())).toBeNull();
+    expect(invalidateMarker(dataDir())).toBe(false);
+    const again = fakeBackend(happyReplies());
+    expect((await sync(again.fetchImpl)).status).toBe("deployed");
   });
 });
 

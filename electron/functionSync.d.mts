@@ -36,6 +36,7 @@ export function writeBundle(dir: string, request: PushRequest, options: { convex
 export function readBundle(dir: string): { hash: string; request: PushRequest; ordinal: Ordinal | null };
 export function readMarker(dataDir: string): Marker | null;
 export function writeMarker(dataDir: string, marker: Marker, options?: { now?: () => number }): void;
+export function invalidateMarker(dataDir: string): boolean;
 export function recordExternalDeploy(dataDir: string, ordinal: Ordinal, options?: { now?: () => number }): void;
 
 export function pushFunctions(options: {

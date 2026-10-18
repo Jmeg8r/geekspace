@@ -135,3 +135,21 @@ checkout instead. A marker without an ordinal means "unknown age" and deploys, a
   against the hook's repository whatever `cwd` said. A build launched from a hook (or any
   shell with `GIT_DIR` set) would have stamped another repo's commit time. Now covered by
   its own test; `npm run verify` after the fix: 35 files / 275 tests.
+
+### After Codex round 1 (PR #67 comment, gate PASS with two [P2])
+
+- **Same hash promotes the marker's ordinal** (never lowers it). Without this, a newer
+  build of identical functions left an older or missing ordinal behind, so a later,
+  different bundle between the two ages deployed unrefused, and pre-ordinal data dirs
+  stayed unprotected after upgrading. Still no network call.
+- **`deploy:local` stamps an ordinal only on a verified target.** `convex dev` can hold
+  :3210 while the packaged config exists, and the shared instance identity lets the CLI
+  deploy there; stamping the packaged marker would then block a needed update of a
+  database the deploy never touched. New `scripts/lib/listenerCwd.mjs` reads the
+  listener's cwd with `lsof` (mac); the packaged backend runs with the data dir as cwd.
+  Verified match → record the ordinal; anything else, including Windows (no shell-free
+  way to read another process's cwd), → `invalidateMarker` as before this change. This
+  narrows decision 3 of the intent to the case where it is provably true.
+- Live: with the packaged app running, `listenerCwd(3210)` returned the packaged data dir
+  (realpath match); against :3300 it matched an independent `lsof` control; an idle port
+  returned null. `npm run verify`: 36 files / 283 tests.
