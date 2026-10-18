@@ -22,7 +22,7 @@ const SCHEMA_POLL_MS = 10_000;
 // something is wrong and the user should hear about it rather than stare at no window.
 const DEFAULT_DEADLINE_MS = 120_000;
 // Enough of a backend error body to diagnose from the log without dumping a whole page.
-const MAX_DETAIL_CHARS = 500;
+export const MAX_DETAIL_CHARS = 500;
 const HASH_PREFIX_CHARS = 12;
 
 export class SyncError extends Error {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  MAX_DETAIL_CHARS,
   SyncError,
   hashRequest,
   readBundle,
@@ -231,6 +232,53 @@ describe("syncFunctions", () => {
     expect(backend.endpoints()).not.toContain("/api/deploy2/finish_push");
     expect(readMarker(dataDir())).toEqual({ hash: "older-build", ordinal: null });
     expect(logs.join("\n")).toMatch(/does not match schema/);
+  });
+
+  // The pinned backend's real failure text (captured by the schema-failure probe, PR #66),
+  // with made-up values: the first line names what failed, the rest dumps the document.
+  const PRIVATE_CONTENT = "Diary: the surprise party is on Friday. ".repeat(200);
+  const BACKEND_SCHEMA_ERROR = [
+    'Document with ID "jh70tjr51xhd5mtgea997tndqn8ghtd7" in table "pages" does not match the schema: Object is missing the required field `probeRequired`. Consider wrapping the field validator in `v.optional(...)` if this is expected.',
+    "",
+    `Object: {content: "${PRIVATE_CONTENT}", favorite: false, kind: "doc", title: "Secret plans", trashed: false}`,
+    'Validator: v.object({content: v.optional(v.string()), favorite: v.boolean(), probeRequired: v.string(), title: v.string()})',
+  ].join("\n");
+  const schemaFailure = (error: string) =>
+    fakeBackend({
+      ...happyReplies(),
+      "/api/deploy2/wait_for_schema": [{ body: { type: "failed", error, tableName: "pages" } }],
+    });
+  const detailOf = (message = "") => message.slice(message.indexOf("): ") + "): ".length);
+
+  it("a failed schema check reports what failed but none of the offending document", async () => {
+    const result = await sync(schemaFailure(BACKEND_SCHEMA_ERROR).fetchImpl);
+    expect(result.status).toBe("failed");
+    expect(result.error?.tableName).toBe("pages");
+    for (const text of [result.error?.message ?? "", logs.join("\n")]) {
+      expect(text).toContain('(table "pages")');
+      expect(text).toContain('Document with ID "jh70tjr51xhd5mtgea997tndqn8ghtd7"');
+      expect(text).toContain("`probeRequired`");
+      expect(text).not.toContain("Object:");
+      expect(text).not.toContain("Validator:");
+      expect(text).not.toContain("surprise party");
+      expect(text).not.toContain("Secret plans");
+    }
+  });
+
+  it("caps a schema failure's detail even when its first line is huge", async () => {
+    const result = await sync(schemaFailure(`Document is wrong: ${PRIVATE_CONTENT}`).fetchImpl);
+    expect(result.status).toBe("failed");
+    expect(detailOf(result.error?.message).length).toBeLessThanOrEqual(MAX_DETAIL_CHARS);
+  });
+
+  it("a schema failure without an error string still says what table failed", async () => {
+    const backend = fakeBackend({
+      ...happyReplies(),
+      "/api/deploy2/wait_for_schema": [{ body: { type: "failed", tableName: "pages" } }],
+    });
+    const result = await sync(backend.fetchImpl);
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toMatch(/Schema validation failed \(table "pages"\): no detail from the backend/);
   });
 
   it("a raced push fails without finishing", async () => {

@@ -1,9 +1,9 @@
 ---
 change: 2026-10-17-schema-error-redaction
-status: proposed
+status: accepted
 track: T1
 author: claude
-accepted_by: pending
+accepted_by: james
 linear: pending
 source: finding from forge PR #66 (schema-failure probe), Deviations section
 ---
