@@ -27,7 +27,7 @@ is in front.**
   with the denylist, and it streams JSON lines back.
 - *Cost:* a Swift toolchain in the Mac build. The ubuntu-only CI can't compile it, so CI
   checks only its JS interface, using a fake helper.
-- *Resolution:* ___
+- *Resolution:* **Accepted (James, 2026-10-18):** use the Swift helper.
 
 **F2. The room mic hears a denylisted work call played through speakers.**
 - *Problem:* ScreenCaptureKit can drop a denylisted app's system audio, but the mic still
@@ -36,18 +36,18 @@ is in front.**
   macOS 14 CoreAudio process objects can report this. *Unverified:* the spike must prove it
   before this is relied on. If it can't be proven, fall back to a documented rule: "use
   headphones for denylisted calls".
-- *Resolution:* ___
+- *Resolution:* **Accepted (James, 2026-10-18):** auto-pause the mic, proven in the spike; fall back to the headphones rule.
 
 **F3. The app cannot speak a notice into another app's call.**
 - *Source:* intent open question 1 and the "call notice" success signal.
 - *Recommendation:* when a call starts (a call app takes the mic), call audio is held in
   memory and not written to disk. A prompt asks James to tell the other people. "I told
   them" logs a `noticeGiven` event and flushes the held audio. "Don't record this call"
-  discards it. With no answer within `NOTICE_TIMEOUT_MIN` (default 5), the audio is
+  discards it. With no answer within `NOTICE_TIMEOUT_MIN` (default 15), the audio is
   discarded and a warning stays visible.
 - *Result:* no call audio reaches disk without a logged notice, which is what the success
   signal tests.
-- *Resolution:* ___
+- *Resolution:* **Changed (James, 2026-10-18):** a longer timeout. `NOTICE_TIMEOUT_MIN` defaults to **15**. 15 minutes of Opus audio is a few MB, so R2 is unaffected.
 
 **F4. Naming the key `ANTHROPIC_API_KEY` could move ARCHITECT onto API billing.**
 - *Source:* intent open question 6 ("separate from ARCHITECT's credit pool").
@@ -56,13 +56,13 @@ is in front.**
   believed to switch to API-key billing. *Unverified;* the plan checks it.
 - *Recommendation:* use a distinct key name, kept in the macOS Keychain through Electron
   `safeStorage` and entered in Settings. Nothing goes into `.env.local`.
-- *Resolution:* ___
+- *Resolution:* **Accepted (James, 2026-10-18):** Keychain under a distinct name.
 
 **F5. Policy not applied: `security-review` and `gstack-cso`.**
 - *Problem:* both audit existing code or a diff, and this change has no code yet.
 - *Recommendation:* accept the spec without them, and run both on the implementation PR
   before Codex. Their findings would block the merge.
-- *Resolution:* ___
+- *Resolution:* **Accepted (James, 2026-10-18):** run both on the implementation PR. Their findings block the merge.
 
 **F6. Third-party words go to Claude.**
 - *Source:* the security and data review in this spec.
@@ -72,21 +72,21 @@ is in front.**
 - *Recommendation:* the notice wording James is prompted to give says the call is recorded
   and transcribed. Claude calls go only through the Messages API with zero retention if
   that option is available on the account (to be checked).
-- *Resolution:* ___
+- *Resolution:* **Accepted (James, 2026-10-18):** both, the notice wording and zero-retention API use if the account offers it.
 
 **F7. Encryption at rest.**
 - *Source:* intent open question 3, still open.
 - *Recommendation:* rely on FileVault in v1. Turning the recorder on checks
   `fdesetup status` and refuses to start if FileVault is off, with an error that says how to
   fix it. App-level encryption is deferred.
-- *Resolution:* ___
+- *Resolution:* **Accepted (James, 2026-10-18):** the FileVault gate.
 
 **F8. A 30-day purge does not reach backups.**
 - *Source:* intent open question 3.
 - *Recommendation:* mark the media root with `tmutil addexclusion` (a sticky xattr; believed
   to need no admin rights, to be verified). Settings shows whether the exclusion holds.
   Derived text in Convex is still backed up, which is intended because it is kept forever.
-- *Resolution:* ___
+- *Resolution:* **Accepted (James, 2026-10-18):** exclude the media root from Time Machine.
 
 ## Requirements
 
