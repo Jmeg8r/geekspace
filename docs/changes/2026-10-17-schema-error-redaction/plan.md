@@ -36,3 +36,29 @@ denylist that the next shape slips through.
   unless #66 is rebased first; that fix belongs to #66.
 - A future backend could put content on the first line. The `MAX_DETAIL_CHARS` cap bounds
   the damage; the live capture shows it does not today.
+
+## Deviations
+
+- **Typecheck caught the test commit.** `npm run verify` failed on `tests/functionSync.test.ts`
+  (the `.d.mts` lacked `MAX_DETAIL_CHARS`; `result.error` is typed `Error`). Fixed in a
+  follow-up commit rather than rewriting the failing-first commit.
+- **Detail is the first non-empty line**, not literally line 1, so a message that starts
+  with a newline still reports something.
+
+## Proof results (2026-10-17, Mac Studio)
+
+- Red (test commit): 3 new tests failed for the intended reasons: message contained
+  `Object:`; detail was 8019 chars (cap 500); a missing error printed `undefined`.
+- Green: `tests/functionSync.test.ts` 44/44.
+- `npm run verify`: typecheck and lint clean; vitest 270/274, the 4 failures all in
+  `tests/mcpSchemaFirst.test.ts` (timeouts). That file does not touch `functionSync`, and
+  `keeps discovery scoped to each stdio session` also times out on a clean `origin/main`
+  checkout (`4f39fe7`) at load average ~7: pre-existing, not this change.
+- `snyk test`: 4 issues (zod x2, qs, hono), all pre-existing; no dependency changes.
+- Probe (scratch copy of PR #66's script patched for #67, see Risks; config from the main
+  checkout): exit 0, endpoints `start_push, wait_for_schema` only, marker unchanged,
+  pages 6 → 6. Logged line: `Schema validation failed (table "pages"): Document with ID
+  "jh72…" in table "pages" does not match the schema: Object is missing the required field
+  `probeRequired`. …` and nothing after it. `Object:`/`Validator:`/seeded title: 0 hits in
+  the run output (positive control: 2 hits in the pre-fix run's output). Admin key and
+  instance secret by value: 0 hits.
