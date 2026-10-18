@@ -25,6 +25,7 @@
     "fetch-backend": "node scripts/fetch-backend.mjs",
     "migrate:local-data": "node scripts/migrate-local-data.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
+    "probe:schema-failure": "node scripts/probe-schema-failure.mjs",
     "verify": "oxlint && tsc -b --noEmit && vitest run"
   },
   "dependencies": {
