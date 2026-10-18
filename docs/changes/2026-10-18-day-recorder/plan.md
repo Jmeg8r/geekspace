@@ -113,8 +113,13 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     filter is rebuilt each frame from ALL apps (`onScreenWindowsOnly: false`), and the
     menu-bar band is blanked while a denylisted app is frontmost (spike Q1);
   - system audio from a CoreAudio process tap that excludes the denylist by bundle ID
-    (`<id>` and `<id>.helper`, plus any child-process bundles the watcher reports), with
-    `TapAutoStart` off; a tap that delivers no samples fails loudly (spike Q2);
+    (`<id>` and `<id>.helper`, plus any child-process bundles the watcher reports) and by
+    live process objects, with `TapAutoStart` off; a tap that delivers no samples fails
+    loudly (spike Q2);
+  - **first proof obligation:** a second instance of a denylisted app that starts audio
+    mid-tap leaked in the spike (31 × 100 ms). The watcher must trigger a tap rebuild that
+    discards held-back system audio. Prove zero leaked windows with the spike's
+    `late-second-instance` scenario before anything else in PR 3 builds on the tap;
   - Vision OCR, accurate, at point resolution, retried once on a luminance-thresholded copy
     when a frame yields few lines (spike Q5);
   - a process-audio watcher that polls every 100 ms (listeners alone miss mic use on macOS
@@ -290,10 +295,12 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-10-18, PR 1, gate (2) tripped → system audio re-planned (James).**
   ScreenCaptureKit's app filter did not exclude audio from Chromium/Electron apps: −15 dBFS
   leaked, 3 of 3 runs, because the audio plays from a windowless helper SCK cannot list. It
-  also missed windowless apps and leaked about 150 ms when a denylisted app launched
+  also missed windowless apps and leaked 150–320 ms when a denylisted app launched
   mid-stream. James chose to prototype a CoreAudio process tap. Excluding by bundle ID
-  (`<id>` + `<id>.helper`, macOS 26+) was silent in every case, including late launches,
-  on the signed build. **Change:** PR 3 takes system audio from the tap; SCK keeps
+  (`<id>` + `<id>.helper`, macOS 26+) plus live process objects was silent for helpers,
+  windowless apps, late launches and concurrent instances, including on the signed build.
+  One case still leaks: a second instance that starts audio after the tap exists. PR 3
+  must close it first (above). **Change:** PR 3 takes system audio from the tap; SCK keeps
   screenshots. The helper's minimum macOS rises from 14 to 26. That fits v1, which is Mac
   Studio only (macOS 27). F1's intent ("never captured") holds.
 - **2026-10-18, PR 1, gate (3) passed; no headphones fallback.** CoreAudio process objects

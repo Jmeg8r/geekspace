@@ -11,7 +11,7 @@ usage: gs-capture <command> [options]
   shots          --dir d [--interval s] [--duration s] [--exclude ids] [--ocr 1]
   audio          [--seconds s] [--exclude ids] [--out f.wav]
   procwatch      [--seconds s] [--poll-ms n]
-  tap            [--seconds s] [--exclude ids] [--follow-ms n] [--by bundle]  CoreAudio tap
+  tap            [--seconds s] [--exclude ids] [--follow-ms n] [--by bundle|both]  CoreAudio tap
   ocr            [--level fast|accurate] [--text 1] image...
   render-fixtures --spec f.json --dir d
   selftest-timeout [--seconds s]                           must exit 1 (watchdog proof)

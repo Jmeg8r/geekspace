@@ -1,0 +1,116 @@
+{
+  "silenceBaseline": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "tone-control": {
+    "dbfs": -15.053,
+    "peak": 0.25,
+    "excludedProcesses": 0,
+    "excludedBundles": [],
+    "tone": {
+      "startT": 1792340692891.6777,
+      "stopT": 1792340701296.1887
+    },
+    "window": {
+      "startT": 1792340694326.731,
+      "endT": 1792340698605
+    }
+  },
+  "tone-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 2,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone",
+      "dev.geekspace.spike.tone.helper"
+    ],
+    "tone": {
+      "startT": 1792340701729.5972,
+      "stopT": 1792340710124.1501
+    },
+    "window": {
+      "startT": 1792340703138.323,
+      "endT": 1792340707365
+    }
+  },
+  "tone-windowless-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 2,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone",
+      "dev.geekspace.spike.tone.helper"
+    ],
+    "tone": {
+      "startT": 1792340710437.804,
+      "stopT": 1792340718843.1511
+    },
+    "window": {
+      "startT": 1792340711913.418,
+      "endT": 1792340716151
+    }
+  },
+  "electron-control": {
+    "dbfs": -15.052,
+    "peak": 0.2500487267971039,
+    "excludedProcesses": 0,
+    "excludedBundles": [],
+    "tone": {
+      "startT": 1792340720029,
+      "stopT": 1792340730090
+    },
+    "window": {
+      "startT": 1792340722125.578,
+      "endT": 1792340726202
+    }
+  },
+  "electron-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 1,
+    "excludedBundles": [
+      "com.github.Electron",
+      "com.github.Electron.helper"
+    ],
+    "tone": {
+      "startT": 1792340730692,
+      "stopT": 1792340740755
+    },
+    "window": {
+      "startT": 1792340733227.013,
+      "endT": 1792340737497
+    }
+  },
+  "late-control": {
+    "updates": [],
+    "toneStartedT": 1792340743459,
+    "leakedWindows100ms": 41,
+    "leakFirstT": 1792340743607.264,
+    "leakLastT": 1792340747607.288
+  },
+  "late-static": {
+    "updates": [],
+    "toneStartedT": 1792340751774,
+    "leakedWindows100ms": 0,
+    "leakFirstT": null,
+    "leakLastT": null
+  },
+  "late-second-instance": {
+    "tone": {
+      "startT": 1792340760411.623,
+      "stopT": 1792340764610.095
+    },
+    "leakedWindows100ms": 31,
+    "summary": {
+      "dbfs": -16.462,
+      "event": "summary",
+      "excludedProcesses": 1,
+      "peak": 0.2499999850988388,
+      "rms": 0.1502858011070331,
+      "samples": 403456
+    }
+  }
+}

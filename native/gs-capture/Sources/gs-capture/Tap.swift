@@ -57,8 +57,12 @@ enum Tap {
         // process that starts AFTER the tap is excluded with no update (live updates to an
         // existing tap are refused with '!hog' on macOS 27.0, measured). Each denylist entry
         // also covers "<id>.helper", the bundle ID Chromium/Electron give their audio helper.
-        let byBundle = args.string("by") == "bundle"
-        if byBundle { excluded = [] }
+        // --by both: bundle IDs AND the process objects alive now. Measured: with two live
+        // process objects under one bundle ID, bundle-only exclusion silenced just one of
+        // them (spike-findings.md Q2).
+        let byBoth = args.string("by") == "both"
+        let byBundle = args.string("by") == "bundle" || byBoth
+        if byBundle && !byBoth { excluded = [] }
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
         // --helpers 0 drops the expansion; the spike uses it to show the expansion is needed.
         let expandHelpers = args.string("helpers") != "0"
@@ -142,7 +146,7 @@ enum Tap {
                   "tapUID": description.uuid.uuidString])
         }
         emit(["event": "started", "t": round3(nowMs()), "excludedProcesses": excluded.count,
-              "excludedBundles": byBundle ? excludedBundleIDs : excluded.map(ProcWatch.bundleID), "sampleRate": format.mSampleRate,
+              "excludedBundles": byBundle ? excludedBundleIDs : excluded.map(ProcWatch.bundleID), "by": byBoth ? "both" : byBundle ? "bundle" : "process", "sampleRate": format.mSampleRate,
               "channels": format.mChannelsPerFrame])
 
         // --follow-ms: re-scan process objects and push an updated exclusion list to the

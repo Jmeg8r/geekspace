@@ -35,6 +35,10 @@ const TONE_HZ = 440;
 const AUDIO_SECONDS = 4;
 const TONE_WARMUP_MS = 1_500;
 const LATE_LAUNCH_MS = 2_000;
+const TONE_LOG_GRACE_MS = 5_000;
+const TONE_LOG_POLL_MS = 200;
+// Long enough for the first instance to stop playing but not to exit (it lingers 2 s).
+const SECOND_INSTANCE_GAP_MS = 1_300;
 const FOLLOW_MS = 200;
 // Anything above -60 dBFS in a 100 ms window counts as leaked tone.
 const LEAK_RMS = 0.001;
@@ -107,7 +111,9 @@ function background(args, logFile) {
   child.stderr.on("data", (chunk) => { stderr += chunk; });
   const done = new Promise((resolve, reject) => {
     child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve(lines) : reject(new Error(`gs-capture ${args[0]} exited ${code}: ${stderr.trim()}`))));
+    // `close`, not `exit`: exit can fire before stdout/stderr drain, which would hand the
+    // caller a result missing its last lines (Codex review of PR 71).
+    child.on("close", (code) => (code === 0 ? resolve(lines) : reject(new Error(`gs-capture ${args[0]} exited ${code}: ${stderr.trim()}`))));
   });
   return { lines, done };
 }
@@ -123,41 +129,64 @@ function launchTone(mode, seconds, tag, extra = [TONE_HZ]) {
 const readTone = (log) => (fs.existsSync(log) ? jsonLines(fs.readFileSync(log, "utf8")) : []);
 
 /**
- * Start the Electron WebAudio tone. `started` resolves with its playback-start line and
- * `finished` rejects unless it exits 0, so a tone that never played can't pass as
- * "excluded" silence (Codex review of PR 71).
+ * Start the Electron WebAudio tone. `interval` resolves with when it was audible
+ * ({startT, stopT}), and rejects unless it reported playback start and exited 0.
  */
 function electronTone(seconds) {
   const child = spawn(path.join(ROOT, "node_modules", ".bin", "electron"), [path.join(ROOT, "scripts", "spike", "web-tone.cjs")], {
     env: { ...process.env, GS_TONE_SECONDS: String(seconds) }, stdio: ["ignore", "pipe", "inherit"] });
-  let onStart;
-  const started = new Promise((resolve) => { onStart = resolve; });
+  let startT;
+  let out = "";
   child.stdout.on("data", (chunk) => {
-    const line = String(chunk).split("\n").find((l) => l.includes('"started"'));
-    if (line) onStart(JSON.parse(line));
+    out += chunk;
+    const line = out.split("\n").find((l) => l.includes('"started"'));
+    if (line && startT === undefined) startT = JSON.parse(line).t;
   });
-  const finished = new Promise((resolve, reject) => {
+  const interval = new Promise((resolve, reject) => {
     child.on("error", reject);
-    child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`electron tone exited ${code}`))));
+    child.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`electron tone exited ${code}`));
+      if (startT === undefined) return reject(new Error("electron tone never reported playback start"));
+      resolve({ startT, stopT: Date.now() });
+    });
   });
-  return { started, finished };
+  return { interval };
 }
 
-/** Same check for SpikeTone (launched by `open`): its log must show playback starting first. */
-function requireToneLog(log, captureEndT) {
-  const started = readTone(log).find((event) => event.event === "started");
-  if (!started) throw new Error(`SpikeTone never reported playback start (${path.basename(log)})`);
-  if (started.t >= captureEndT) throw new Error(`SpikeTone started after the capture window ended (${path.basename(log)})`);
-  return started;
+/** SpikeTone's audible interval, from its own log, once it has logged "stopped". */
+async function spikeToneInterval(log, seconds) {
+  const deadline = Date.now() + seconds * 1000 + TONE_LOG_GRACE_MS;
+  while (Date.now() < deadline) {
+    const events = readTone(log);
+    const started = events.find((event) => event.event === "started");
+    const stopped = events.find((event) => event.event === "stopped");
+    if (started && stopped) return { startT: started.t, stopT: stopped.t };
+    await sleep(TONE_LOG_POLL_MS);
+  }
+  throw new Error(`SpikeTone did not log both start and stop (${path.basename(log)})`);
 }
 
-/** Throws unless the tone started before the capture window ended and exited cleanly. */
-async function requireTonePlayed(tone, captureEndT) {
-  await tone.finished;
-  const started = await Promise.race([tone.started, sleep(1).then(() => null)]);
-  if (!started) throw new Error("electron tone never reported playback start");
-  if (started.t >= captureEndT) throw new Error("electron tone started after the capture window ended");
-  return started;
+/** The capture window of a helper run, from its own "started" line to its last line. */
+function captureWindow(lines, endT) {
+  const started = lines.find((line) => line.event === "started");
+  if (!started) throw new Error("capture has no started line");
+  return { startT: started.t, endT: endT ?? Math.max(...lines.filter((line) => line.t).map((line) => line.t)) };
+}
+
+/**
+ * A tone is evidence only if it was audible during the capture: `cover` (static runs)
+ * needs it across the whole window; `overlap` (late launches, which start mid-capture
+ * by design) needs any intersection. Starting before the window ends is not enough: a
+ * short tone can finish before a slow capture starts (Codex review of PR 71).
+ */
+function requireAudible(label, tone, window, mode) {
+  const ok = mode === "cover"
+    ? tone.startT <= window.startT && tone.stopT >= window.endT
+    : tone.startT < window.endT && tone.stopT > window.startT;
+  if (!ok) {
+    throw new Error(`${label}: tone [${tone.startT}, ${tone.stopT}] does not ${mode} capture [${window.startT}, ${window.endT}]`);
+  }
+  return tone;
 }
 
 const commands = {
@@ -237,16 +266,18 @@ const commands = {
 
   /** Q2: does an SCK audio stream that excludes the tone app's bundle ID hear it? */
   async audio() {
-    const capture = (exclude, tag) => helper("audio", "--seconds", AUDIO_SECONDS, "--exclude", exclude,
-      "--out", path.join(OUT_DIR, `q2-${tag}.wav`)).find((line) => line.event === "summary");
-    const result = { silenceBaseline: capture("", "silence") };
+    const capture = (exclude, tag) => {
+      const lines = helper("audio", "--seconds", AUDIO_SECONDS, "--exclude", exclude, "--out", path.join(OUT_DIR, `q2-${tag}.wav`));
+      return { summary: lines.find((line) => line.event === "summary"), window: captureWindow(lines, Date.now()) };
+    };
+    const result = { silenceBaseline: capture("", "silence").summary };
     for (const [tag, exclude, mode] of [["control", "", "play"], ["excluded", TONE_BUNDLE_ID, "play"],
       ["excluded-windowless", TONE_BUNDLE_ID, "play-windowless"]]) {
       const log = launchTone(mode, TONE_SECONDS, `q2-${tag}`);
       await sleep(TONE_WARMUP_MS);
-      result[tag] = capture(exclude, tag);
-      result[tag].toneStartedT = requireToneLog(log, Date.now()).t;
-      await sleep(TONE_SECONDS * 1000);
+      const { summary, window } = capture(exclude, tag);
+      const tone = requireAudible(tag, await spikeToneInterval(log, TONE_SECONDS), window, "cover");
+      result[tag] = { ...summary, tone, window };
     }
     // The filter holds SCRunningApplication instances: an app launched AFTER the stream
     // starts is not in it. Measure the leak with a static filter, then with a re-listing one.
@@ -255,7 +286,8 @@ const commands = {
       await sleep(LATE_LAUNCH_MS);
       const lateLog = launchTone("play", TONE_SECONDS, `q2-${tag}`);
       const lines = await late.done;
-      const started = readTone(lateLog).find((e) => e.event === "started");
+      const tone = requireAudible(tag, await spikeToneInterval(lateLog, TONE_SECONDS), captureWindow(lines), "overlap");
+      const started = { t: tone.startT };
       const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
       result[tag] = {
         summary: lines.find((line) => line.event === "summary"),
@@ -266,7 +298,6 @@ const commands = {
         leakLastT: loud.at(-1)?.t ?? null,
         leakMsAfterToneStart: loud.length && started ? round(loud.at(-1).t - started.t) : 0,
       };
-      await sleep(TONE_SECONDS * 1000);
     }
     save("q2-audio", result);
   },
@@ -277,23 +308,23 @@ const commands = {
    * attribute the helper's output and mic use back to the app?
    */
   async "web-audio"() {
-    const electron = spawn(path.join(ROOT, "node_modules", ".bin", "electron"), [path.join(ROOT, "scripts", "spike", "web-tone.cjs")], {
-      env: { ...process.env, GS_TONE_SECONDS: String(WEB_TONE_SECONDS), GS_TONE_MIC: "1" }, stdio: ["ignore", "pipe", "inherit"],
-    });
-    const exited = new Promise((resolve, reject) => { electron.on("exit", resolve); electron.on("error", reject); });
-    let started = null;
-    electron.stdout.on("data", (chunk) => { started ??= JSON.parse(String(chunk).split("\n")[0]); });
+    const { interval } = electronTone(WEB_TONE_SECONDS);
     const watch = background(["procwatch", "--seconds", WEB_TONE_SECONDS, "--poll-ms", PROC_POLL_MS]);
     await sleep(TONE_WARMUP_MS * 2);
-    const capture = (exclude) => helper("audio", "--seconds", AUDIO_SECONDS / 2, "--exclude", exclude).find((line) => line.event === "summary");
+    const capture = (exclude) => {
+      const lines = helper("audio", "--seconds", AUDIO_SECONDS / 2, "--exclude", exclude);
+      return { summary: lines.find((line) => line.event === "summary"), window: captureWindow(lines, Date.now()) };
+    };
     const control = capture("");
     const excluded = capture(ELECTRON_BUNDLE_ID);
     const procLines = (await watch.done).filter((line) => "bundle" in line && line.bundle !== "com.apple.avconferenced");
-    await exited;
+    const tone = await interval;
+    requireAudible("web-audio control", tone, control.window, "cover");
+    requireAudible("web-audio excluded", tone, excluded.window, "cover");
     save("q2-web-audio", {
-      app: ELECTRON_BUNDLE_ID, started,
-      control: { dbfs: control.dbfs, excludedApps: control.excludedApps },
-      excluded: { dbfs: excluded.dbfs, peak: excluded.peak, excludedApps: excluded.excludedApps },
+      app: ELECTRON_BUNDLE_ID, tone,
+      control: { dbfs: control.summary.dbfs, excludedApps: control.summary.excludedApps, window: control.window },
+      excluded: { dbfs: excluded.summary.dbfs, peak: excluded.summary.peak, excludedApps: excluded.summary.excludedApps, window: excluded.window },
       coreAudio: procLines.map(({ t, reason, bundle, pid, responsibleBundle, input, output }) => ({ t, reason, bundle, pid, responsibleBundle, input, output })),
     });
   },
@@ -304,10 +335,15 @@ const commands = {
    * plus the Chromium helper case SCK failed.
    */
   async tap() {
-    // GS_TAP_BY=bundle excludes by bundle ID (macOS 26+); default is by process object.
-    const by = process.env.GS_TAP_BY === "bundle" ? ["--by", "bundle"] : [];
-    const tap = (exclude, extra = []) => helper("tap", "--seconds", AUDIO_SECONDS, "--exclude", exclude, ...by, ...extra);
-    const summary = (lines) => {
+    // GS_TAP_BY=bundle|both (macOS 26+): bundle IDs, or bundle IDs plus live process
+    // objects; default is process objects only.
+    const mode = ["bundle", "both"].includes(process.env.GS_TAP_BY) ? process.env.GS_TAP_BY : null;
+    const by = mode ? ["--by", mode] : [];
+    const tap = (exclude, extra = []) => {
+      const lines = helper("tap", "--seconds", AUDIO_SECONDS, "--exclude", exclude, ...by, ...extra);
+      return { lines, window: captureWindow(lines, Date.now()) };
+    };
+    const summary = ({ lines }) => {
       const s = lines.find((line) => line.event === "summary");
       const started = lines.find((line) => line.event === "started");
       return { dbfs: s.dbfs, peak: s.peak, excludedProcesses: started.excludedProcesses, excludedBundles: started.excludedBundles };
@@ -317,15 +353,16 @@ const commands = {
       ["tone-windowless-excluded", TONE_BUNDLE_ID, "play-windowless"]]) {
       const log = launchTone(mode, TONE_SECONDS, `tap-${tag}`);
       await sleep(TONE_WARMUP_MS);
-      result[tag] = summary(tap(exclude));
-      result[tag].toneStartedT = requireToneLog(log, Date.now()).t;
-      await sleep(TONE_SECONDS * 1000);
+      const run = tap(exclude);
+      const tone = requireAudible(tag, await spikeToneInterval(log, TONE_SECONDS), run.window, "cover");
+      result[tag] = { ...summary(run), tone, window: run.window };
     }
     for (const [tag, exclude] of [["electron-control", ""], ["electron-excluded", ELECTRON_BUNDLE_ID]]) {
-      const tone = electronTone(WEB_TONE_SECONDS);
+      const { interval } = electronTone(WEB_TONE_SECONDS);
       await sleep(TONE_WARMUP_MS * 2);
-      result[tag] = summary(tap(exclude));
-      result[tag].toneStartedT = (await requireTonePlayed(tone, Date.now())).t;
+      const run = tap(exclude);
+      const tone = requireAudible(tag, await interval, run.window, "cover");
+      result[tag] = { ...summary(run), tone, window: run.window };
     }
     // Late launch: the helper's process object does not exist until it first plays.
     // late-control excludes nothing: the positive control that the late tone was captured.
@@ -334,23 +371,37 @@ const commands = {
       if (by.length && follow.length) continue;
       const late = background(["tap", "--seconds", AUDIO_SECONDS * 2, "--exclude", exclude, ...by, ...follow]);
       await sleep(LATE_LAUNCH_MS);
-      const tone = electronTone(AUDIO_SECONDS);
+      const { interval } = electronTone(AUDIO_SECONDS);
       let lines;
       try {
         lines = await late.done;
       } catch (error) {
         // Expected for process-object mode: a live tap refuses exclusion updates ('!hog').
-        await tone.finished;
+        await interval;
         result[tag] = { error: error.message };
         continue;
       }
-      const captureEndT = Math.max(...lines.filter((line) => line.t).map((line) => line.t));
-      const started = await requireTonePlayed(tone, captureEndT);
+      const tone = requireAudible(tag, await interval, captureWindow(lines), "overlap");
+      const started = { t: tone.startT };
       const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
       result[tag] = { updates: lines.filter((line) => line.event === "tapUpdated"), toneStartedT: started?.t ?? null,
         leakedWindows100ms: loud.length, leakFirstT: loud[0]?.t ?? null, leakLastT: loud.at(-1)?.t ?? null };
     }
-    save(by.length ? "q2-tap-bundle" : "q2-tap", result);
+    // A SECOND instance of an already-running denylisted app starts audio after the tap
+    // exists: the hole that remains with bundle IDs (the ID is already bound to the first).
+    if (mode) {
+      launchTone("play", 1, "tap-first-instance");
+      await sleep(SECOND_INSTANCE_GAP_MS);
+      const late = background(["tap", "--seconds", AUDIO_SECONDS, "--exclude", TONE_BUNDLE_ID, ...by]);
+      await sleep(LATE_LAUNCH_MS / 2);
+      const log = launchTone("play", AUDIO_SECONDS, "tap-second-instance");
+      const lines = await late.done;
+      const tone = requireAudible("second-instance", await spikeToneInterval(log, AUDIO_SECONDS), captureWindow(lines), "overlap");
+      const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
+      result["late-second-instance"] = { tone, leakedWindows100ms: loud.length,
+        summary: lines.find((line) => line.event === "summary") };
+    }
+    save(mode ? `q2-tap-${mode}` : "q2-tap", result);
   },
 
   /** Q4 browser stand-in: which Chromium process holds the REAL mic, as CoreAudio sees it? */

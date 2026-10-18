@@ -18,7 +18,7 @@ JSON files listed at the end. Real screen frames were scored in memory and never
 | # | Question | Result |
 |---|---|---|
 | 1 | SCK excludes a background TextEdit window | **Pass**, with three production rules (below) |
-| 2 | SCK system audio excludes a denylisted app | **Fail for multi-process apps → gate tripped.** Re-planned with James onto a CoreAudio process tap, which **passes** every case |
+| 2 | SCK system audio excludes a denylisted app | **Fail for multi-process apps → gate tripped.** Re-planned with James onto a CoreAudio process tap. It passes every case but one: a second instance that starts audio mid-tap still leaks (PR 3 must close it) |
 | 3 | CoreAudio process objects report a denylisted app's audio | **Pass**, but only by polling: listeners never fire for input |
 | 4 | Call detection by mic ownership | **Zoom: pass.** Chromium (browser/Meet stand-in): pass via helper mapping. FaceTime, Teams, Slack: not run |
 | 5 | Vision OCR speed and accuracy | 110 ms/frame, 91.7% word recall at 1x; one blind spot (grey-on-grey text) with a fix |
@@ -29,9 +29,15 @@ JSON files listed at the end. Real screen frames were scored in memory and never
 | 10 | F6: zero-retention on James's account | **Not available** (James checked the console) |
 | R2 | MediaRecorder stop/restart gap | **~20 ms lost per boundary**; every segment decodes alone |
 
-Gate outcome: (1) passed, (2) failed for Chromium/Electron apps and James chose to re-plan
-system audio onto a CoreAudio tap (2026-10-18), which this spike then proved; (3) passed, so
-no headphones fallback. See plan.md, Deviations.
+Gate outcome:
+- (1) passed.
+- (2) failed for Chromium/Electron apps. James chose to re-plan system audio onto a CoreAudio
+  tap (2026-10-18). The tap passes every tested case except one: a second instance of an
+  already-running denylisted app that starts audio mid-tap. PR 3 has to close that case and
+  prove it.
+- (3) passed, so there is no headphones fallback.
+
+See plan.md, Deviations.
 
 ---
 
@@ -77,10 +83,11 @@ the screenshot loop ran together.
 ## Q2. System-audio exclusion (`audio`, `web-audio`, `tap`)
 
 **Method.** `SpikeTone.app` (`dev.geekspace.spike.tone`, built by the driver) plays a 440 Hz
-sine at 0.25 amplitude (−15.05 dBFS RMS). Each capture is 4 s at 48 kHz. Every "excluded"
-result is accepted only if that run's tone logged a playback start inside the capture
-window (and, for Electron, exited 0). So a tone that never played cannot pass as silence
-(Codex review, PR 71; the recorded runs were repeated under this check).
+sine at 0.25 amplitude (−15.05 dBFS RMS). Each capture is 4 s at 48 kHz. Every result is
+accepted only if that run's tone was audible across the whole capture window (start before
+it, stop after it, and for Electron, a clean exit). Late-launch runs only need the tone to
+overlap the window. A tone that never played, or finished early, cannot pass as silence
+(Codex review, PR 71). The tables are from runs repeated under this check.
 `com.github.Electron` (the repo's Electron, playing WebAudio) stands in for any
 Chromium-based app.
 
@@ -94,7 +101,7 @@ Chromium-based app.
 | Tone app (windowless) excluded | **−15.05 dBFS** ❌ (not listed by SCK) |
 | Electron excluded (`excludedApps: 1`) | **−15.05 dBFS** ❌, 3 of 3 runs |
 | Tone launched after the stream started, static filter | leaked for the whole tone (63–65 × 100 ms windows, two runs) ❌ |
-| Same, re-listing apps every 200 ms + `updateContentFilter` | leaked 1 window (~150 ms) ❌ |
+| Same, re-listing apps every 200 ms + `updateContentFilter` | leaked 1–3 windows (150–320 ms, two runs) ❌ |
 
 Chromium plays audio from a windowless helper process (`com.github.Electron.helper`).
 Excluding the app does not exclude the helper, and SCK can't list the helper. Chrome (Meet),
@@ -115,9 +122,26 @@ in a private aggregate device on the default system output.
 | Electron excluded | −∞ ✅ (helper matched by prefix) | **−∞** ✅ |
 | Electron launched after the tap started, no exclusion (control) | tone captured (41 × 100 ms windows) | tone captured (41 windows) |
 | Electron launched after the tap started, excluded | ❌ 41 windows leaked; a live update is refused (`'!hog'`) | **0 leaked windows** ✅ |
+| **Two live instances** of the tone app (an idle one, the other playing), excluded | — | ❌ **−15.05 dBFS** (2 of 2 manual trials, plus 2 driver runs) |
 
-**Bundle-ID exclusion is the design.** It needs no update when a process starts, so it closes
-the late-launch leak that both SCK and process-object taps have.
+**Bundle IDs bind one process object each.** When two processes with the same bundle ID both
+have CoreAudio process objects at tap creation, bundle-ID exclusion silences only one of them.
+A browser can run several audio-using processes under one helper ID.
+
+**Bundle IDs plus live process objects (`--by both`):**
+
+| Case | Result |
+|---|---|
+| Tone app (windowed / windowless) excluded, with an older idle instance alive | **−∞** (`excludedProcesses: 2`) ✅ |
+| Electron excluded | **−∞** ✅ |
+| Electron launched after the tap started | **0 leaked windows** ✅ |
+| **A second instance starts audio after the tap exists** (an older instance already bound) | ❌ **31 × 100 ms windows leaked** (−16.46 dBFS) |
+
+**Design: `both`, plus a watcher-driven rebuild.** When the 100 ms process watcher (Q3) sees a
+new process object for a denylisted bundle, the helper must drop the system audio it has held
+back and rebuild the tap. A live tap can't be updated (below), so it is rebuilt. That makes
+system audio need a hold-back buffer longer than the detection-plus-rebuild time. **It is not
+proven in this spike; PR 3 must prove it with this exact scenario.**
 
 Rules this measured:
 - **Expand every denylist entry to `<id>` and `<id>.helper`.** With only
@@ -128,7 +152,8 @@ Rules this measured:
   returned `noErr`, but the IO proc never ran: zero callbacks, no error and no TCC request.
   This is a silent-failure trap. The helper fails loudly when a tap delivers no samples.
 - A live tap refuses `kAudioTapPropertyDescription` updates (`'!hog'`, even with IO stopped),
-  so process-object exclusion can't follow new processes.
+  so process-object exclusion can't follow new processes. Changing the list means rebuilding
+  the tap.
 - The signed build ran the tap with the existing entitlements (Q7).
 - SCK stays the screenshot path (Q1). Its audio path is dropped.
 
@@ -371,6 +396,8 @@ duration. That approximation hides where in the boundary the loss falls.
 
 ## Not done in this spike
 
+- Closing the tap's second-instance leak (watcher-driven rebuild plus a hold-back buffer).
+  This is PR 3's first proof obligation.
 - FaceTime, Teams and Slack call detection (Zoom and the Chromium stand-in only).
 - Whether the tap needs its own TCC grant, on a clean TCC state.
 - The SCK hang's trigger.

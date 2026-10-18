@@ -31,9 +31,11 @@ is in front.**
 - *Spike (PR 1, spike-findings.md Q1, Q2):* SCK window exclusion passes. SCK **audio**
   exclusion fails for Chromium/Electron apps, whose audio plays from a helper process SCK
   can't exclude. **Changed (James, 2026-10-18):** system audio comes from a CoreAudio
-  process tap that excludes denylisted apps by bundle ID (each entry plus `<id>.helper`).
-  The spike proved it silent in every case, late launches included. SCK is kept for
-  screenshots only.
+  process tap that excludes denylisted apps by bundle ID (each entry plus `<id>.helper`)
+  and by their live process objects. SCK is kept for screenshots only. The spike proved
+  silence for helpers, windowless apps, late launches and concurrent instances. One case
+  still leaks: a second instance that starts audio after the tap exists. Closing it
+  (watcher-driven rebuild plus a hold-back buffer) is PR 3's first proof obligation.
 
 **F2. The room mic hears a denylisted work call played through speakers.**
 - *Problem:* ScreenCaptureKit can drop a denylisted app's system audio, but the mic still
@@ -188,8 +190,11 @@ Each requirement traces to the intent.
   - Captures ScreenCaptureKit screenshots with the denylist filter, rebuilt from all apps
     (not on-screen ones only) for every frame, and runs Vision OCR.
   - Captures system audio through a CoreAudio process tap (macOS 26+) that excludes the
-    denylist by bundle ID, each entry plus `<id>.helper`. The aggregate device has
-    `TapAutoStart` off: with it on, the tap delivers nothing and reports no error.
+    denylist by bundle ID (each entry plus `<id>.helper`) and by its live process objects.
+    When the process watcher sees a new process object for a denylisted bundle, the helper
+    discards the system audio it holds back and rebuilds the tap, because a live tap can't
+    be updated. The aggregate device has `TapAutoStart` off: with it on, the tap delivers
+    nothing and reports no error.
   - Every ScreenCaptureKit call has a 10 s timeout that exits non-zero, because a hung call
     blocked capture in every process (spike Q1).
   - Watches CoreAudio processes for the F2 mic pause and for call detection (F3).
