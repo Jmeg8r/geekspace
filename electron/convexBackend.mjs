@@ -218,6 +218,8 @@ export async function startOrAttach() {
     adminKey: cfg.adminKey,
     log,
     requireBundle: app.isPackaged,
+    // A deliberate dev act only: there is no UI for it (see the downgrade dialog in main.mjs).
+    allowDowngrade: process.env.GEEKSPACE_ALLOW_FUNCTION_DOWNGRADE === "1",
   });
 }
 

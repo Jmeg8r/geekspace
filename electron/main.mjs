@@ -468,6 +468,29 @@ app.whenReady().then(async () => {
     });
     if (choice.response === 1) await shell.openPath(path.dirname(convexLogPath()));
   }
+  // An older build (another branch, a rollback) leaves the newer functions in place rather
+  // than replacing them, so the newer build still works next time. It says so, because
+  // this older window may now hit functions it doesn't expect.
+  if (sync?.status === "downgrade") {
+    const when = (ordinal) => (ordinal ? new Date(ordinal * 1000).toLocaleString() : "an unknown date");
+    const choice = await dialog.showMessageBox({
+      type: "warning",
+      title: "Geekspace is older than your database",
+      message: "This copy of Geekspace is older than the one that last updated your database.",
+      detail:
+        `This copy was built from code dated ${when(sync.bundleOrdinal)}; your database runs functions from ${when(sync.liveOrdinal)}. ` +
+        "Your data and the newer functions are unchanged, but some features of this older copy may not work.\n\n" +
+        "Quit and open the newer Geekspace if you have it.\n\n" +
+        `The backend log has more detail: ${convexLogPath()}`,
+      buttons: ["Continue", "Quit"],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    if (choice.response === 1) {
+      app.quit();
+      return;
+    }
+  }
 
   // Authoritative CONVEX_URL for the ARCHITECT MCP subprocesses (the renderer
   // uses the build-time VITE_CONVEX_URL, which already points here).

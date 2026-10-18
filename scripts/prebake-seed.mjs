@@ -14,7 +14,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { backendAsset, backendCachePath, missingBinaryMessage } from "../electron/backendVersion.mjs";
 import { verifiedFile } from "../electron/verifiedDownload.mjs";
-import { MARKER_FILE, stripAdminKey, syncFunctions, writeBundle } from "../electron/functionSync.mjs";
+import { MARKER_FILE, describeOrdinal, stripAdminKey, syncFunctions, writeBundle } from "../electron/functionSync.mjs";
+import { commitOrdinal } from "./lib/commitOrdinal.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -185,9 +186,13 @@ async function main() {
     const convexVersion = JSON.parse(
       fs.readFileSync(path.join(ROOT, "node_modules", "convex", "package.json"), "utf8")
     ).version;
+    // Throws without a readable HEAD: a bundle that can't say how new it is must not ship.
+    const ordinal = commitOrdinal(ROOT);
     fs.rmSync(OUT_FUNCTIONS, { recursive: true, force: true });
-    const hash = writeBundle(OUT_FUNCTIONS, stripAdminKey(pushRequest), { convexVersion });
-    console.log(`• functions bundle → ${path.relative(ROOT, OUT_FUNCTIONS)} (${hash.slice(0, 12)}, convex ${convexVersion})`);
+    const hash = writeBundle(OUT_FUNCTIONS, stripAdminKey(pushRequest), { convexVersion, ordinal });
+    console.log(
+      `• functions bundle → ${path.relative(ROOT, OUT_FUNCTIONS)} (${hash.slice(0, 12)}, convex ${convexVersion}, code of ${describeOrdinal(ordinal)})`
+    );
 
     console.log("• deploying the bundle through electron/functionSync.mjs…");
     const synced = await syncFunctions({

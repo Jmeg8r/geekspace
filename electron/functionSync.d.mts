@@ -24,11 +24,20 @@ type FetchLike = (
 
 export function hashRequest(json: string): string;
 export function stripAdminKey(request: PushRequest): Omit<PushRequest, "adminKey">;
-export function writeBundle(dir: string, request: PushRequest, options: { convexVersion: string }): string;
-export function readBundle(dir: string): { hash: string; request: PushRequest };
-export function readMarker(dataDir: string): string | null;
+/** Committer time (Unix seconds) of the commit a bundle was built from. */
+export type Ordinal = number;
+export interface Marker {
+  hash: string | null;
+  ordinal: Ordinal | null;
+}
+
+export function describeOrdinal(ordinal: Ordinal | null): string;
+export function writeBundle(dir: string, request: PushRequest, options: { convexVersion: string; ordinal: Ordinal }): string;
+export function readBundle(dir: string): { hash: string; request: PushRequest; ordinal: Ordinal | null };
+export function readMarker(dataDir: string): Marker | null;
+export function writeMarker(dataDir: string, marker: Marker, options?: { now?: () => number }): void;
 export function invalidateMarker(dataDir: string): boolean;
-export function writeMarker(dataDir: string, hash: string, options?: { now?: () => number }): void;
+export function recordExternalDeploy(dataDir: string, ordinal: Ordinal, options?: { now?: () => number }): void;
 
 export function pushFunctions(options: {
   url: string;
@@ -47,6 +56,14 @@ export function syncFunctions(options: {
   fetch?: FetchLike;
   log: (line: string) => void;
   requireBundle?: boolean;
+  allowDowngrade?: boolean;
   deadlineMs?: number;
   now?: () => number;
-}): Promise<{ status: "current" | "deployed" | "skipped" | "failed"; hash?: string; error?: Error }>;
+}): Promise<{
+  status: "current" | "deployed" | "downgrade" | "skipped" | "failed";
+  hash?: string;
+  /** Set on "downgrade". */
+  bundleOrdinal?: Ordinal | null;
+  liveOrdinal?: Ordinal;
+  error?: Error;
+}>;

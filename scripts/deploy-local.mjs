@@ -11,12 +11,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { invalidateMarker } from "../electron/functionSync.mjs";
+import { describeOrdinal, invalidateMarker, recordExternalDeploy } from "../electron/functionSync.mjs";
+import { commitOrdinal } from "./lib/commitOrdinal.mjs";
+import { listenerCwd } from "./lib/listenerCwd.mjs";
 import { packagedConvexDir } from "./lib/paths.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
-const URL = "http://127.0.0.1:3210";
+const PORT = 3210;
+const URL = `http://127.0.0.1:${PORT}`;
 // WHY: `.bin/convex` is a shim (a bash script on POSIX; a `.cmd`/`.ps1` pair on
 // Windows) — unlaunchable directly and unsafe to invoke via a shell (see the
 // spawnSync call below). The package's real JS entry works on both platforms.
@@ -24,10 +27,8 @@ const CONVEX_CLI = path.join(ROOT, "node_modules", "convex", "bin", "main.js");
 
 // Prefer the running app's data dir; fall back to the repo's dev config. All
 // share the same instance identity, so the admin key is valid either way.
-const CANDIDATES = [
-  path.join(packagedConvexDir(), "config.json"),
-  path.join(ROOT, ".convex", "local", "default", "config.json"),
-];
+const PACKAGED_CONFIG = path.join(packagedConvexDir(), "config.json");
+const CANDIDATES = [PACKAGED_CONFIG, path.join(ROOT, ".convex", "local", "default", "config.json")];
 const cfgPath = CANDIDATES.find((p) => fs.existsSync(p));
 if (!cfgPath) {
   console.error("✖ deploy:local: no Convex config.json found (run the app or `npm run dev` once).");
@@ -41,12 +42,32 @@ fs.writeFileSync(
   `CONVEX_SELF_HOSTED_URL=${URL}\nCONVEX_SELF_HOSTED_ADMIN_KEY=${cfg.adminKey}\n`
 );
 
-// WHY before deploying: this replaces whatever functions the running app has, so the
-// packaged app's record of which bundle it deployed is no longer true. Forgetting it
-// makes the next packaged launch redeploy its own bundle instead of trusting a stale
-// marker. Done first so a deploy that dies halfway still leaves no false record.
-if (invalidateMarker(packagedConvexDir())) {
-  console.log("• cleared the packaged app's functions marker (next launch redeploys its bundle)");
+// WHY before deploying: this may replace the running packaged app's functions, so its
+// record of which bundle it deployed is no longer true. Done first so a deploy that dies
+// halfway still leaves no false hash.
+// - Backend on the port provably runs from the packaged data dir: record no hash (the
+//   next packaged launch redeploys its bundle) but this checkout's commit time, so a
+//   packaged build OLDER than this code refuses to replace it.
+// - Anything else (`convex dev` holds the port, Windows where the listener's cwd can't be
+//   read): forget the marker, so the next packaged launch redeploys whatever it ships.
+//   Stamping an ordinal there could block a needed update of a database this never touched.
+const realDir = (dir) => {
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return null; // Missing: never the packaged backend's cwd, so the comparison fails.
+  }
+};
+const listener = listenerCwd(PORT);
+const packagedDir = realDir(packagedConvexDir());
+if (cfgPath === PACKAGED_CONFIG && listener && packagedDir && realDir(listener) === packagedDir) {
+  const ordinal = commitOrdinal(ROOT);
+  recordExternalDeploy(packagedConvexDir(), ordinal);
+  console.log(
+    `• marked the packaged app's functions as code of ${describeOrdinal(ordinal)} (next launch redeploys its bundle unless it is older)`
+  );
+} else if (invalidateMarker(packagedConvexDir())) {
+  console.log("• cleared the packaged app's functions marker (couldn't confirm the packaged backend is the target; next launch redeploys its bundle)");
 }
 
 try {
