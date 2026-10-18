@@ -60,9 +60,11 @@ async function isListening() {
   }
 }
 
-async function waitHealthy(child) {
+async function waitHealthy(child, spawnError) {
   const start = Date.now();
   while (Date.now() - start < HEALTH_DEADLINE_MS) {
+    // Rethrown as a plain message: the original carries spawnargs, which hold the instance secret.
+    if (spawnError()) throw new Error(`backend failed to start: ${spawnError().code ?? spawnError().message}`);
     if (child.exitCode !== null) throw new Error(`backend exited early (code ${child.exitCode})`);
     if (await isListening()) return;
     await new Promise((r) => setTimeout(r, HEALTH_POLL_MS));
@@ -132,7 +134,8 @@ function tail(file) {
 }
 
 async function stop(child) {
-  if (child.exitCode !== null) return;
+  // A child that never spawned has no process to signal and never emits "exit".
+  if (child.exitCode !== null || child.pid === undefined) return;
   child.kill("SIGTERM");
   await new Promise((resolve) => {
     const t = setTimeout(() => {
@@ -187,11 +190,17 @@ async function main() {
     ],
     { cwd: work, stdio: ["ignore", logFd, logFd] }
   );
+  // WHY a listener: without one, a failed spawn (EACCES, ENOENT) is an unhandled "error" event
+  // that kills Node with spawnargs (the instance secret) printed and the temp dir left behind.
+  let startError = null;
+  child.on("error", (err) => {
+    startError = err;
+  });
   const log = (line) => console.log(`  ${redact(line)}`);
   let failed = true;
   try {
     console.log(`• throwaway backend on ${URL} (data in ${work})`);
-    await waitHealthy(child);
+    await waitHealthy(child, () => startError);
 
     console.log("• bundle A: current functions");
     const bundleA = path.join(work, "bundle-a");

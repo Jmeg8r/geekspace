@@ -159,3 +159,18 @@ Cost: nobody runs it unless told to. Mitigation: the README's "Other scripts" li
   (`Cannot find package 'jsdom'`) because the symlinked main-checkout `node_modules` predates
   PR #65's `jsdom` devDependency; environmental, fixed by `npm ci`.
 - `snyk test`: 3 issues (zod, hono, qs), all pre-existing; this change adds no dependencies.
+
+## Deviations after Codex review (round 1, PR #66 comment)
+
+- **[P2] spawn errors leaked the instance secret.** A binary that passes its hash check but
+  can't execute made `spawn()` emit an unhandled `error` event: Node died printing
+  `spawnargs` (with `--instance-secret`) and skipped the `finally`, leaving the temp
+  `selfhosted.env` (admin key) on disk. Fixed: an `error` listener feeds `waitHealthy`, which
+  throws a message with the error code only; `stop()` returns early for a child that never
+  spawned. Proven with `HOME` pointed at a temp dir holding a non-executable copy of the
+  pinned binary: fixed version exits 1 with `backend failed to start: EACCES`, no secret
+  values in output, no temp dir left; the pre-fix version (control) printed the instance
+  secret and left the temp dir (removed by hand). Green run and `npm run verify` (34 / 252)
+  repeated after the fix.
+- **Same pattern, not fixed here:** `scripts/prebake-seed.mjs` spawns the backend with no
+  `error` listener either. Proposed as a follow-up.
