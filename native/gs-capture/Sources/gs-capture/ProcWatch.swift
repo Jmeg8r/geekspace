@@ -45,23 +45,6 @@ enum ProcWatch {
         return value
     }
 
-    /// nil when the property can't be read (the object is gone), unlike `pid`'s -1 default.
-    static func checkedPid(_ object: AudioObjectID) -> pid_t? {
-        var addr = address(kAudioProcessPropertyPID)
-        var value: pid_t = -1
-        var size = UInt32(MemoryLayout<pid_t>.size)
-        return AudioObjectGetPropertyData(object, &addr, 0, nil, &size, &value) == noErr ? value : nil
-    }
-
-    /// nil when the property can't be read; "" is a readable process with no bundle ID.
-    static func checkedBundleID(_ object: AudioObjectID) -> String? {
-        var addr = address(kAudioProcessPropertyBundleID)
-        var value: Unmanaged<CFString>?
-        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        guard AudioObjectGetPropertyData(object, &addr, 0, nil, &size, &value) == noErr else { return nil }
-        return value.map { $0.takeRetainedValue() as String } ?? ""
-    }
-
     static func bundleID(_ object: AudioObjectID) -> String {
         var addr = address(kAudioProcessPropertyBundleID)
         var value: Unmanaged<CFString>?

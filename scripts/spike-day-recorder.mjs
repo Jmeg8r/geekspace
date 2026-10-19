@@ -57,18 +57,6 @@ const RUN_SEG_SHOT_SEC = 60;
 // (amplitude 0.25 against a near-zero floor) passes this easily, even on top of a click.
 const TONAL_RATIO = 3;
 const REFERENCE_HZ = [370, 520];
-// PR 3b-2 Codex P1 proof: polls far apart, and a second instance that lives well inside one
-// interval, so only the arrivals listener can see it.
-const TRANSIENT_POLL_MS = 2_500;
-const TRANSIENT_HOLD_MS = TRANSIENT_POLL_MS * 2;
-const TRANSIENT_TAP_SECONDS = 6;
-const TRANSIENT_START_MS = 600;
-const TRANSIENT_PLAY_SECONDS = 0.4;
-const TRANSIENT_CONTROL_MS = 3_500;
-// The control tone keeps sounding briefly after it logs "stopped" (output latency). Measured
-// across 8 tap runs: every stray window ended 103-128 ms after that log, never later. Windows
-// in this tail count as the control and are reported as controlTail, not hidden.
-const CONTROL_TAIL_MS = 150;
 const MENU_BAR_PT = 30; // measured: the menu bar is 0,0 1920x30 points on the Mac Studio's display
 const DISPLAY_WIDTH_PT = 1920;
 const BAND_BLACK_LUMA = 2; // a blanked band is painted black
@@ -211,15 +199,6 @@ function bareTone(seconds, tag, hz) {
   return log;
 }
 
-const pidAlive = (pid) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if (error.code === "ESRCH") return false;
-    throw error;
-  }
-};
 const readTone = (log) => (fs.existsSync(log) ? jsonLines(fs.readFileSync(log, "utf8")) : []);
 
 /**
@@ -629,60 +608,6 @@ const commands = {
     if (!result.rebuilds.length) throw new Error("instance 2 did not force a tap rebuild; the scenario proves nothing");
     if (result.controlWindows100ms === 0) throw new Error("the control tone reached no segment: capture is not working");
     if (result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) carried the denylisted tone`);
-  },
-
-  /**
-   * PR 3b-2 proof (Codex P1): a second denylisted instance that starts, plays and EXITS
-   * between two polls. A poll compares only live processes, so it never sees it; the
-   * arrivals listener must. GS_TAP_LISTEN=0 is the control (listener off): it must leak.
-   * A non-denylisted tone after the rebuild shows the tap still captures.
-   */
-  async "tap-transient-instance"() {
-    const listen = process.env.GS_TAP_LISTEN !== "0";
-    const firstSeconds = TRANSIENT_TAP_SECONDS + 4;
-    const firstLog = launchTone("play", firstSeconds, "transient-first");
-    await waitForToneStart(firstLog);
-    const tap = background(["tap", "--seconds", TRANSIENT_TAP_SECONDS, "--exclude", TONE_BUNDLE_ID, "--by", "both",
-      "--rebuild-ms", TRANSIENT_POLL_MS, "--hold-ms", TRANSIENT_HOLD_MS, ...(listen ? [] : ["--listen", "0"])]);
-    await captureLive(tap);
-    const liveAt = Date.now();
-    await sleep(TRANSIENT_START_MS);
-    // Linger 0: the process exits as soon as its tone stops.
-    const secondLog = launchTone("play", TRANSIENT_PLAY_SECONDS, "transient-second", [TONE_HZ, 0]);
-    await sleep(TRANSIENT_CONTROL_MS - (Date.now() - liveAt));
-    const controlLog = bareTone(CONTROL_SECONDS, "transient-control", CONTROL_HZ);
-    const lines = await tap.done;
-    const window = captureWindow(lines);
-    const second = requireAudible("transient-second", await spikeToneInterval(secondLog, TRANSIENT_PLAY_SECONDS), window, "late");
-    const first = requireAudible("transient-first", await spikeToneInterval(firstLog, firstSeconds), window, "cover");
-    const heardTone = requireAudible("transient-control", await spikeToneInterval(controlLog, CONTROL_SECONDS), window, "late");
-    if (first.pid === second.pid) throw new Error("both instances report the same pid");
-    // The scenario is only meaningful if instance 2's PROCESS was gone before the first
-    // scheduled poll after it started (its audio stopping is not enough: the first attempt
-    // used the tone's default 2 s linger, and the poll caught the still-live object). Polls
-    // run at the tap's start and every TRANSIENT_POLL_MS after.
-    const exiting = readTone(secondLog).find((event) => event.event === "exiting");
-    if (!exiting) throw new Error("instance 2 did not log its exit");
-    if (pidAlive(second.pid)) throw new Error(`instance 2 (pid ${second.pid}) is still running`);
-    const nextPoll = window.startT + Math.ceil((second.startT - window.startT) / TRANSIENT_POLL_MS) * TRANSIENT_POLL_MS;
-    if (exiting.t >= nextPoll) throw new Error(`instance 2 exited ${Math.round(exiting.t - nextPoll)} ms after the next poll`);
-    const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
-    const overlapsControl = (line) => line.t > heardTone.startT && line.t - WINDOW_MS < heardTone.stopT;
-    const inControlTail = (line) => !overlapsControl(line) && line.t > heardTone.stopT && line.t <= heardTone.stopT + CONTROL_TAIL_MS;
-    const leaked = loud.filter((line) => !overlapsControl(line) && !inControlTail(line));
-    const result = {
-      listen, first, second, controlTone: { ...heardTone, capturedWindows100ms: loud.filter(overlapsControl).length },
-      controlTail: loud.filter(inControlTail).map((line) => ({ rms: line.windowRms, msAfterControlStop: Math.round(line.t - heardTone.stopT) })),
-      exitedMsBeforeNextPoll: Math.round(nextPoll - exiting.t),
-      leakedWindows100ms: leaked.length,
-      leakedDetail: leaked.map((line) => ({ rms: line.windowRms, msAfterSecondStart: Math.round(line.t - second.startT) })),
-      rebuilds: lines.filter((line) => line.event === "tapRebuilt"), tailDrops: lines.filter((line) => line.event === "tailDropped"),
-      summary: lines.find((line) => line.event === "summary"),
-    };
-    save(`pr3b2-transient-instance-${listen ? "listener" : "control"}`, result);
-    if (result.controlTone.capturedWindows100ms === 0) throw new Error("the tap captured nothing of the control: it stopped capturing");
-    if (listen && result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) of instance 2 leaked`);
-    if (!listen && !result.leakedWindows100ms) throw new Error("control: no leak without the listener, so the scenario proves nothing");
   },
 
   /**

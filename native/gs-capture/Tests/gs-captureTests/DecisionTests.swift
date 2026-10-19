@@ -91,30 +91,3 @@ final class OCRMergeTests: XCTestCase {
         XCTAssertEqual(OCR.merge(plain, extra).map(\.text), ["Inbox (12)"])
     }
 }
-
-/// The arrivals listener's classification (Codex review of PR 3b-2, round 4): anything that
-/// can't be read must come out `unreadable`, which the listener treats as denylisted.
-final class ArrivalClassificationTests: XCTestCase {
-    let denylist = ["com.example.work"]
-    let noApps: (pid_t) -> String? = { _ in nil }
-
-    func testDenylistedBundleAndHelper() {
-        XCTAssertEqual(Tap.classify(bundle: "com.example.work", parent: 1, parentBundle: noApps, denylist), .denylisted("com.example.work"))
-        XCTAssertEqual(Tap.classify(bundle: "com.example.work.helper", parent: 1, parentBundle: noApps, denylist),
-                       .denylisted("com.example.work.helper"))
-    }
-
-    func testChildOfADenylistedAppIsDenylisted() {
-        let parentIsWork: (pid_t) -> String? = { $0 == 42 ? "com.example.work" : nil }
-        XCTAssertEqual(Tap.classify(bundle: "", parent: 42, parentBundle: parentIsWork, denylist), .denylisted("com.example.work"))
-    }
-
-    func testAnUnreadableParentIsUnreadableNotAllowed() {
-        // The process exited between reading its bundle and reading its parent.
-        XCTAssertEqual(Tap.classify(bundle: "", parent: -1, parentBundle: noApps, denylist), .unreadable)
-    }
-
-    func testAParentThatIsNotAnAppIsAllowed() {
-        XCTAssertEqual(Tap.classify(bundle: "com.apple.TextEdit", parent: 1, parentBundle: noApps, denylist), .allowed)
-    }
-}

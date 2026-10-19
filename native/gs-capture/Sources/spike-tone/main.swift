@@ -19,7 +19,7 @@ func now() -> Double { Date().timeIntervalSince1970 * 1000 }
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 3, let seconds = Double(arguments[2]), seconds > 0 else {
-    FileHandle.standardError.write("usage: spike-tone play|listen[-windowless] <seconds> [hz] [linger-s] | backdrop <seconds> x y w h\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: spike-tone play|listen[-windowless] <seconds> [hz] | backdrop <seconds> x y w h\n".data(using: .utf8)!)
     exit(2)
 }
 NSApplication.shared.setActivationPolicy(.accessory)
@@ -104,15 +104,10 @@ say(["event": "started", "mode": arguments[1], "windowless": windowless, "t": no
 // in with WindowServer and ScreenCaptureKit does not list it as an application at all.
 // Stop audio, then stay alive a while, so "stopped using audio" and "process exited" are
 // separate events for the watcher (a call app usually stays open after a call ends).
-// `play <s> <hz> 0` exits right away instead: a process that starts and exits between two
-// tap polls (PR 3b-2 transient-instance proof).
-let lingerSeconds = mode == "play" && arguments.count > 4 ? Double(arguments[4]) ?? 2.0 : 2.0
+let lingerSeconds = 2.0
 DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
     engine.stop()
     say(["event": "stopped", "mode": arguments[1], "t": now()])
-    DispatchQueue.main.asyncAfter(deadline: .now() + lingerSeconds) {
-        say(["event": "exiting", "t": now()])
-        exit(0)
-    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + lingerSeconds) { exit(0) }
 }
 NSApplication.shared.run()
