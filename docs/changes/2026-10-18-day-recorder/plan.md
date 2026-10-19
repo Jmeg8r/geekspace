@@ -443,5 +443,16 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   would have gone silent unnoticed. Each session now has its own baseline: a (re)built tap
   must deliver samples within 1 s, or the helper exits non-zero. Regression runs on the
   final binary: the rebuild proof (0 leaked, control captured) and the tail proof (0
-  leaked, tail dropped) both passed with the check active. One final Codex pass ran after
-  this fix as a check, not another loop; anything new it found is carried into PR 3b.
+  leaked, tail dropped) both passed with the check active.
+- **2026-10-18, PR 3a, final Codex check (1 × P2), fixed. It was the same class as round
+  4.** A rebuild in the last second could still go unverified: the in-loop check never
+  reached its 1 s deadline, and the shutdown check was cumulative. Per L41 (a same-class
+  finding means the fix was instance-shaped), the class is fixed: **every session is judged
+  when it ends**, at a rebuild or at shutdown.
+  - A session that lived at least 200 ms (about 20 IO cycles) and delivered nothing fails
+    loudly.
+  - A shorter session is reported as `sessionUnverified`, never passed silently.
+  - Regression runs passed: rebuild 0 leaked with the control captured; tail 0 leaked with
+    the tail dropped.
+  - This last commit had no further Codex round, because the loop had reached its cap.
+    James reads it in the PR.

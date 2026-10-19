@@ -184,6 +184,9 @@ enum Tap {
     // evidence of delivery (see TapAutoStart below), and the shared meter's totals would hide
     // a silent replacement behind the previous session's samples (Codex review, PR 3a).
     static let sessionDeliveryDeadlineMs = 1000.0
+    // A session this short may end before its first IO cycle (about 10 ms each), so a
+    // missing sample proves nothing; it is reported as unverified instead of passed.
+    static let minVerifiableSessionMs = 200.0
 
     static func osCheck(_ status: OSStatus, _ what: String) {
         if status != noErr { fail("\(what) failed, OSStatus \(status)") }
@@ -284,6 +287,17 @@ enum Tap {
                 fail("the tap delivered no samples in \(Int(sessionDeliveryDeadlineMs)) ms after it was (re)built")
             }
         }
+        // Every session is judged when it ends (a rebuild or shutdown), not only once it has
+        // lived a full deadline: a silent session in the last second would otherwise pass on
+        // the previous session's samples (Codex review, PR 3a, final check).
+        let endSession = { (why: String) in
+            let lived = nowMs() - sessionStart
+            guard meter.sampleCount() == sessionBaseline else { return }
+            if lived >= minVerifiableSessionMs {
+                fail("the tap delivered no samples in its \(Int(lived)) ms session (ended by \(why))")
+            }
+            emit(["event": "sessionUnverified", "t": round3(nowMs()), "livedMs": round3(lived), "endedBy": why])
+        }
         while nowMs() < deadline {
             if let followMs {
                 try? await Task.sleep(nanoseconds: UInt64(followMs * 1_000_000))
@@ -305,6 +319,7 @@ enum Tap {
                     // drop; then drop what is held; then rebuild around the new processes.
                     let begun = nowMs()
                     session.stop()
+                    endSession("rebuild")
                     let dropped = meter.drop()
                     session.destroy()
                     session = makeSession(fresh)
@@ -323,6 +338,7 @@ enum Tap {
             if nowMs() < deadline - pollStopMs { meter.release(now: nowMs()) }
         }
         session.stop()
+        endSession("shutdown")
         // The held tail has not been checked yet: a denylisted process that started after the
         // last poll would be in it. Poll once more with IO stopped; release the tail only if
         // nothing new appeared, otherwise drop it (Codex review, PR 3a).
