@@ -605,7 +605,10 @@ const commands = {
     };
     save(denylist ? "pr3b2-run-segments" : "pr3b2-run-segments-control", result);
     if (leftovers.length) throw new Error(`partial files left behind: ${leftovers.join(", ")}`);
-    if (!result.rebuilds.length) throw new Error("instance 2 did not force a tap rebuild; the scenario proves nothing");
+    // Only a denylisted run expects a rebuild. The negative control (nothing denylisted) must
+    // reach the leak check below and fail THERE, so its exit code proves the detector
+    // (Codex review of PR 3b-2, round 6).
+    if (denylist && !result.rebuilds.length) throw new Error("instance 2 did not force a tap rebuild; the scenario proves nothing");
     if (result.controlWindows100ms === 0) throw new Error("the control tone reached no segment: capture is not working");
     if (result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) carried the denylisted tone`);
   },

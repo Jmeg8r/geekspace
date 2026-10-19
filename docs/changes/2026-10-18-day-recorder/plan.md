@@ -704,3 +704,12 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       exit 0.
     - A signal *before* `ready` can still arrive during process startup (exit 143, no
       lines). `protocol.md` says so.
+- **2026-10-19, PR 3b-2, Codex round 6 (tagged, 0 × P1, 1 × P2): gate passed; the P2 is fixed.**
+  - The finding: the `run-segments` negative control (`GS_RUN_DENYLIST=""`) exited 1 on the
+    "no rebuild" assertion *before* its leak check ran. Its exit code therefore did not prove
+    the detector.
+  - The fix: the rebuild is required only when something is denylisted.
+  - Re-run: the negative control now fails on the leak check, **"89 window(s) carried the
+    denylisted tone"**, exit 1. A normal run passes: 0 leaks, 21 control windows, 4
+    segments, `stopped/signal`.
+
