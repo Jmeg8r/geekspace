@@ -437,3 +437,11 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   just the windows overlapping the control (allowing for the 100 ms window). Codex's repro
   case, a leak at 3900 ms after a 2700–3700 ms control, now counts as a leak. The main
   proof was re-run with this counter; see the table in the PR 3a entry above.
+- **2026-10-18, PR 3a, Codex round 4 (1 × P2), fixed. The review loop stops here (L42 cap).**
+  The "tap delivered no samples" check counted samples cumulatively, so a rebuilt tap that
+  started but delivered nothing passed on the previous session's samples, and capture
+  would have gone silent unnoticed. Each session now has its own baseline: a (re)built tap
+  must deliver samples within 1 s, or the helper exits non-zero. Regression runs on the
+  final binary: the rebuild proof (0 leaked, control captured) and the tail proof (0
+  leaked, tail dropped) both passed with the check active. One final Codex pass ran after
+  this fix as a check, not another loop; anything new it found is carried into PR 3b.

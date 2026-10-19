@@ -87,6 +87,10 @@ final class TapMeter: @unchecked Sendable {
 
     func releaseAll() { release(now: .infinity) }
 
+    /// Samples delivered so far, across every session; a session's own count is the
+    /// difference from its baseline.
+    func sampleCount() -> Int { lock.withLock { total } }
+
     func totals() -> (samples: Int, squares: Double, peak: Float, callbacks: Int, buffers: Int, mismatch: UInt32?, dropped: Int) {
         lock.withLock { (total, totalSquares, peak, callbacks, bufferCount, channelMismatch, dropped) }
     }
@@ -176,6 +180,10 @@ struct TapSession {
 enum Tap {
     // How often held windows are released and the rebuild poll is due-checked.
     static let releaseTickMs = 20.0
+    // A rebuilt tap must deliver samples this soon. AudioDeviceStart returning noErr is not
+    // evidence of delivery (see TapAutoStart below), and the shared meter's totals would hide
+    // a silent replacement behind the previous session's samples (Codex review, PR 3a).
+    static let sessionDeliveryDeadlineMs = 1000.0
 
     static func osCheck(_ status: OSStatus, _ what: String) {
         if status != noErr { fail("\(what) failed, OSStatus \(status)") }
@@ -268,6 +276,14 @@ enum Tap {
 
         let deadline = nowMs() + seconds * 1000
         var nextCheck = nowMs()
+        // The current session's start and the sample count it started from.
+        var sessionStart = nowMs()
+        var sessionBaseline = meter.sampleCount()
+        let requireDelivery = {
+            if nowMs() - sessionStart >= sessionDeliveryDeadlineMs && meter.sampleCount() == sessionBaseline {
+                fail("the tap delivered no samples in \(Int(sessionDeliveryDeadlineMs)) ms after it was (re)built")
+            }
+        }
         while nowMs() < deadline {
             if let followMs {
                 try? await Task.sleep(nanoseconds: UInt64(followMs * 1_000_000))
@@ -293,12 +309,15 @@ enum Tap {
                     session.destroy()
                     session = makeSession(fresh)
                     session.start()
+                    sessionStart = nowMs()
+                    sessionBaseline = meter.sampleCount()
                     emit(["event": "tapRebuilt", "t": round3(nowMs()), "droppedWindows": dropped.windows,
                           "droppedMaxRms": dropped.maxRms,
                           "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
                           "excludedProcesses": fresh.count, "rebuildMs": round3(nowMs() - begun)])
                 }
             }
+            requireDelivery()
             // While polls are suppressed (--poll-stop-ms), hold everything: the shutdown check
             // must judge the whole unpolled span, not just its last --hold-ms (Codex, PR 3a).
             if nowMs() < deadline - pollStopMs { meter.release(now: nowMs()) }
