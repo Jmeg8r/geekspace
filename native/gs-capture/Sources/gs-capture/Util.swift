@@ -49,6 +49,14 @@ struct Args {
         return value
     }
 
+    /// An optional positive number: nil when absent, a failure when present but invalid. A
+    /// malformed value must never read as "not asked for" (Codex review, PR 3a: a bad
+    /// --rebuild-ms silently turned the leak protection off).
+    func optionalDouble(_ key: String) -> Double? {
+        guard values[key] != nil else { return nil }
+        return double(key, default: 0)
+    }
+
     /// Comma-separated bundle IDs; an empty string means "exclude nothing" (the control run).
     func list(_ key: String) -> [String] {
         (values[key] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }

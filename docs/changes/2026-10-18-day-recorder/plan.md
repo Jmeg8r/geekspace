@@ -349,3 +349,110 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     `probe:schema-failure`, so the dev deployment was never contacted.
   - No backend was running for the PR #64 procedure, and starting `convex dev` would have
     pushed this branch's schema into James's dev data.
+- **2026-10-18, PR 3 is split into sub-PRs 3a–3e.** One PR for all of it would recreate
+  #71's failure: the forge's AI review stops reading past a large diff, and splitting is
+  what got #72 and #73 through. Each sub-PR touches its own files:
+  - **3a:** the tap's second-instance leak (this entry).
+  - **3b:** the production helper (screenshots, OCR, watchdog, JSON-lines protocol), the
+    build script and packaging.
+  - **3c:** the supervisor, media root, purge, and the FileVault and Time Machine gates.
+  - **3d:** mic capture, IPC and preload, and `probe:segment-decode`.
+  - **3e:** the UI and the a11y pass.
+- **2026-10-18, PR 3a, the second-instance leak is closed.** `gs-capture tap --rebuild-ms
+  100 --hold-ms 500` does two things:
+  - It polls the denylisted process objects every 100 ms. When a new one appears, it
+    stops IO, **drops every held window**, rebuilds the tap and aggregate around the new
+    list, and restarts.
+  - It holds each 100 ms window back 500 ms before releasing it.
+  - A guard refuses a hold shorter than two polls.
+- **Proof** (`node scripts/spike-day-recorder.mjs tap-second-instance`, `--by both`). Each
+  run added a positive control: a **non-denylisted** tone (a bare `spike-tone`, so no
+  bundle ID) starting 1.5 s after instance 2. That shows the tap still captures after a
+  rebuild.
+
+  Results below use the corrected leak counter from Codex round 3. Any loud window that does
+  not overlap the control tone counts as a leak, before or after the control.
+
+  | Run | Leaked windows | Control windows captured | Rebuild |
+  |---|---|---|---|
+  | Without the rebuild (control) | **15** | 12 | none |
+  | Rebuild, runs 1 and 3 | **0**, **0** | 11, 12 | 6 and 5 dropped |
+  | Rebuild, run 2 | **1** | 11 | 5 dropped |
+  | Rebuild, diagnostic runs a–l (12 runs) | **0** in every run | captured every run | 5–6 dropped each |
+
+  - **One leaked window in 15 rebuild runs, not attributed.** Run 2 had a single 100 ms
+    window above the leak threshold. It predates the per-window detail logging
+    (`leakedDetail`), so which audio it held is unknown. Twelve further runs with detail
+    logging found no leak.
+  - A plausible cause is the control tone's own audio continuing past its logged stop
+    because of output latency. That is **unverified**, so it is not recorded as the
+    cause.
+  - PR 3c's 2-hour soak keeps the detail logging and must attribute any recurrence before
+    v1 relies on the tap.
+  - Every run had 0 leaks before instance 2 started, so instance 1 stayed excluded.
+  - An earlier control run with no control tone leaked 28 windows. The spike saw 27–31.
+  - In every rebuild run the watcher found instance 2's process object 75–82 ms *before*
+    its tone logged "started". The hold-back is a margin, not the main defence.
+  - The cost is system audio lost during each rebuild (5–6 windows, about 0.5 s, plus the
+    rebuild itself). Only a new denylisted process triggers one.
+  - Evidence: `spike-evidence/results/pr3a-second-instance-*.json`.
+- **2026-10-18, PR 3a, Codex round 1 (2 × P2), both fixed.**
+  - **Shutdown tail.** `releaseAll()` emitted the last `--hold-ms` of windows unchecked.
+    Shutdown now stops IO, polls once more, and drops the tail (event `tailDropped`) if a
+    new denylisted process appeared.
+  - **`--by bundle --rebuild-ms` is refused.** Bundle-only mode tracks no process objects,
+    so the rebuild could never fire.
+  - **Tail proof** (corrected after Codex round 2; see the next entry).
+  - **Timing sweeps without `--poll-stop-ms` were dropped.** The real tail window is about
+    20 ms, smaller than `open -n` launch jitter (about 300 ms), so most runs fell outside
+    it. One unforced hit (3.72 s) also dropped its tail with 0 leaked (seen in run output;
+    its result file was not kept).
+- **2026-10-18, PR 3a, Codex round 2 (2 × P2), both fixed.**
+  - **The round-1 tail proof was weaker than claimed.** Windows kept being released after
+    polls stopped, so most of instance 2's audio could leave before the shutdown check
+    ran. Under `--poll-stop-ms` nothing is released once polls stop, so the check judges
+    the whole unpolled span. Each drop now reports `droppedMaxRms`, which shows directly
+    whether the check discarded real audio or silence.
+  - **A malformed `--rebuild-ms` (for example `100ms`) silently turned protection off.**
+    `--follow-ms` had the same parse, so both now use `Args.optionalDouble`: nil when
+    absent, a failure when invalid.
+  - **Corrected tail proof:** `--poll-stop-ms 1500`, instance 2 at 2.6 s, so only the
+    shutdown check stands between instance 2 and a leak.
+
+    | Run | Leaked | Shutdown check | Loudest dropped window |
+    |---|---|---|---|
+    | `--tail-check 0`, runs 1–3 | **11**, 0, 0 | off | — |
+    | Check on, runs 1–3 | 0, 0, 0 | dropped 21 windows | 0 (silence) |
+    | Check on, run 4 | **0** | dropped 21 windows | **0.177 RMS (about −15 dBFS)** |
+
+    - Whether instance 2 leaks at all depends on which of the two live processes the OS's
+      bundle-ID exclusion silences, and that varies between runs (it leaked 1 time in 3
+      unprotected).
+    - Runs 1–3 with the check on dropped silence. Run 4 dropped audible leaked audio at the
+      original leak's level and released none of it. That run is the evidence the check
+      matters; it is not inferred from zero-leak runs alone.
+    - Results: `spike-evidence/results/pr3a-second-instance-tailcheck-*.json`.
+- **2026-10-18, PR 3a, Codex round 3 (1 × P2), fixed.** The harness counted a leak only
+  *before* the control tone started, so a late leak could read as zero. It now excludes
+  just the windows overlapping the control (allowing for the 100 ms window). Codex's repro
+  case, a leak at 3900 ms after a 2700–3700 ms control, now counts as a leak. The main
+  proof was re-run with this counter; see the table in the PR 3a entry above.
+- **2026-10-18, PR 3a, Codex round 4 (1 × P2), fixed. The review loop stops here (L42 cap).**
+  The "tap delivered no samples" check counted samples cumulatively, so a rebuilt tap that
+  started but delivered nothing passed on the previous session's samples, and capture
+  would have gone silent unnoticed. Each session now has its own baseline: a (re)built tap
+  must deliver samples within 1 s, or the helper exits non-zero. Regression runs on the
+  final binary: the rebuild proof (0 leaked, control captured) and the tail proof (0
+  leaked, tail dropped) both passed with the check active.
+- **2026-10-18, PR 3a, final Codex check (1 × P2), fixed. It was the same class as round
+  4.** A rebuild in the last second could still go unverified: the in-loop check never
+  reached its 1 s deadline, and the shutdown check was cumulative. Per L41 (a same-class
+  finding means the fix was instance-shaped), the class is fixed: **every session is judged
+  when it ends**, at a rebuild or at shutdown.
+  - A session that lived at least 200 ms (about 20 IO cycles) and delivered nothing fails
+    loudly.
+  - A shorter session is reported as `sessionUnverified`, never passed silently.
+  - Regression runs passed: rebuild 0 leaked with the control captured; tail 0 leaked with
+    the tail dropped.
+  - This last commit had no further Codex round, because the loop had reached its cap.
+    James reads it in the PR.

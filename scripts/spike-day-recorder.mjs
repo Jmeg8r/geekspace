@@ -41,6 +41,12 @@ const CAPTURE_LIVE_TIMEOUT_MS = 15_000;
 const FOLLOW_MS = 200;
 // Anything above -60 dBFS in a 100 ms window counts as leaked tone.
 const LEAK_RMS = 0.001;
+// The tap meters 100 ms windows (Tap.swift), each stamped when it completes.
+const WINDOW_MS = 100;
+// PR 3a control tone: starts this long after instance 2, well after a rebuild finishes.
+const CONTROL_DELAY_MS = 1_500;
+const CONTROL_SECONDS = 1;
+const CONTROL_HZ = 660;
 const PROCWATCH_SECONDS = 16;
 const PROC_PHASE_SECONDS = 3;
 const PROC_GAP_MS = 2_000;
@@ -135,6 +141,20 @@ function launchTone(mode, seconds, tag, extra = [TONE_HZ]) {
   return log;
 }
 
+/**
+ * SpikeTone run as a bare executable: no bundle ID and a non-denylisted parent, so a tap
+ * that excludes the tone app must still capture it. The PR 3a positive control.
+ */
+function bareTone(seconds, tag, hz) {
+  const log = path.join(OUT_DIR, `tone-${tag}.jsonl`);
+  fs.rmSync(log, { force: true });
+  const fd = fs.openSync(log, "a");
+  const child = spawn(path.join(RELEASE_DIR, "spike-tone"), ["play", String(seconds), String(hz)], { stdio: ["ignore", fd, fd] });
+  child.on("error", (error) => { throw error; });
+  fs.closeSync(fd);
+  return log;
+}
+
 const readTone = (log) => (fs.existsSync(log) ? jsonLines(fs.readFileSync(log, "utf8")) : []);
 
 /**
@@ -205,6 +225,65 @@ function requireAudible(label, tone, window, mode) {
     throw new Error(`${label}: tone [${tone.startT}, ${tone.stopT}] does not ${mode} capture [${window.startT}, ${window.endT}]`);
   }
   return tone;
+}
+
+/**
+ * A SECOND instance of an already-running denylisted app starts audio after the tap exists:
+ * the hole that remains with bundle IDs (the ID is already bound to the first). Instance 1
+ * plays for the whole probe, so it is alive (and bound) when the tap is made and when
+ * instance 2 starts; zero leak before instance 2 proves instance 1 is excluded (Codex review
+ * of PR 71: an instance 1 that had already exited would turn this into the passing
+ * single-late-launch case). `extra` is passed to the tap, e.g. the PR 3a rebuild flags.
+ */
+async function secondInstance(by, extra = [], { control = false, secondAtMs = LATE_LAUNCH_MS / 2 } = {}) {
+  const firstSeconds = AUDIO_SECONDS * 3;
+  const firstLog = launchTone("play", firstSeconds, "tap-first-instance");
+  const firstPid = await waitForToneStart(firstLog);
+  const objects = helper("procwatch", "--seconds", PROC_PHASE_SECONDS / 3, "--poll-ms", PROC_POLL_MS);
+  if (!objects.some((line) => line.pid === firstPid && line.output)) {
+    throw new Error(`instance 1 (pid ${firstPid}) has no CoreAudio process object playing before the tap`);
+  }
+  const late = background(["tap", "--seconds", AUDIO_SECONDS, "--exclude", TONE_BUNDLE_ID, ...by, ...extra]);
+  await captureLive(late);
+  await sleep(secondAtMs);
+  const log = launchTone("play", AUDIO_SECONDS, "tap-second-instance");
+  // The control: a tone the tap must NOT exclude, starting after any rebuild would be done.
+  let bgLog = null;
+  if (control) {
+    await sleep(CONTROL_DELAY_MS);
+    bgLog = bareTone(CONTROL_SECONDS, "tap-background-control", CONTROL_HZ);
+  }
+  const lines = await late.done;
+  const window = captureWindow(lines);
+  const tone = requireAudible("second-instance", await spikeToneInterval(log, AUDIO_SECONDS), window, "late");
+  const first = requireAudible("first-instance", await spikeToneInterval(firstLog, firstSeconds), window, "cover");
+  if (first.pid === tone.pid) throw new Error("both instances report the same pid");
+  const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
+  let controlTone = null;
+  let leaked = loud;
+  if (bgLog) {
+    const heardTone = requireAudible("background-control", await spikeToneInterval(bgLog, CONTROL_SECONDS), window, "late");
+    // A window is stamped when it completes, so it covers (t - WINDOW_MS, t]. Windows that
+    // overlap the control tone are the control; every other loud window, before OR after
+    // it, is a leak (Codex review of PR 3a: counting only before the control hid late leaks).
+    const overlapsControl = (line) => line.t > heardTone.startT && line.t - WINDOW_MS < heardTone.stopT;
+    leaked = loud.filter((line) => !overlapsControl(line));
+    const heard = loud.filter(overlapsControl).length;
+    if (heard === 0) throw new Error("the tap captured nothing of the background control: it stopped capturing");
+    controlTone = { ...heardTone, capturedWindows100ms: heard };
+  }
+  return { firstInstance: first, tone, controlTone, tapArgs: [...by, ...extra],
+    leakedBeforeSecondStart: loud.filter((line) => line.t < tone.startT).length,
+    leakedWindows100ms: leaked.length,
+    // Each leaked window relative to the tones, so a leak can be attributed, not guessed at.
+    leakedDetail: leaked.map((line) => ({ rms: line.windowRms, msAfterSecondStart: Math.round(line.t - tone.startT),
+      msAfterControlStop: controlTone ? Math.round(line.t - controlTone.stopT) : null })),
+    windows100ms: lines.filter((line) => line.windowRms !== undefined).length,
+    rebuilds: lines.filter((line) => line.event === "tapRebuilt"),
+    tailDrops: lines.filter((line) => line.event === "tailDropped"),
+    // Did a drop discard audible audio? The direct evidence that the check stopped a leak.
+    droppedLoud: lines.some((line) => (line.event === "tailDropped" || line.event === "tapRebuilt") && line.droppedMaxRms > LEAK_RMS),
+    summary: lines.find((line) => line.event === "summary") };
 }
 
 const commands = {
@@ -365,6 +444,25 @@ const commands = {
    * excludes every process of a denylisted app, helpers included. Same scenarios as Q2,
    * plus the Chromium helper case SCK failed.
    */
+  /**
+   * PR 3a proof: only the second-instance scenario, bundle IDs plus live process objects.
+   * GS_TAP_EXTRA adds tap flags ("--rebuild-ms 100 --hold-ms 500"); GS_SPIKE_LABEL names
+   * the result file. Run once without flags as the positive control (the leak), once with.
+   */
+  async "tap-second-instance"() {
+    const extra = (process.env.GS_TAP_EXTRA ?? "").split(/\s+/).filter(Boolean);
+    const label = process.env.GS_SPIKE_LABEL ?? (extra.length ? "rebuild" : "control");
+    if (!/^[a-z0-9-]+$/.test(label)) throw new Error(`GS_SPIKE_LABEL must be [a-z0-9-], got ${label}`);
+    // GS_SECOND_AT_MS launches instance 2 that long after capture starts. Near the deadline
+    // (AUDIO_SECONDS) it tests the shutdown tail; there is then no room for the control.
+    const secondAtMs = process.env.GS_SECOND_AT_MS ? Number(process.env.GS_SECOND_AT_MS) : undefined;
+    if (secondAtMs !== undefined && !(secondAtMs > 0 && secondAtMs < AUDIO_SECONDS * 1000)) {
+      throw new Error(`GS_SECOND_AT_MS must be inside the ${AUDIO_SECONDS} s capture, got ${process.env.GS_SECOND_AT_MS}`);
+    }
+    const control = secondAtMs === undefined;
+    save(`pr3a-second-instance-${label}`, await secondInstance(["--by", "both"], extra, { control, secondAtMs }));
+  },
+
   async tap() {
     // GS_TAP_BY=bundle|both (macOS 26+): bundle IDs, or bundle IDs plus live process
     // objects; default is process objects only.
@@ -419,34 +517,7 @@ const commands = {
       result[tag] = { updates: lines.filter((line) => line.event === "tapUpdated"), toneStartedT: started?.t ?? null,
         leakedWindows100ms: loud.length, leakFirstT: loud[0]?.t ?? null, leakLastT: loud.at(-1)?.t ?? null };
     }
-    // A SECOND instance of an already-running denylisted app starts audio after the tap
-    // exists: the hole that remains with bundle IDs (the ID is already bound to the first).
-    // Instance 1 plays for the whole probe, so it is alive (and bound) when the tap is made
-    // and when instance 2 starts; zero leak before instance 2 proves instance 1 is excluded
-    // (Codex review of PR 71: an instance 1 that had already exited would turn this into
-    // the passing single-late-launch case).
-    if (mode) {
-      const firstSeconds = AUDIO_SECONDS * 3;
-      const firstLog = launchTone("play", firstSeconds, "tap-first-instance");
-      const firstPid = await waitForToneStart(firstLog);
-      const objects = helper("procwatch", "--seconds", PROC_PHASE_SECONDS / 3, "--poll-ms", PROC_POLL_MS);
-      if (!objects.some((line) => line.pid === firstPid && line.output)) {
-        throw new Error(`instance 1 (pid ${firstPid}) has no CoreAudio process object playing before the tap`);
-      }
-      const late = background(["tap", "--seconds", AUDIO_SECONDS, "--exclude", TONE_BUNDLE_ID, ...by]);
-      await captureLive(late);
-      await sleep(LATE_LAUNCH_MS / 2);
-      const log = launchTone("play", AUDIO_SECONDS, "tap-second-instance");
-      const lines = await late.done;
-      const window = captureWindow(lines);
-      const tone = requireAudible("second-instance", await spikeToneInterval(log, AUDIO_SECONDS), window, "late");
-      const first = requireAudible("first-instance", await spikeToneInterval(firstLog, firstSeconds), window, "cover");
-      if (first.pid === tone.pid) throw new Error("both instances report the same pid");
-      const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
-      result["late-second-instance"] = { firstInstance: first, tone,
-        leakedBeforeSecondStart: loud.filter((line) => line.t < tone.startT).length,
-        leakedWindows100ms: loud.length, summary: lines.find((line) => line.event === "summary") };
-    }
+    if (mode) result["late-second-instance"] = await secondInstance(by);
     save(mode ? `q2-tap-${mode}` : "q2-tap", result);
   },
 
