@@ -470,11 +470,12 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   accurate OCR on a copy binarised at luminance 190. The spike's "retry when few lines"
   needed a threshold to tune; merging doesn't. Fixtures (`pr3b1-ocr-merged.json`), 1x:
   - accurate alone: pooled word recall **0.826**, 107 ms;
-  - merged: **0.979**, 229 ms a kept frame.
+  - merged: **0.976**, 226 ms a kept frame (positional merge, after Codex round 1; the
+    first string-based merge scored 0.979).
   - A new synthetic `11-settings-mixed` fixture (black and grey labels on `#ececec`) read
     **nothing** in the plain pass, not just the grey lines. So it doesn't show the failure
     the fixture was added for; it shows a whole-frame miss on that background, which
-    merging recovers (0.97).
+    merging recovers.
 - **2026-10-18, PR 3b-1, menu-bar blanking proof** (`run-menubar`, 3 of 3 runs). The run is
   `gs-capture run --denylist com.apple.TextEdit`, with TextEdit frontmost showing the
   canary.
@@ -494,3 +495,23 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-10-18, PR 3b-1, a denylisted app is not named in the shot either.** `appBundleId`
   is `null` while a denylisted app owns the menu bar. This is the conservative choice:
   when a work app was in use is information too.
+- **2026-10-18, PR 3b-1, Codex round 1 (1 × P1, 1 × P2), both fixed. Both decisions are
+  now pure functions with `swift test` coverage.**
+  - **P1: the menu bar could leak during an app switch.** The owner was sampled only
+    *before* the capture, so a switch to a denylisted app while the capture was in flight
+    left its menus in the frame unblanked. `Run.menuBarDecision` now samples before **and**
+    after: if either sample is denylisted the band is blanked and the app is not named.
+    When two allowed owners disagree, no app is named either.
+  - **P2: the OCR merge changed content.** Deduplicating by string dropped repeated lines
+    ("Pending" under two tasks) and appended second-pass lines at the end.
+    `OCR.merge` now works by position:
+    - a second-pass line is dropped only when it covers a first-pass line (half of the
+      smaller box);
+    - repeats elsewhere are kept;
+    - everything is put in reading order.
+  - **Tests** (`native/gs-capture/Tests`, 11 cases, run locally because CI doesn't build
+    Swift). A **mutation check** shows they bite:
+    - putting the before-only decision back fails exactly the switch-during-capture test;
+    - putting the string dedupe back fails 4 of the 5 merge tests.
+  - Both live proofs were re-run on the fixed binary: `run-menubar` 3 of 3, and OCR recall
+    0.976.

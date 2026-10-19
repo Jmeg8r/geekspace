@@ -39,6 +39,16 @@ enum Run {
         return denylist.contains { bundle == $0 || bundle.hasPrefix($0 + ".") }
     }
 
+    /// What to do with a frame's menu bar, from its owner sampled BEFORE and AFTER the
+    /// capture. WHY both (Codex review of PR 3b-1): a switch to a denylisted app while the
+    /// capture is in flight puts that app's menus in the frame while the earlier sample still
+    /// says "allowed". So blank if either sample is denylisted, and name an app only when both
+    /// samples agree on it.
+    static func menuBarDecision(before: String?, after: String?, denylist: [String]) -> (blank: Bool, appBundleId: String?) {
+        if denylisted(before, denylist) || denylisted(after, denylist) { return (true, nil) }
+        return (false, before == after ? before : nil)
+    }
+
     /// The menu bar's on-screen rects in global points. Excluding an app cannot remove them:
     /// the menu bar has no owning app (spike Q1), so while a denylisted app owns it, it is
     /// blanked instead.
@@ -110,10 +120,11 @@ enum Run {
         while duration.map({ nowMs() - started < $0 * 1000 }) ?? true {
             let tickStart = nowMs()
             let takenAt = Date()
-            let owner = NSWorkspace.shared.menuBarOwningApplication?.bundleIdentifier
-            let ownerDenied = denylisted(owner, denylist)
+            let ownerBefore = NSWorkspace.shared.menuBarOwningApplication?.bundleIdentifier
             var (image, _, _) = await Screen.capture(excluding: denylist, scale: captureScale)
-            if ownerDenied {
+            let ownerAfter = NSWorkspace.shared.menuBarOwningApplication?.bundleIdentifier
+            let decision = menuBarDecision(before: ownerBefore, after: ownerAfter, denylist: denylist)
+            if decision.blank {
                 let rects = menuBarRects()
                 // Never keep a frame whose menu bar could not be found while it shows a
                 // denylisted app's menus.
@@ -139,9 +150,9 @@ enum Run {
                 line("shot", [
                     "day": day, "path": "\(day)/\(file)", "takenAt": round3(takenAt.timeIntervalSince1970 * 1000),
                     // A denylisted app's id is not recorded either: when it was in use is
-                    // information too (plan.md, PR 3b-1).
-                    "appBundleId": ownerDenied ? NSNull() : (owner.map { $0 as Any } ?? NSNull()),
-                    "menuBarBlanked": ownerDenied,
+                    // information too (plan.md, PR 3b-1). Null also when the owner changed.
+                    "appBundleId": decision.appBundleId.map { $0 as Any } ?? NSNull(),
+                    "menuBarBlanked": decision.blank,
                     "ocrText": ocr.text, "ocrMs": round3(ocr.ms),
                 ])
             }

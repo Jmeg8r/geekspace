@@ -16,5 +16,8 @@ let package = Package(
         // A stand-in "denylisted app" with its own bundle ID, so the spike controls exactly
         // which app plays audio or holds the mic. The driver wraps it in an .app bundle.
         .executableTarget(name: "spike-tone", path: "Sources/spike-tone"),
+        // Pure decision logic (menu-bar masking, OCR merge). Native code is not built on CI
+        // (ubuntu), so `swift test` runs locally as part of each native PR's proof.
+        .testTarget(name: "gs-captureTests", dependencies: ["gs-capture"], path: "Tests/gs-captureTests"),
     ]
 )

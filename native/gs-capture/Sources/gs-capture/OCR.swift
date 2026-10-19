@@ -7,7 +7,9 @@ import Foundation
 import Vision
 
 enum OCR {
-    struct Result { let text: String; let lines: [String]; let ms: Double }
+    /// One recognised line and where it was: Vision's normalised box, origin bottom-left.
+    struct Line: Equatable { let text: String; let box: CGRect }
+    struct Result { let text: String; let lines: [String]; let ms: Double; var observations: [Line] = [] }
 
     static func recognize(_ image: CGImage, fast: Bool) -> Result {
         let request = VNRecognizeTextRequest()
@@ -19,8 +21,11 @@ enum OCR {
         } catch {
             fail("Vision OCR failed: \(error.localizedDescription)")
         }
-        let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
-        return Result(text: lines.joined(separator: "\n"), lines: lines, ms: nowMs() - started)
+        let observations = (request.results ?? []).compactMap { result in
+            result.topCandidates(1).first.map { Line(text: $0.string, box: result.boundingBox) }
+        }
+        let lines = observations.map(\.text)
+        return Result(text: lines.joined(separator: "\n"), lines: lines, ms: nowMs() - started, observations: observations)
     }
 
     // Spike Q5: accurate OCR read nothing of mid-grey text on light grey (#8a8a8a on #ececec),
@@ -51,9 +56,42 @@ enum OCR {
         let started = nowMs()
         let plain = recognize(image, fast: false)
         let binary = recognize(thresholded(image), fast: false)
-        var seen = Set<String>()
-        let lines = (plain.lines + binary.lines).filter { seen.insert($0).inserted }
-        return Result(text: lines.joined(separator: "\n"), lines: lines, ms: nowMs() - started)
+        let merged = merge(plain.observations, binary.observations)
+        let lines = merged.map(\.text)
+        return Result(text: lines.joined(separator: "\n"), lines: lines, ms: nowMs() - started, observations: merged)
+    }
+
+    // Two boxes are the same line when this much of the smaller one lies inside the other.
+    static let sameLineOverlap = 0.5
+
+    /// Every plain-pass line, plus each extra-pass line that does not cover a plain one,
+    /// in reading order. WHY by position, not by string (Codex review of PR 3b-1): the same
+    /// text at two places ("Pending" under two tasks) is two lines, and a line only the
+    /// second pass found belongs where it is on screen, not at the end.
+    static func merge(_ plain: [Line], _ extra: [Line]) -> [Line] {
+        let added = extra.filter { candidate in
+            !plain.contains { line in
+                let overlap = line.box.intersection(candidate.box)
+                let smaller = min(line.box.width * line.box.height, candidate.box.width * candidate.box.height)
+                return !overlap.isNull && smaller > 0 && Double(overlap.width * overlap.height / smaller) >= sameLineOverlap
+            }
+        }
+        return readingOrder(plain + added)
+    }
+
+    /// Top to bottom, then left to right within a row. A line joins the current row when its
+    /// centre is within half a line height of the row's first line.
+    static func readingOrder(_ lines: [Line]) -> [Line] {
+        let byHeight = lines.sorted { $0.box.midY > $1.box.midY }
+        var rows: [[Line]] = []
+        for line in byHeight {
+            if let first = rows.last?.first, abs(first.box.midY - line.box.midY) < min(first.box.height, line.box.height) / 2 {
+                rows[rows.count - 1].append(line)
+            } else {
+                rows.append([line])
+            }
+        }
+        return rows.flatMap { $0.sorted { $0.box.minX < $1.box.minX } }
     }
 
     /// Mean luminance 0–255, so a proof can assert a band is black rather than just unread.
