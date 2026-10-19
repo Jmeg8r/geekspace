@@ -36,6 +36,7 @@ One JSON object per line on **stdout**, keys sorted. Every line has `"v": 1` and
 | `segment` | `kind`, `day`, `path`, `start`, `end`, `peak` | a finished system-audio segment was written |
 | `tapRebuilt` | `t`, `droppedWindows`, `droppedMaxRms`, `addedProcesses`, `addedBundles`, `excludedProcesses`, `rebuildMs` | a new denylisted process appeared; held audio was dropped and the tap rebuilt |
 | `tailDropped` | `t`, `droppedWindows`, `droppedMaxRms`, `addedProcesses`, `addedBundles` | at stop, a denylisted process appeared after the last poll; the held tail was dropped |
+| `sampleRateChanged` | `t`, `from`, `to` | a rebuilt tap runs at a new rate (output device changed); later segments use it |
 | `sessionUnverified` | `t`, `livedMs`, `endedBy` | a tap session ended before its first IO cycle could be expected (under 200 ms); informational |
 | `stopped` | `reason` | clean end: `duration` (proofs) or `signal` |
 
@@ -62,8 +63,9 @@ More detail on the fields:
   - `kind` is always `"system"` from the helper. Mic segments come from the renderer (PR 3d).
   - `path` is `<day>/sys-HHmmss-SSS.m4a`: mono AAC, 32 kbps, at the tap's sample rate. It
     is the shape `dayRecorder.addSegment` accepts. `day` is the local day the segment
-    *started*. A segment closes at `--segment-sec`, at local midnight, at a tap rebuild and
-    at stop.
+    *started*. A segment closes at `--segment-sec`, at local midnight, at a tap rebuild, at
+    stop, and when delivery resumes more than 500 ms away from where the segment's samples
+    end (sleep and wake, a clock step). One file never mixes sample rates.
   - Each file is a complete container that decodes on its own (spec R2). It is written as
     a hidden `.partial-` file, read back after it is finalized and only then renamed and
     announced, so a path is never announced for a partial or unreadable file.
@@ -81,7 +83,8 @@ On any failure the helper writes `gs-capture: <message>` to **stderr** and **exi
 There is no error event. Failures include a missing permission, a ScreenCaptureKit call that
 hangs past 10 s (a process-exiting watchdog), an unwritable file, and a menu bar that can't
 be found to blank while the denylist is non-empty. On the audio side they include a tap that
-delivers no samples within 1 s of being (re)built, a tap buffer whose channel layout is not
+delivers no samples within 1 s of being (re)built or stops delivering for 1 s at any point
+(an output device unplugged), a tap buffer whose channel layout is not
 the tap's, and a segment that cannot be written, finalized or read back. The supervisor
 treats each of these as "Not recording" (spec R3):
 

@@ -369,6 +369,11 @@ final class TapRunner {
     private var sessionStart: Double
     private var sessionBaseline: Int
     private var nextCheck: Double
+    // When the sample count last moved. Delivery that stops after it started (an output
+    // device unplugged) must fail too, not only a session that never delivered (Codex
+    // review of PR 3b-2: the screenshot heartbeat would otherwise mask the loss).
+    private var lastCount: Int
+    private var lastAdvance: Double
 
     /// Builds and starts the first session. `sinkFor` is called once per session with the
     /// tap's format and must return the same sink every time.
@@ -393,10 +398,12 @@ final class TapRunner {
         sessionStart = nowMs()
         sessionBaseline = sink.sampleCount()
         nextCheck = nowMs()
+        lastCount = sessionBaseline
+        lastAdvance = sessionStart
     }
 
     /// Rebuild around any new denylisted process (when `poll` and a poll is due), then fail
-    /// if the current session has gone silent.
+    /// if delivery has not advanced for `Tap.sessionDeliveryDeadlineMs`.
     func tick(poll: Bool) {
         if poll, let rebuildMs, nowMs() >= nextCheck {
             nextCheck = nowMs() + rebuildMs
@@ -414,6 +421,8 @@ final class TapRunner {
                 session.start()
                 sessionStart = nowMs()
                 sessionBaseline = sink.sampleCount()
+                lastCount = sessionBaseline
+                lastAdvance = sessionStart
                 report("tapRebuilt", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
                                       "droppedMaxRms": dropped.maxRms,
                                       "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
@@ -423,8 +432,14 @@ final class TapRunner {
         // AudioDeviceStart returning noErr is not evidence of delivery (see TapAutoStart), and
         // the shared sink's totals would hide a silent replacement behind the previous
         // session's samples (Codex review, PR 3a).
-        if nowMs() - sessionStart >= Tap.sessionDeliveryDeadlineMs && sink.sampleCount() == sessionBaseline {
-            fail("the tap delivered no samples in \(Int(Tap.sessionDeliveryDeadlineMs)) ms after it was (re)built")
+        let count = sink.sampleCount()
+        if count != lastCount {
+            lastCount = count
+            lastAdvance = nowMs()
+        } else if nowMs() - lastAdvance >= Tap.sessionDeliveryDeadlineMs {
+            fail(count == sessionBaseline
+                 ? "the tap delivered no samples in \(Int(Tap.sessionDeliveryDeadlineMs)) ms after it was (re)built"
+                 : "the tap stopped delivering samples for \(Int(nowMs() - lastAdvance)) ms")
         }
     }
 

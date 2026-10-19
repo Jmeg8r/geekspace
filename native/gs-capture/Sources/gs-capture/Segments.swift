@@ -22,7 +22,7 @@ struct PCMChunk {
 final class PCMHold: TapSink, @unchecked Sendable {
     private let lock = NSLock()
     private let holdMs: Double
-    private let sampleRate: Double
+    private var sampleRate: Double
     private let deliver: (PCMChunk) -> Void
     private let onDrop: () -> Void
     private var pending: [PCMChunk] = []
@@ -73,6 +73,16 @@ final class PCMHold: TapSink, @unchecked Sendable {
 
     func sampleCount() -> Int { lock.withLock { total } }
 
+    var rate: Double { lock.withLock { sampleRate } }
+
+    /// Only between sessions, after a drop: anything still held was captured at the old rate.
+    func setSampleRate(_ rate: Double) {
+        lock.withLock {
+            guard pending.isEmpty else { fail("sample rate changed while \(pending.count) chunk(s) were held") }
+            sampleRate = rate
+        }
+    }
+
     func release(now: Double) {
         // Taken under the lock, delivered outside it, so encoding never blocks the IO queue.
         let ready = lock.withLock {
@@ -93,7 +103,7 @@ final class PCMHold: TapSink, @unchecked Sendable {
         }
         onDrop()
         let frames = dropped.reduce(0) { $0 + $1.samples.count }
-        let windowFrames = max(Int(sampleRate) / 10, 1)
+        let windowFrames = max(Int(rate) / 10, 1)
         let maxRms = dropped.map { chunk in
             sqrt(chunk.samples.reduce(0.0) { $0 + Double($1 * $1) } / Double(chunk.samples.count))
         }.max() ?? 0
@@ -107,6 +117,10 @@ final class SegmentWriter {
     // Speech-grade mono AAC: about 2.4 MB per 5-minute segment. The transcriber resamples
     // to 16 kHz anyway (meetingProcessor.mjs).
     static let aacBitRate = 32_000
+    // A chunk this far from where the samples written so far say it should start means
+    // delivery paused (sleep/wake) or the clock jumped. Callback jitter and drift over a
+    // segment are tens of ms at most.
+    static let gapToleranceMs = 500.0
 
     private struct Open {
         let file: AVAudioFile
@@ -121,7 +135,7 @@ final class SegmentWriter {
 
     private let root: String
     private let segmentSec: Double
-    private let sampleRate: Double
+    private(set) var sampleRate: Double
     private let report: (String, [String: Any]) -> Void
     private var open: Open?
 
@@ -139,11 +153,28 @@ final class SegmentWriter {
         Double(frames) / sampleRate >= segmentSec || openDay != chunkDay
     }
 
+    /// A segment's samples are its timeline: `end` is start plus samples written. So audio
+    /// that does not follow on in time must start a new segment, or everything after a pause
+    /// would be stamped too early (Codex review of PR 3b-2).
+    static func continues(expectedStartMs: Double, chunkStartMs: Double) -> Bool {
+        abs(chunkStartMs - expectedStartMs) <= gapToleranceMs
+    }
+
+    /// Only between segments (a rebuild has just closed one): a tap rebuilt on a new output
+    /// device can run at another rate, and its samples must not be written at the old one.
+    func setSampleRate(_ rate: Double) {
+        guard open == nil else { fail("sample rate changed with segment \(open!.path) still open") }
+        sampleRate = rate
+    }
+
     func append(_ chunk: PCMChunk) {
         let startMs = chunk.endMs - Double(chunk.samples.count) / sampleRate * 1000
         let (chunkDay, _) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: "sys", ext: "m4a")
-        if let current = open, SegmentWriter.shouldRoll(frames: current.frames, sampleRate: sampleRate,
-                                                         segmentSec: segmentSec, openDay: current.day, chunkDay: chunkDay) {
+        if let current = open,
+           SegmentWriter.shouldRoll(frames: current.frames, sampleRate: sampleRate, segmentSec: segmentSec,
+                                    openDay: current.day, chunkDay: chunkDay)
+           || !SegmentWriter.continues(expectedStartMs: current.startMs + Double(current.frames) / sampleRate * 1000,
+                                       chunkStartMs: startMs) {
             close()
         }
         if open == nil { open = begin(at: startMs) }
@@ -217,6 +248,7 @@ final class SystemAudioRecorder {
     private var timer: DispatchSourceTimer?
     private var runner: TapRunner?
     private var writer: SegmentWriter?
+    private var hold: PCMHold?
 
     /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped` and
     /// `sessionUnverified`.
@@ -227,11 +259,22 @@ final class SystemAudioRecorder {
             let bundleIDs = denylist.isEmpty ? nil : denylist.flatMap { [$0, "\($0).helper"] }
             let runner = TapRunner(objectsNow: { Tap.excludedObjects(denylist) }, bundleIDs: bundleIDs,
                                    rebuildMs: SystemAudioRecorder.rebuildMs, report: report) { [unowned self] format in
-                if let sink = self.runner?.sink { return sink }
+                if let hold = self.hold, let writer = self.writer {
+                    // A rebuild: the drop has emptied the hold and closed the segment, so a
+                    // new rate can take effect here without mixing rates in one file.
+                    if format.mSampleRate != hold.rate {
+                        report("sampleRateChanged", ["t": round3(nowMs()), "from": hold.rate, "to": format.mSampleRate])
+                        hold.setSampleRate(format.mSampleRate)
+                        writer.setSampleRate(format.mSampleRate)
+                    }
+                    return hold
+                }
                 let writer = SegmentWriter(root: root, segmentSec: segmentSec, sampleRate: format.mSampleRate, report: report)
+                let hold = PCMHold(holdMs: SystemAudioRecorder.holdMs, sampleRate: format.mSampleRate,
+                                   deliver: writer.append, onDrop: writer.close)
                 self.writer = writer
-                return PCMHold(holdMs: SystemAudioRecorder.holdMs, sampleRate: format.mSampleRate,
-                               deliver: writer.append, onDrop: writer.close)
+                self.hold = hold
+                return hold
             }
             self.runner = runner
             let timer = DispatchSource.makeTimerSource(queue: queue)

@@ -587,5 +587,24 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - Evidence: `spike-evidence/results/pr3b2-run-segments-*.json` and
       `pr3a-second-instance-rebuild-3b2-*.json`.
   - **Not covered here:** memory over 8 hours (R2) is PR 3c's 2-hour soak. Changing the
-    default output device mid-run (headphones plugged in) is untested. The aggregate is
-    built on the output device found at start.
+    default output device mid-run (headphones plugged in) is not tested live. The
+    aggregate is built on the output device found at start (but see Codex round 1 below).
+- **2026-10-19, PR 3b-2, Codex round 1 (3 × P2), all fixed.** The gate passed, but each
+  finding was a real gap in the long-running path.
+  - **Delivery that stopped after it started went unnoticed.** The check covered only the
+    first second after a (re)build, and the screenshot heartbeat kept running. `TapRunner`
+    now fails when the sample count has not advanced for 1 s at *any* point. The check is
+    shared, so `tap` gets it too.
+  - **A pause in delivery was joined into one segment.** `end` is start plus samples, so
+    audio resumed after sleep would have been stamped too early. A chunk more than 500 ms
+    from where the segment's samples end now closes the segment. Test first: a 1 h pause
+    gives two segments with the right times. Disabling the check fails that test (mutation
+    run).
+  - **A rebuilt tap at a new sample rate would have been written at the old rate.** After a
+    rebuild the hold is empty and the segment closed (the drop does both), so the hold and
+    the writer are retuned there and `sampleRateChanged` is reported. Both refuse a retune
+    with anything held or open.
+  - **Re-proof after the fixes:** `run-segments` 3 of 3 (0 leaks, 21 control windows, 4
+    segments each), the PR 3a proof once (0 leaked, control heard in 7 windows) and
+    `swift test` (24 tests). The stall check is **not** proven live, because that would
+    need an output device unplugged mid-run. It is PR 3c soak material.

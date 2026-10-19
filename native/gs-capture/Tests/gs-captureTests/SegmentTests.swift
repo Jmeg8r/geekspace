@@ -45,6 +45,14 @@ final class PCMHoldTests: XCTestCase {
         XCTAssertEqual(dropped.maxRms, 0.5, accuracy: 1e-6)
     }
 
+    func testRateChangesAfterADrop() {
+        let (hold, _, _) = makeHold()
+        ingest(hold, [0.1], at: 1)
+        _ = hold.drop()
+        hold.setSampleRate(44_100)
+        XCTAssertEqual(hold.rate, 44_100)
+    }
+
     func testSampleCountSpansDrops() {
         let (hold, _, _) = makeHold()
         ingest(hold, [0, 0, 0], at: 1)
@@ -120,6 +128,41 @@ final class SegmentWriterTests: XCTestCase {
         let day = segments[0]["day"] as! String
         let names = try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(day).path)
         XCTAssertFalse(names.contains { $0.hasPrefix(".partial-") })
+    }
+
+    func testAPauseInDeliveryStartsANewSegment() throws {
+        // Sleep/wake with no rebuild: delivery stops, then resumes an hour later. The resumed
+        // audio must not be stamped as if it followed on (Codex review of PR 3b-2).
+        var segments: [[String: Any]] = []
+        let writer = SegmentWriter(root: root.path, segmentSec: 300, sampleRate: Self.rate) { _, fields in segments.append(fields) }
+        let start = Date().timeIntervalSince1970 * 1000
+        let hourMs = 3_600_000.0
+        feed(writer, seconds: 1, startMs: start)
+        feed(writer, seconds: 1, startMs: start + hourMs)
+        writer.close()
+        XCTAssertEqual(segments.count, 2)
+        XCTAssertEqual(segments[0]["end"] as! Double, start + 1000, accuracy: 1)
+        XCTAssertEqual(segments[1]["start"] as! Double, start + hourMs, accuracy: 1)
+    }
+
+    func testContinuityTolerance() {
+        XCTAssertTrue(SegmentWriter.continues(expectedStartMs: 1000, chunkStartMs: 1000 + SegmentWriter.gapToleranceMs))
+        XCTAssertFalse(SegmentWriter.continues(expectedStartMs: 1000, chunkStartMs: 1001 + SegmentWriter.gapToleranceMs))
+        // A clock that steps backwards breaks the timeline too.
+        XCTAssertFalse(SegmentWriter.continues(expectedStartMs: 1000, chunkStartMs: 999 - SegmentWriter.gapToleranceMs))
+    }
+
+    func testRetunedWriterWritesAtTheNewRate() throws {
+        var segments: [[String: Any]] = []
+        let writer = SegmentWriter(root: root.path, segmentSec: 300, sampleRate: Self.rate) { _, fields in segments.append(fields) }
+        writer.setSampleRate(44_100)
+        let samples = [Float](repeating: 0.1, count: 44_100)
+        writer.append(PCMChunk(endMs: Date().timeIntervalSince1970 * 1000, samples: samples))
+        writer.close()
+        let segment = try XCTUnwrap(segments.first)
+        XCTAssertEqual((segment["end"] as! Double) - (segment["start"] as! Double), 1000, accuracy: 1)
+        let file = try AVAudioFile(forReading: root.appendingPathComponent(segment["path"] as! String))
+        XCTAssertEqual(file.fileFormat.sampleRate, 44_100)
     }
 
     func testCloseWithNothingOpenAnnouncesNothing() {
