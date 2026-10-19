@@ -1,0 +1,97 @@
+{
+  "tones": {
+    "first": {
+      "startT": 1792440585147.197,
+      "stopT": 1792440598800.342,
+      "pid": 1240
+    },
+    "second": {
+      "startT": 1792440587702.6912,
+      "stopT": 1792440590852.324,
+      "pid": 1282
+    },
+    "control": {
+      "startT": 1792440589117.691,
+      "stopT": 1792440591225.9622,
+      "pid": 1323
+    }
+  },
+  "segments": [
+    {
+      "path": "2026-10-19/sys-160945-412.m4a",
+      "start": 1792440585411.814,
+      "end": 1792440587033.148,
+      "bytes": 61756,
+      "decodedMs": 1641.31,
+      "spanMs": 1621.33,
+      "leaked": [],
+      "broadband": [],
+      "controlWindows": 0
+    },
+    {
+      "path": "2026-10-19/sys-160947-716.m4a",
+      "start": 1792440587715.833,
+      "end": 1792440590723.833,
+      "bytes": 64459,
+      "decodedMs": 3028,
+      "spanMs": 3008,
+      "leaked": [],
+      "broadband": [
+        {
+          "msFromStart": 1400,
+          "at": 1792440589115.833,
+          "amp": 0.0032,
+          "floor": 0.0037,
+          "tonal": false
+        }
+      ],
+      "controlWindows": 15
+    },
+    {
+      "path": "2026-10-19/sys-160950-724.m4a",
+      "start": 1792440590723.878,
+      "end": 1792440593731.878,
+      "bytes": 62888,
+      "decodedMs": 3028,
+      "spanMs": 3008,
+      "leaked": [],
+      "broadband": [],
+      "controlWindows": 6
+    },
+    {
+      "path": "2026-10-19/sys-160953-732.m4a",
+      "start": 1792440593731.925,
+      "end": 1792440594297.258,
+      "bytes": 61556,
+      "decodedMs": 574.69,
+      "spanMs": 565.33,
+      "leaked": [],
+      "broadband": [],
+      "controlWindows": 0
+    }
+  ],
+  "partialLeftovers": [],
+  "rebuilds": [
+    {
+      "addedBundles": [
+        "dev.geekspace.spike.tone"
+      ],
+      "addedProcesses": 1,
+      "droppedMaxRms": 0,
+      "droppedWindows": 6,
+      "event": "tapRebuilt",
+      "excludedProcesses": 2,
+      "rebuildMs": 145.443,
+      "t": 1792440587711.836,
+      "v": 1
+    }
+  ],
+  "tailDrops": [],
+  "leakedWindows100ms": 0,
+  "controlWindows100ms": 21,
+  "stopped": {
+    "event": "stopped",
+    "reason": "signal",
+    "v": 1
+  }
+}

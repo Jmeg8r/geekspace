@@ -1,0 +1,105 @@
+{
+  "tones": {
+    "first": {
+      "startT": 1792440599801.5361,
+      "stopT": 1792440613453.4888,
+      "pid": 1540
+    },
+    "second": {
+      "startT": 1792440602366.237,
+      "stopT": 1792440605518.779,
+      "pid": 1612
+    },
+    "control": {
+      "startT": 1792440603822.398,
+      "stopT": 1792440605933.7559,
+      "pid": 1711
+    }
+  },
+  "segments": [
+    {
+      "path": "2026-10-19/sys-161000-097.m4a",
+      "start": 1792440600097.351,
+      "end": 1792440601740.018,
+      "bytes": 61760,
+      "decodedMs": 1662.69,
+      "spanMs": 1642.67,
+      "leaked": [],
+      "broadband": [],
+      "controlWindows": 0
+    },
+    {
+      "path": "2026-10-19/sys-161002-391.m4a",
+      "start": 1792440602390.729,
+      "end": 1792440605398.729,
+      "bytes": 64456,
+      "decodedMs": 3028,
+      "spanMs": 3008,
+      "leaked": [],
+      "broadband": [
+        {
+          "msFromStart": 1400,
+          "at": 1792440603790.729,
+          "amp": 0.0043,
+          "floor": 0.006,
+          "tonal": false
+        }
+      ],
+      "controlWindows": 15
+    },
+    {
+      "path": "2026-10-19/sys-161005-399.m4a",
+      "start": 1792440605398.774,
+      "end": 1792440608406.774,
+      "bytes": 62851,
+      "decodedMs": 3028,
+      "spanMs": 3008,
+      "leaked": [],
+      "broadband": [
+        {
+          "msFromStart": 500,
+          "at": 1792440605898.774,
+          "amp": 0.0036,
+          "floor": 0.0071,
+          "tonal": false
+        }
+      ],
+      "controlWindows": 6
+    },
+    {
+      "path": "2026-10-19/sys-161008-407.m4a",
+      "start": 1792440608406.856,
+      "end": 1792440608982.856,
+      "bytes": 61560,
+      "decodedMs": 596,
+      "spanMs": 576,
+      "leaked": [],
+      "broadband": [],
+      "controlWindows": 0
+    }
+  ],
+  "partialLeftovers": [],
+  "rebuilds": [
+    {
+      "addedBundles": [
+        "dev.geekspace.spike.tone"
+      ],
+      "addedProcesses": 1,
+      "droppedMaxRms": 0,
+      "droppedWindows": 6,
+      "event": "tapRebuilt",
+      "excludedProcesses": 2,
+      "rebuildMs": 111.007,
+      "t": 1792440602387.994,
+      "v": 1
+    }
+  ],
+  "tailDrops": [],
+  "leakedWindows100ms": 0,
+  "controlWindows100ms": 21,
+  "stopped": {
+    "event": "stopped",
+    "reason": "signal",
+    "v": 1
+  }
+}

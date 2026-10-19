@@ -540,3 +540,52 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       the R3 proof with James at the Mac (PR 3c), not claimed here.
   - **Also fixed, found in the smoke test:** `--duration` overran by up to a whole
     `--shot-sec` (12 s asked, 30 s taken). The wait is now capped at the time remaining.
+- **2026-10-19, PR 3b-2, system-audio segments.** `gs-capture run` now writes system audio
+  from the tap as segments (`protocol.md`: `segment`, `tapRebuilt`, `tailDropped`,
+  `sessionUnverified`, and `--segment-sec`).
+  - **The PR 3a loop is shared, not copied.** `TapRunner` (`Tap.swift`) holds the rebuild,
+    delivery and tail-check logic. Both `tap` (the proof command) and `run` use it, through
+    a `TapSink` protocol: the RMS meter for `tap`, and a `PCMHold` of real mono PCM for
+    `run`. The PR 3a proof was re-run on the shared loop with the same result: **0 leaked
+    windows in 3 of 3 runs**, control captured every time, 5–6 windows dropped per
+    rebuild. The no-rebuild control still leaks (17).
+  - **AAC `.m4a`, not Opus.** AVFoundation writes AAC natively and the transcriber's ffmpeg
+    path decodes it. Opus in CAF is less reliably handled by ffmpeg. The format is mono at
+    32 kbps, about 2.4 MB per 5-minute segment.
+  - **A rebuild closes the segment.** Dropped audio becomes a gap *between* segments, so a
+    file's own timeline always matches its `[start, end]`, and PR 5's transcript time ranges
+    can rely on it.
+  - **SIGTERM finalizes.** The supervisor stops the helper with a signal (a denylist change
+    is a restart), so the open segment is finalized and announced before exit 0.
+  - **For PR 3c (purge):** a crash can leave a hidden `.partial-*.m4a`, and a kill between
+    writing and announcing a file leaves a shot or segment with no Convex row. Purge works
+    from rows, so it must also sweep files in day folders older than the retention period.
+  - **Proof** (`node scripts/spike-day-recorder.mjs run-segments`, 3 runs):
+    - SpikeTone (denylisted, 440 Hz) plays throughout. A second instance starts at 2 s and
+      forces a rebuild, a non-denylisted 660 Hz control plays at 3.5 s, and SIGTERM comes
+      at 9 s with 3 s segments.
+    - Every segment is converted alone through the transcriber's exact ffmpeg call
+      (`meetingProcessor.mjs`, 16 kHz mono wav).
+    - Each 100 ms window is then measured with a Hann-windowed Goertzel at 440 Hz and 660 Hz.
+
+    | Run | Tonal 440 Hz windows (leak) | Control windows | Segments | Rebuild dropped | Stop |
+    |---|---|---|---|---|---|
+    | 1–3 | **0**, **0**, **0** | 21 each | 4 each | 6 windows, silent | `signal`, no partials |
+    | Negative control, nothing denylisted | **88** (fails, exit 1) | 21 | 4 | none | `signal` |
+
+    - **The leak gate was tightened after the first run, and here is why.** The first run
+      flagged 2 windows at 440 Hz (0.004 and 0.0025). Both were within 30 ms of the control
+      tone's start and stop. The same windows read *higher* at 370 Hz and 520 Hz, which
+      neither tone uses, and the windows next to them read 0 at 440 Hz. That is the
+      broadband click of a gated sine.
+    - A window now counts as a leak only if 440 Hz is more than 3 × the louder reference
+      band. Excluded windows are still recorded (`broadband` in the result). The negative
+      control shows the gate is not blind.
+    - The 3b-1 `run-menubar` proof still passes with audio running.
+    - `swift test`: 20 tests, including an AAC round trip in which each segment decodes
+      alone.
+    - Evidence: `spike-evidence/results/pr3b2-run-segments-*.json` and
+      `pr3a-second-instance-rebuild-3b2-*.json`.
+  - **Not covered here:** memory over 8 hours (R2) is PR 3c's 2-hour soak. Changing the
+    default output device mid-run (headphones plugged in) is untested. The aggregate is
+    built on the output device found at start.
