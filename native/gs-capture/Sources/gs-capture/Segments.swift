@@ -257,8 +257,11 @@ final class SystemAudioRecorder {
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
             // silenced only one of two live instances (spike Q2). Bundle-ID taps need macOS 26.
             let bundleIDs = denylist.isEmpty ? nil : denylist.flatMap { [$0, "\($0).helper"] }
+            // Nothing denylisted, nothing to protect: an unclassifiable arrival would only
+            // cost audio.
+            let arrivals = denylist.isEmpty ? nil : ProcessArrivals(isDenylisted: { Tap.denylisted($0, denylist) })
             let runner = TapRunner(objectsNow: { Tap.excludedObjects(denylist) }, bundleIDs: bundleIDs,
-                                   rebuildMs: SystemAudioRecorder.rebuildMs, report: report) { [unowned self] format in
+                                   rebuildMs: SystemAudioRecorder.rebuildMs, arrivals: arrivals, report: report) { [unowned self] format in
                 if let hold = self.hold, let writer = self.writer {
                     // A rebuild: the drop has emptied the hold and closed the segment, so a
                     // new rate can take effect here without mixing rates in one file.

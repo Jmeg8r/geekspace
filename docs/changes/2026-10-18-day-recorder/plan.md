@@ -608,3 +608,40 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     segments each), the PR 3a proof once (0 leaked, control heard in 7 windows) and
     `swift test` (24 tests). The stall check is **not** proven live, because that would
     need an output device unplugged mid-run. It is PR 3c soak material.
+- **2026-10-19, PR 3b-2, Codex round 2 was untagged; round 3 ran tagged (1 × P1, 1 × P2), both fixed.**
+  Round 3 used the `codex exec` custom-instructions path, which requires a severity tag on
+  every finding.
+  - **P1: a denylisted process that starts, plays and exits between two polls was never
+    seen.** A poll compares only live processes, so the held audio was released and written.
+    This gap was present in PR 3a's design as well.
+    - **Fix:** `ProcessArrivals` (`Tap.swift`) listens for HAL process-list notifications
+      and classifies each added object at once, while its pid and bundle ID can still be
+      read. A denylisted arrival forces `TapRunner` to drop and rebuild on the next tick,
+      before the caller releases. An arrival also forces a tail drop at stop. An added
+      object whose pid is already unreadable counts as denylisted. The listener is off when
+      the denylist is empty.
+    - **Measured, and why a heuristic was removed:** the HAL sends every list notification
+      **twice**, about 1 ms apart. A first version treated "nothing added or removed" as an
+      object that came and went. With the duplicates, that produced 3 spurious rebuilds in
+      every run, each costing held audio. That rule is gone.
+    - **Residual:** an object added *and* removed inside the handler's ~1 ms read latency
+      leaves no trace. It would have had to produce audio in that time.
+    - **Proof** (`tap-transient-instance`): polls 2.5 s apart. Instance 2 plays for 0.4 s and
+      then **exits** (SpikeTone's new `linger` argument is set to 0), about 1.1 s before the
+      next poll. That is checked from its own `exiting` log and from its pid being gone.
+      - The first attempt was invalid: SpikeTone lingers 2 s after its audio stops by
+        default, so a poll caught the still-live process.
+      - Control (`--listen 0`): **5 windows leaked**, no rebuild.
+      - Listener: **0 leaked in 3 of 3 runs**, one rebuild each, triggered by the listener,
+        dropping silence. The listener fired before the tone played.
+      - A window ending 103–128 ms after the *control* tone's logged stop appeared in 3 of 8
+        tap runs, including a listener-off one. That is the control's output tail. This
+        proof counts windows within 150 ms after the control stops as `controlTail` and
+        reports them, not as a leak. The 3a counter is unchanged.
+    - **Re-run on the listener:** `run-segments` 3 of 3 (0 leaks, rebuild by `listener`),
+      the PR 3a proof (0 leaked) and `swift test` (24 tests).
+  - **P2: a line could follow `stopped`.** The shot loop and heartbeat keep running during
+    shutdown. `stopped` is now written as the terminal line: `emit` refuses every line after
+    it under the same output lock, so a line in progress finishes first. A shot written but
+    not announced in that window is an orphan file, covered by the PR 3c sweep noted above.
+    `run-segments` asserts the last line is `stopped/signal` (3 of 3).

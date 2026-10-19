@@ -30,11 +30,11 @@ enum Run {
     // Below this a segment is mostly AAC priming and container overhead.
     static let minSegmentSec = 2.0
 
-    static func line(_ event: String, _ fields: [String: Any] = [:]) {
+    static func line(_ event: String, _ fields: [String: Any] = [:], terminal: Bool = false) {
         var object = fields
         object["v"] = protocolVersion
         object["event"] = event
-        emit(object)
+        emit(object, terminal: terminal)
     }
 
     /// The denylist rule the tap uses too: the app itself or any "<app>." helper bundle.
@@ -201,7 +201,7 @@ enum Run {
     static func shutdown(_ audio: SystemAudioRecorder, reason: String) -> Never {
         shutdownLock.lock()
         audio.stop()
-        line("stopped", ["reason": reason])
+        line("stopped", ["reason": reason], terminal: true)
         exit(0)
     }
 }

@@ -274,8 +274,12 @@ enum Tap {
         let objectsNow = { byBundle && !byBoth ? [] : excludedObjects(denylist) }
 
         var shared: TapMeter?
+        // --listen 0 turns the arrivals listener off: the proof's control for a process that
+        // starts and exits between polls (Codex review of PR 3b-2), like --helpers 0.
+        let arrivals = rebuildMs != nil && !denylist.isEmpty && args.string("listen") != "0"
+            ? ProcessArrivals(isDenylisted: { denylisted($0, denylist) }) : nil
         let runner = TapRunner(objectsNow: objectsNow, bundleIDs: byBundle ? excludedBundleIDs : nil, rebuildMs: rebuildMs,
-                               report: { event, fields in emit(fields.merging(["event": event]) { _, new in new }) }) { format in
+                               arrivals: arrivals, report: { event, fields in emit(fields.merging(["event": event]) { _, new in new }) }) { format in
             if let shared { return shared }
             let made = TapMeter(holdMs: holdMs, sampleRate: format.mSampleRate, channels: Int(max(format.mChannelsPerFrame, 1)))
             shared = made
@@ -353,6 +357,78 @@ enum Tap {
     }
 }
 
+/// Classifies every CoreAudio process object the moment the HAL reports it added, so a
+/// denylisted process that starts, plays and exits between two polls is still seen.
+/// WHY (Codex review of PR 3b-2, P1): a poll compares only the objects alive *now*. A helper
+/// that lives under one poll interval leaves both snapshots identical, and its held audio
+/// would be released and written. The process-list listener fires on the add itself.
+/// An added object whose pid can no longer be read (it is already exiting) counts as
+/// denylisted: a wrong drop costs 0.5 s of audio, a wrong release writes audio from an app
+/// the user excluded.
+/// Measured on macOS 27.0: the HAL sends every list notification twice, about 1 ms apart, so a
+/// notification that shows no change is normal and proves nothing. RESIDUAL: an object added
+/// and removed inside the handler's ~1 ms read latency leaves no trace; it would have had to
+/// produce audio in that time.
+final class ProcessArrivals: @unchecked Sendable {
+    static let unclassified = "unclassified"
+
+    private let lock = NSLock()
+    private let queue = DispatchQueue(label: "gs-capture.arrivals")
+    private let isDenylisted: (AudioObjectID) -> Bool
+    // Touched only on `queue`.
+    private var known: Set<AudioObjectID> = []
+    // Guarded by `lock`: what was flagged since the last `take`.
+    private var flagged: [String] = []
+    private var listener: AudioObjectPropertyListenerBlock?
+
+    init(isDenylisted: @escaping (AudioObjectID) -> Bool) {
+        self.isDenylisted = isDenylisted
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
+        var addr = ProcWatch.address(kAudioHardwarePropertyProcessObjectList)
+        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, queue, block)
+        guard status == noErr else { fail("cannot listen for process list changes, status \(status)") }
+        listener = block
+        // Snapshot after the listener is in place, on its queue, so no add falls between.
+        queue.sync { known = Set(ProcWatch.processList()) }
+    }
+
+    /// Re-read the list now (on the listener's queue), for a caller about to release audio.
+    func refresh() { queue.sync { changed() } }
+
+    /// What was flagged since the last call: bundle IDs, or `unclassified`.
+    func take() -> [String] {
+        lock.withLock {
+            defer { flagged = [] }
+            return flagged
+        }
+    }
+
+    func stop() {
+        guard let listener else { return }
+        var addr = ProcWatch.address(kAudioHardwarePropertyProcessObjectList)
+        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, queue, listener)
+        self.listener = nil
+    }
+
+    /// On `queue`. Classifies the objects added since the last change.
+    private func changed() {
+        let current = Set(ProcWatch.processList())
+        let added = current.subtracting(known)
+        known = current
+        var hits: [String] = []
+        for object in added {
+            // A pid that can't be read means the object is already gone: unclassifiable.
+            if ProcWatch.pid(object) <= 0 {
+                hits.append(ProcessArrivals.unclassified)
+            } else if isDenylisted(object) {
+                hits.append(ProcWatch.bundleID(object))
+            }
+        }
+        guard !hits.isEmpty else { return }
+        lock.withLock { flagged += hits }
+    }
+}
+
 /// The PR 3a rebuild loop, shared by `tap` (the proof command) and `run` (production), so the
 /// second-instance fix and its proof cover one implementation. The caller owns timing: it
 /// calls `tick` every `Tap.releaseTickMs`, releases its sink, and calls `finish` once.
@@ -362,6 +438,9 @@ final class TapRunner {
     private let makeSession: ([AudioObjectID]) -> TapSession
     private let rebuildMs: Double?
     private let report: (String, [String: Any]) -> Void
+    private let arrivals: ProcessArrivals?
+    // Arrivals taken while polling was suppressed; they still force a drop at finish.
+    private var pendingArrivals: [String] = []
     let sink: TapSink
     /// Settable only for the spike's --follow-ms path, which updates the tap in place.
     var session: TapSession
@@ -377,11 +456,14 @@ final class TapRunner {
 
     /// Builds and starts the first session. `sinkFor` is called once per session with the
     /// tap's format and must return the same sink every time.
+    /// `arrivals`, when given, adds listener-driven rebuilds to the poll (see ProcessArrivals).
     init(objectsNow: @escaping () -> [AudioObjectID], bundleIDs: [String]?, rebuildMs: Double?,
+         arrivals: ProcessArrivals? = nil,
          report: @escaping (String, [String: Any]) -> Void,
          sinkFor: @escaping (AudioStreamBasicDescription) -> TapSink) {
         self.objectsNow = objectsNow
         self.rebuildMs = rebuildMs
+        self.arrivals = arrivals
         self.report = report
         var first: TapSink?
         makeSession = { excluded in
@@ -405,11 +487,16 @@ final class TapRunner {
     /// Rebuild around any new denylisted process (when `poll` and a poll is due), then fail
     /// if delivery has not advanced for `Tap.sessionDeliveryDeadlineMs`.
     func tick(poll: Bool) {
-        if poll, let rebuildMs, nowMs() >= nextCheck {
+        pendingArrivals += arrivals?.take() ?? []
+        // An arrival forces the check now, not at the next due poll: its audio is already in
+        // the hold and must be dropped before the caller's next release.
+        if poll, let rebuildMs, nowMs() >= nextCheck || !pendingArrivals.isEmpty {
             nextCheck = nowMs() + rebuildMs
             let fresh = objectsNow()
             let added = Set(fresh).subtracting(session.excluded)
-            if !added.isEmpty {
+            let arrived = pendingArrivals
+            pendingArrivals = []
+            if !added.isEmpty || !arrived.isEmpty {
                 // Order matters: stop IO first, so nothing reaches the sink after the drop;
                 // then drop what is held; then rebuild around the new processes.
                 let begun = nowMs()
@@ -424,7 +511,8 @@ final class TapRunner {
                 lastCount = sessionBaseline
                 lastAdvance = sessionStart
                 report("tapRebuilt", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
-                                      "droppedMaxRms": dropped.maxRms,
+                                      "droppedMaxRms": dropped.maxRms, "trigger": arrived.isEmpty ? "poll" : "listener",
+                                      "arrivedBundles": arrived,
                                       "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
                                       "excludedProcesses": fresh.count, "rebuildMs": round3(nowMs() - begun)])
             }
@@ -450,14 +538,18 @@ final class TapRunner {
     func finish(tailCheck: Bool) {
         session.stop()
         endSession("shutdown")
+        // Flush the listener first: an arrival just before the stop must count.
+        arrivals?.refresh()
+        let arrived = pendingArrivals + (arrivals?.take() ?? [])
+        arrivals?.stop()
         if tailCheck {
             let added = Set(objectsNow()).subtracting(session.excluded)
-            if added.isEmpty {
+            if added.isEmpty && arrived.isEmpty {
                 sink.releaseAll()
             } else {
                 let dropped = sink.drop()
                 report("tailDropped", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
-                                       "droppedMaxRms": dropped.maxRms,
+                                       "droppedMaxRms": dropped.maxRms, "arrivedBundles": arrived,
                                        "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID)])
             }
         } else {

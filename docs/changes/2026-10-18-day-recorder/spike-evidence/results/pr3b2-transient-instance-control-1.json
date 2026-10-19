@@ -1,0 +1,55 @@
+{
+  "listen": false,
+  "first": {
+    "startT": 1792444344882.105,
+    "stopT": 1792444355388.262,
+    "pid": 57027
+  },
+  "second": {
+    "startT": 1792444346153.959,
+    "stopT": 1792444346580.638,
+    "pid": 57080
+  },
+  "controlTone": {
+    "startT": 1792444349008.905,
+    "stopT": 1792444350068.1829,
+    "pid": 57101,
+    "capturedWindows100ms": 11
+  },
+  "controlTail": [],
+  "exitedMsBeforeNextPoll": 1125,
+  "leakedWindows100ms": 5,
+  "leakedDetail": [
+    {
+      "rms": 0.09112562456654161,
+      "msAfterSecondStart": 60
+    },
+    {
+      "rms": 0.17677700334131988,
+      "msAfterSecondStart": 167
+    },
+    {
+      "rms": 0.1767770078069173,
+      "msAfterSecondStart": 262
+    },
+    {
+      "rms": 0.17677700096310664,
+      "msAfterSecondStart": 358
+    },
+    {
+      "rms": 0.15703522334304884,
+      "msAfterSecondStart": 465
+    }
+  ],
+  "rebuilds": [],
+  "tailDrops": [],
+  "summary": {
+    "dbfs": -21.22,
+    "droppedWindows": 0,
+    "event": "summary",
+    "excludedProcesses": 1,
+    "peak": 0.25214821100234985,
+    "rms": 0.0868914405062147,
+    "samples": 576512
+  }
+}
