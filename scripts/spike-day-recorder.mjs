@@ -65,6 +65,8 @@ const TRANSIENT_TAP_SECONDS = 6;
 const TRANSIENT_START_MS = 600;
 const TRANSIENT_PLAY_SECONDS = 0.4;
 const SLOW_CLASSIFIER = { pollMs: 700, holdMs: 1_500, playSeconds: 0.1, classifyDelayMs: 2_200 };
+// A plays (silently) through the whole run; B launches this long after A starts.
+const B_DURING_A = { aSeconds: 8, bAfterAMs: 300 };
 const TRANSIENT_CONTROL_MS = 3_500;
 // The control tone keeps sounding briefly after it logs "stopped" (output latency). Measured
 // across 8 tap runs: every stray window ended 103-128 ms after that log, never later. Windows
@@ -645,10 +647,16 @@ const commands = {
    * audio would be released): polls every 700 ms, a 1.5 s hold, a 0.1 s tone, and every
    * classification slowed to 2.2 s (longer than the hold, under the 5 s stall limit).
    * GS_TAP_EXTRA="--release-cap 0" is its control: release by the clock must leak.
+   *
+   * GS_TRANSIENT=b-during-a (PR #78 round 1): the same timing, plus process A, an ALLOWED
+   * silent tone (SpikeTone at 0 Hz, no bundle ID) whose slow judgement starts first. Instance
+   * 2 (B) must start and exit while A is still being judged. With one queue for snapshots and
+   * judgements, B is never observed. Its control is the previous binary (GS_CAPTURE_BIN).
    */
   async "tap-transient-instance"() {
     const listen = process.env.GS_TAP_LISTEN !== "0";
-    const slow = process.env.GS_TRANSIENT === "slow-classifier";
+    const bDuringA = process.env.GS_TRANSIENT === "b-during-a";
+    const slow = process.env.GS_TRANSIENT === "slow-classifier" || bDuringA;
     const pollMs = slow ? SLOW_CLASSIFIER.pollMs : TRANSIENT_POLL_MS;
     const holdMs = slow ? SLOW_CLASSIFIER.holdMs : TRANSIENT_HOLD_MS;
     const playSeconds = slow ? SLOW_CLASSIFIER.playSeconds : TRANSIENT_PLAY_SECONDS;
@@ -662,7 +670,22 @@ const commands = {
       "--rebuild-ms", pollMs, "--hold-ms", holdMs, ...(listen ? [] : ["--listen", "0"]), ...extra]);
     await captureLive(tap);
     const liveAt = Date.now();
-    await sleep(TRANSIENT_START_MS);
+    let silentA = null;
+    if (bDuringA) {
+      // 0 Hz: a real output stream of zeros, so A is an audio process the tap's RMS meter
+      // can't mistake for a leak.
+      const aLog = bareTone(B_DURING_A.aSeconds, "transient-a", 0);
+      silentA = { log: aLog, startT: null };
+      const deadline = Date.now() + TONE_LOG_GRACE_MS;
+      while (!readTone(aLog).some((event) => event.event === "started")) {
+        if (Date.now() > deadline) throw new Error("silent process A did not start");
+        await sleep(TONE_LOG_POLL_MS / 4);
+      }
+      silentA.startT = readTone(aLog).find((event) => event.event === "started").t;
+      await sleep(B_DURING_A.bAfterAMs);
+    } else {
+      await sleep(TRANSIENT_START_MS);
+    }
     // Linger 0: the process exits as soon as its tone stops.
     const secondLog = launchTone("play", playSeconds, "transient-second", [TONE_HZ, 0]);
     await sleep(TRANSIENT_CONTROL_MS - (Date.now() - liveAt));
@@ -678,6 +701,10 @@ const commands = {
     // used the tone's default 2 s linger, and the poll caught the still-live object). Polls
     // run at the tap's start and every TRANSIENT_POLL_MS after.
     const exiting = readTone(secondLog).find((event) => event.event === "exiting");
+    // B must live entirely inside A's judgement (A's start plus the judge delay).
+    if (silentA && exiting && exiting.t >= silentA.startT + SLOW_CLASSIFIER.classifyDelayMs) {
+      throw new Error(`B exited ${Math.round(exiting.t - silentA.startT)} ms after A started, outside A's judgement`);
+    }
     if (!exiting) throw new Error("instance 2 did not log its exit");
     if (pidAlive(second.pid)) throw new Error(`instance 2 (pid ${second.pid}) is still running`);
     const nextPoll = window.startT + Math.ceil((second.startT - window.startT) / pollMs) * pollMs;
@@ -695,7 +722,8 @@ const commands = {
       rebuilds: lines.filter((line) => line.event === "tapRebuilt"), tailDrops: lines.filter((line) => line.event === "tailDropped"),
       summary: lines.find((line) => line.event === "summary"),
     };
-    const label = `${slow ? "slow-" : ""}${listen ? "listener" : "control"}${capped ? "" : "-uncapped"}`;
+    if (silentA) result.silentA = { startT: silentA.startT, bExitedMsAfterAStart: Math.round(exiting.t - silentA.startT) };
+    const label = `${bDuringA ? "b-during-a-" : slow ? "slow-" : ""}${listen ? "listener" : "control"}${capped ? "" : "-uncapped"}`;
     save(`pr3b2-transient-instance-${label}`, result);
     if (result.controlTone.capturedWindows100ms === 0) throw new Error("the tap captured nothing of the control: it stopped capturing");
     const protectedRun = listen && capped;

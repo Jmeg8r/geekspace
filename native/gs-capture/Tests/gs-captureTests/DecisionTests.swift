@@ -127,50 +127,95 @@ final class ArrivalClassificationTests: XCTestCase {
     }
 }
 
-/// The release cap (Codex review of PR 3b-2, round 5): audio may be released only up to the
-/// start of the last COMPLETED classification pass, and a pass's flags are visible no later
-/// than its limit.
+/// The release cap and the snapshot/judge split (Codex review of PR 3b-2 round 5, and of
+/// PR #78 round 1): audio may be released only up to the oldest unjudged arrival, and a slow
+/// judgement must not stop the next arrival being observed.
 final class ArrivalsReleaseCapTests: XCTestCase {
-    func waitForPass(_ arrivals: ProcessArrivals, after before: Double) {
+    /// Object 1 is always present. Object N > 1 is "com.example.work" when even, else allowed.
+    func identify(_ object: AudioObjectID) -> ProcessIdentity? {
+        ProcessIdentity(pid: pid_t(object), bundle: object % 2 == 0 ? "com.example.work" : "", parent: 1)
+    }
+
+    func verdict(_ identity: ProcessIdentity) -> Tap.Classification {
+        identity.bundle.isEmpty ? .allowed : .denylisted(identity.bundle)
+    }
+
+    func waitFor(_ condition: () -> Bool) {
         let deadline = Date().addingTimeInterval(2)
-        while arrivals.checked() <= before && Date() < deadline { usleep(1000) }
+        while !condition() && Date() < deadline { usleep(1000) }
     }
 
-    func testAPassAdvancesTheLimitAndPublishesItsFlagsWithIt() {
+    func testAJudgedArrivalPublishesItsFlagAndFreesTheLimit() {
         var objects: [AudioObjectID] = [1]
-        let arrivals = ProcessArrivals(classify: { $0 == 2 ? .denylisted("com.example.work") : .allowed },
-                                       list: { objects }, listen: false)
-        let before = arrivals.checked()
+        let arrivals = ProcessArrivals(identify: identify, judge: verdict, list: { objects }, listen: false)
         objects = [1, 2]
-        arrivals.requestPass()
-        waitForPass(arrivals, after: before)
-        XCTAssertGreaterThan(arrivals.checked(), before)
+        XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
         XCTAssertEqual(arrivals.take(), ["com.example.work"])
+        let limit = arrivals.checked()
+        arrivals.requestPass()
+        waitFor { arrivals.checked() > limit }
+        XCTAssertGreaterThan(arrivals.checked(), limit)
     }
 
-    func testAStalledPassHoldsTheLimitBack() {
+    func testASlowJudgementHoldsTheLimitAtItsArrivalsBound() {
         var objects: [AudioObjectID] = [1]
         let gate = DispatchSemaphore(value: 0)
-        let arrivals = ProcessArrivals(classify: { _ in gate.wait(); return .denylisted("com.example.work") },
+        let arrivals = ProcessArrivals(identify: identify, judge: { [self] in gate.wait(); return verdict($0) },
                                        list: { objects }, listen: false)
-        let before = arrivals.checked()
-        objects = [1, 2]
+        let baseline = arrivals.checked()
+        objects = [1, 3]
         arrivals.requestPass()
-        usleep(100_000)
-        // The pass is stuck inside classification: the limit must not move, and no flag
-        // may appear yet.
-        XCTAssertEqual(arrivals.checked(), before)
-        XCTAssertEqual(arrivals.take(), [])
+        usleep(50_000)
+        // Snapshots keep running while object 3 is judged, but the limit stays at 3's bound.
+        for _ in 0..<5 { arrivals.requestPass(); usleep(10_000) }
+        XCTAssertEqual(arrivals.checked(), baseline)
         gate.signal()
-        waitForPass(arrivals, after: before)
+        waitFor { arrivals.checked() > baseline }
+        XCTAssertGreaterThan(arrivals.checked(), baseline)
+    }
+
+    func testBLivingEntirelyDuringASlowJudgementOfAIsStillCaught() {
+        // A (3, allowed) is slow to judge. B (4, denylisted) appears and is gone again before
+        // A's judgement ends. With one queue for both, B was never observed (PR #78 round 1).
+        var objects: [AudioObjectID] = [1]
+        let gate = DispatchSemaphore(value: 0)
+        let arrivals = ProcessArrivals(identify: identify, judge: { [self] identity in
+            if identity.pid == 3 { gate.wait() }
+            return verdict(identity)
+        }, list: { objects }, listen: false)
+        objects = [1, 3]
+        arrivals.requestPass()
+        usleep(30_000)
+        objects = [1, 3, 4]
+        arrivals.requestPass()
+        usleep(30_000)
+        objects = [1, 3]
+        arrivals.requestPass()
+        usleep(30_000)
+        XCTAssertEqual(arrivals.take(), [], "nothing is judged while A is stuck")
+        gate.signal()
+        XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
         XCTAssertEqual(arrivals.take(), ["com.example.work"])
     }
 
-    func testUnreadableArrivalsAreFlagged() {
+    func testSettleGivesUpOnAStuckJudgement() {
+        var objects: [AudioObjectID] = [1]
+        let gate = DispatchSemaphore(value: 0)
+        let arrivals = ProcessArrivals(identify: identify, judge: { [self] in gate.wait(); return verdict($0) },
+                                       list: { objects }, listen: false)
+        objects = [1, 2]
+        XCTAssertFalse(arrivals.settle(timeoutMs: 100), "shutdown must not wait forever on a stuck judgement")
+        gate.signal()
+    }
+
+    func testAnArrivalAlreadyGoneIsFlaggedWithoutJudgement() {
         var objects: [AudioObjectID] = []
-        let arrivals = ProcessArrivals(classify: { _ in .unreadable }, list: { objects }, listen: false)
+        let arrivals = ProcessArrivals(identify: { _ in nil }, judge: { _ in
+            XCTFail("an unidentifiable arrival must not reach the judge")
+            return .allowed
+        }, list: { objects }, listen: false)
         objects = [7]
-        arrivals.refresh()
+        XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
         XCTAssertEqual(arrivals.take(), [ProcessArrivals.unclassified])
     }
 }

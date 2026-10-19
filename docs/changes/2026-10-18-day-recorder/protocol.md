@@ -39,7 +39,7 @@ One JSON object per line on **stdout**, keys sorted. Every line has `"v": 1` and
 | `shot` | `day`, `path`, `takenAt`, `appBundleId`, `menuBarBlanked`, `ocrText`, `ocrMs` | a changed frame was written |
 | `segment` | `kind`, `day`, `path`, `start`, `end`, `peak` | a finished system-audio segment was written |
 | `tapRebuilt` | `t`, `trigger`, `arrivedBundles`, `droppedWindows`, `droppedMaxRms`, `addedProcesses`, `addedBundles`, `excludedProcesses`, `rebuildMs` | a new denylisted process appeared; held audio was dropped and the tap rebuilt |
-| `tailDropped` | `t`, `droppedWindows`, `droppedMaxRms`, `arrivedBundles`, `addedProcesses`, `addedBundles` | at stop, a denylisted process appeared after the last poll; the held tail was dropped |
+| `tailDropped` | `t`, `droppedWindows`, `droppedMaxRms`, `arrivedBundles`, `unjudged`, `addedProcesses`, `addedBundles` | at stop, a denylisted process appeared after the last poll; the held tail was dropped |
 | `sampleRateChanged` | `t`, `from`, `to` | a rebuilt tap runs at a new rate (output device changed); later segments use it |
 | `sessionUnverified` | `t`, `livedMs`, `endedBy` | a tap session ended before its first IO cycle could be expected (under 200 ms); informational |
 | `stopped` | `reason` | clean end: `duration` (proofs) or `signal`. Always the **last** line: nothing is written after it |
@@ -82,7 +82,8 @@ More detail on the fields:
   `trigger` is `listener` when the HAL's process-list notification reported a denylisted
   process being added (`arrivedBundles`; `unclassified` for one that was already exiting), and
   `poll` when only the 100 ms poll of live processes found it. The listener catches a process
-  that starts and exits between polls.
+  that starts and exits between polls. `tailDropped.unjudged: true` means arrivals were still
+  being judged when the stop's 5 s deadline ran out, so the tail was dropped unjudged.
   `droppedMaxRms` above 0 means the drop discarded audible audio.
 
 ## Failure

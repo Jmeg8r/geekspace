@@ -764,4 +764,47 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     (0 leaks, rebuild by `listener`, `stopped/signal`) and the PR 3a proof (0 leaked).
   - The residual is unchanged: an object added and removed inside the ~1 ms handler read
     latency leaves no trace.
+- **2026-10-19, `feat/day-recorder-arrivals`, Codex #78 round 1 (1 × P1, 1 × P2), both fixed.**
+  - **P1: a slow judgement blinded observation.** Snapshots and classification shared one
+    serial queue. While an allowed process A was being judged, a denylisted B could start
+    and exit unseen, and the next snapshot moved the limit past it.
+    - **Fix:** the two are split.
+      - The HAL handler's queue only *snapshots*: the list, and each new object's pid,
+        bundle and parent, read while it lives (`Tap.identity`).
+      - A second serial queue *judges* (`Tap.judge`: the parent's app lookup and liveness).
+      - Each observed arrival is a ticket bounded by the previous snapshot's start. Release
+        is capped at the oldest outstanding ticket, or the last snapshot's start.
+      - A ticket leaves under the lock that publishes its flag.
+  - **P2: shutdown could hang on a stuck judgement.** Stopping cancels the tick, and with it
+    the stall check, before `finish` waited on the listener.
+    - **Fix:** `settle(timeoutMs: 5000)` runs one more snapshot and waits for the judge
+      queue to drain, with its own deadline. Past it, the tail is dropped as `unjudged` and
+      never released. Shutdown then completes normally.
+  - **Unit tests (34):**
+    - B living entirely during A's stuck judgement is still flagged;
+    - a slow judgement holds the limit at its arrival's bound while snapshots keep going;
+    - `settle` gives up on a stuck judgement;
+    - an already-gone arrival is flagged without judgement.
+    - Mutation check: judging on the snapshot queue again (the old design) fails the B test.
+  - **Live proof** (`GS_TRANSIENT=b-during-a`): the slow-classifier timing, plus A, a silent
+    allowed process (SpikeTone at 0 Hz, so the RMS meter can't mistake it for a leak). B
+    starts about 300 ms after A, and the harness checks that B exits inside A's 2.2 s
+    judgement and before the next poll.
+
+    | Run | Leaked | Rebuild |
+    |---|---|---|
+    | Control: the previous binary `d00a65d` (one queue) | **2** | **none**: B was never observed |
+    | New, 3 of 3 | **0, 0, 0** | by the listener, on B's own bundle ID; dropped B's tone (0.18 RMS) |
+
+    - **Cost, visible in the proof:** B's judgement waited behind A's 2.2 s one, so its
+      drop landed while the control tone played and discarded it too. The control was heard
+      in 2 windows, not the usual 11. A drop discards everything held. With real
+      (sub-millisecond) judgements that window is tiny.
+  - **Shutdown deadline, live:** an allowed arrival 0.6 s before the end, with judgement
+    slowed to 7 s. The helper waited 5 s, reported `tailDropped` with `unjudged: true` (12
+    windows), wrote its summary and exited 0.
+  - **Regression:** slow-classifier capped (0 leaked), fast transient (control 5, listener
+    0), `run-segments` (0 leaks, `stopped/signal`), PR 3a proof (0 leaked), `npm run
+    verify` (39 files, 343 tests).
+  - Evidence: `pr3b2-transient-b-during-a-*.json` and `pr3b2-shutdown-unjudged-tail.jsonl`.
 

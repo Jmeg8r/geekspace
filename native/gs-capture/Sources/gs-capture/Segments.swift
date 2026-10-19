@@ -259,7 +259,7 @@ final class SystemAudioRecorder {
             let bundleIDs = denylist.isEmpty ? nil : denylist.flatMap { [$0, "\($0).helper"] }
             // Nothing denylisted, nothing to protect: an unclassifiable arrival would only
             // cost audio.
-            let arrivals = denylist.isEmpty ? nil : ProcessArrivals(classify: { Tap.classify($0, denylist) })
+            let arrivals = denylist.isEmpty ? nil : ProcessArrivals(identify: Tap.identity, judge: { Tap.judge($0, denylist) })
             let runner = TapRunner(objectsNow: { Tap.excludedObjects(denylist) }, bundleIDs: bundleIDs,
                                    rebuildMs: SystemAudioRecorder.rebuildMs, arrivals: arrivals, report: report) { [unowned self] format in
                 if let hold = self.hold, let writer = self.writer {
