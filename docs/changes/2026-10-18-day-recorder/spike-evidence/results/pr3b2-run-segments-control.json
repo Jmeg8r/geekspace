@@ -1,0 +1,690 @@
+{
+  "tones": {
+    "first": {
+      "startT": 1792446297457.917,
+      "stopT": 1792446311111.413,
+      "pid": 890
+    },
+    "second": {
+      "startT": 1792446299957.8901,
+      "stopT": 1792446303112.813,
+      "pid": 935
+    },
+    "control": {
+      "startT": 1792446301460.373,
+      "stopT": 1792446303569.777,
+      "pid": 951
+    }
+  },
+  "segments": [
+    {
+      "path": "2026-10-19/sys-174457-808.m4a",
+      "start": 1792446297808.265,
+      "end": 1792446300816.265,
+      "bytes": 67657,
+      "decodedMs": 3028,
+      "spanMs": 3008,
+      "leaked": [
+        {
+          "msFromStart": 0,
+          "at": 1792446297808.265,
+          "amp": 0.2463,
+          "floor": 0.0018,
+          "tonal": true
+        },
+        {
+          "msFromStart": 100,
+          "at": 1792446297908.265,
+          "amp": 0.2465,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 200,
+          "at": 1792446298008.265,
+          "amp": 0.2492,
+          "floor": 0.0005,
+          "tonal": true
+        },
+        {
+          "msFromStart": 300,
+          "at": 1792446298108.265,
+          "amp": 0.249,
+          "floor": 0.003,
+          "tonal": true
+        },
+        {
+          "msFromStart": 400,
+          "at": 1792446298208.265,
+          "amp": 0.2458,
+          "floor": 0.0008,
+          "tonal": true
+        },
+        {
+          "msFromStart": 500,
+          "at": 1792446298308.265,
+          "amp": 0.2472,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 600,
+          "at": 1792446298408.265,
+          "amp": 0.2487,
+          "floor": 0.001,
+          "tonal": true
+        },
+        {
+          "msFromStart": 700,
+          "at": 1792446298508.265,
+          "amp": 0.2485,
+          "floor": 0.0008,
+          "tonal": true
+        },
+        {
+          "msFromStart": 800,
+          "at": 1792446298608.265,
+          "amp": 0.2454,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 900,
+          "at": 1792446298708.265,
+          "amp": 0.2479,
+          "floor": 0.0006,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1000,
+          "at": 1792446298808.265,
+          "amp": 0.2492,
+          "floor": 0.0004,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1100,
+          "at": 1792446298908.265,
+          "amp": 0.2469,
+          "floor": 0.0002,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1200,
+          "at": 1792446299008.265,
+          "amp": 0.2484,
+          "floor": 0.0006,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1300,
+          "at": 1792446299108.265,
+          "amp": 0.2478,
+          "floor": 0.0022,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1400,
+          "at": 1792446299208.265,
+          "amp": 0.2458,
+          "floor": 0.0007,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1500,
+          "at": 1792446299308.265,
+          "amp": 0.2465,
+          "floor": 0.0014,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1600,
+          "at": 1792446299408.265,
+          "amp": 0.2473,
+          "floor": 0.0014,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1700,
+          "at": 1792446299508.265,
+          "amp": 0.2471,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1800,
+          "at": 1792446299608.265,
+          "amp": 0.2471,
+          "floor": 0.001,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1900,
+          "at": 1792446299708.265,
+          "amp": 0.2495,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2000,
+          "at": 1792446299808.265,
+          "amp": 0.2468,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2100,
+          "at": 1792446299908.265,
+          "amp": 0.2615,
+          "floor": 0.0047,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2200,
+          "at": 1792446300008.265,
+          "amp": 0.4859,
+          "floor": 0.0019,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2300,
+          "at": 1792446300108.265,
+          "amp": 0.4874,
+          "floor": 0.0017,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2400,
+          "at": 1792446300208.265,
+          "amp": 0.4864,
+          "floor": 0.003,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2500,
+          "at": 1792446300308.265,
+          "amp": 0.4829,
+          "floor": 0.001,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2600,
+          "at": 1792446300408.265,
+          "amp": 0.4832,
+          "floor": 0.001,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2700,
+          "at": 1792446300508.265,
+          "amp": 0.484,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2800,
+          "at": 1792446300608.265,
+          "amp": 0.487,
+          "floor": 0.0012,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2900,
+          "at": 1792446300708.265,
+          "amp": 0.4844,
+          "floor": 0.003,
+          "tonal": true
+        }
+      ],
+      "broadband": [],
+      "controlWindows": 0
+    },
+    {
+      "path": "2026-10-19/sys-174500-816.m4a",
+      "start": 1792446300816.247,
+      "end": 1792446303824.247,
+      "bytes": 67582,
+      "decodedMs": 3028,
+      "spanMs": 3008,
+      "leaked": [
+        {
+          "msFromStart": 0,
+          "at": 1792446300816.247,
+          "amp": 0.4882,
+          "floor": 0.002,
+          "tonal": true
+        },
+        {
+          "msFromStart": 100,
+          "at": 1792446300916.247,
+          "amp": 0.4909,
+          "floor": 0.0066,
+          "tonal": true
+        },
+        {
+          "msFromStart": 200,
+          "at": 1792446301016.247,
+          "amp": 0.4877,
+          "floor": 0.0038,
+          "tonal": true
+        },
+        {
+          "msFromStart": 300,
+          "at": 1792446301116.247,
+          "amp": 0.4841,
+          "floor": 0.0054,
+          "tonal": true
+        },
+        {
+          "msFromStart": 400,
+          "at": 1792446301216.247,
+          "amp": 0.4824,
+          "floor": 0.0026,
+          "tonal": true
+        },
+        {
+          "msFromStart": 500,
+          "at": 1792446301316.247,
+          "amp": 0.4884,
+          "floor": 0.003,
+          "tonal": true
+        },
+        {
+          "msFromStart": 600,
+          "at": 1792446301416.247,
+          "amp": 0.4843,
+          "floor": 0.0034,
+          "tonal": true
+        },
+        {
+          "msFromStart": 700,
+          "at": 1792446301516.247,
+          "amp": 0.4847,
+          "floor": 0.0028,
+          "tonal": true
+        },
+        {
+          "msFromStart": 800,
+          "at": 1792446301616.247,
+          "amp": 0.4853,
+          "floor": 0.0022,
+          "tonal": true
+        },
+        {
+          "msFromStart": 900,
+          "at": 1792446301716.247,
+          "amp": 0.4875,
+          "floor": 0.0016,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1000,
+          "at": 1792446301816.247,
+          "amp": 0.4853,
+          "floor": 0.0026,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1100,
+          "at": 1792446301916.247,
+          "amp": 0.4835,
+          "floor": 0.0031,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1200,
+          "at": 1792446302016.247,
+          "amp": 0.4833,
+          "floor": 0.0012,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1300,
+          "at": 1792446302116.247,
+          "amp": 0.4843,
+          "floor": 0.0021,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1400,
+          "at": 1792446302216.247,
+          "amp": 0.4872,
+          "floor": 0.0015,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1500,
+          "at": 1792446302316.247,
+          "amp": 0.4879,
+          "floor": 0.0045,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1600,
+          "at": 1792446302416.247,
+          "amp": 0.4869,
+          "floor": 0.001,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1700,
+          "at": 1792446302516.247,
+          "amp": 0.4859,
+          "floor": 0.0027,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1800,
+          "at": 1792446302616.247,
+          "amp": 0.4881,
+          "floor": 0.0017,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1900,
+          "at": 1792446302716.247,
+          "amp": 0.4883,
+          "floor": 0.0018,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2000,
+          "at": 1792446302816.247,
+          "amp": 0.4864,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2100,
+          "at": 1792446302916.247,
+          "amp": 0.4864,
+          "floor": 0.0017,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2200,
+          "at": 1792446303016.247,
+          "amp": 0.4878,
+          "floor": 0.0014,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2300,
+          "at": 1792446303116.247,
+          "amp": 0.2472,
+          "floor": 0.0017,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2400,
+          "at": 1792446303216.247,
+          "amp": 0.2488,
+          "floor": 0.0005,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2500,
+          "at": 1792446303316.247,
+          "amp": 0.2479,
+          "floor": 0.0021,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2600,
+          "at": 1792446303416.247,
+          "amp": 0.2457,
+          "floor": 0.0008,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2700,
+          "at": 1792446303516.247,
+          "amp": 0.2492,
+          "floor": 0.0029,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2800,
+          "at": 1792446303616.247,
+          "amp": 0.2491,
+          "floor": 0.0003,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2900,
+          "at": 1792446303716.247,
+          "amp": 0.2471,
+          "floor": 0.0006,
+          "tonal": true
+        }
+      ],
+      "broadband": [],
+      "controlWindows": 21
+    },
+    {
+      "path": "2026-10-19/sys-174503-824.m4a",
+      "start": 1792446303824.287,
+      "end": 1792446306704.287,
+      "bytes": 66897,
+      "decodedMs": 2900,
+      "spanMs": 2880,
+      "leaked": [
+        {
+          "msFromStart": 0,
+          "at": 1792446303824.287,
+          "amp": 0.2436,
+          "floor": 0.0048,
+          "tonal": true
+        },
+        {
+          "msFromStart": 100,
+          "at": 1792446303924.287,
+          "amp": 0.2452,
+          "floor": 0.0007,
+          "tonal": true
+        },
+        {
+          "msFromStart": 200,
+          "at": 1792446304024.287,
+          "amp": 0.2455,
+          "floor": 0.0012,
+          "tonal": true
+        },
+        {
+          "msFromStart": 300,
+          "at": 1792446304124.287,
+          "amp": 0.2482,
+          "floor": 0.0028,
+          "tonal": true
+        },
+        {
+          "msFromStart": 400,
+          "at": 1792446304224.287,
+          "amp": 0.2485,
+          "floor": 0.0012,
+          "tonal": true
+        },
+        {
+          "msFromStart": 500,
+          "at": 1792446304324.287,
+          "amp": 0.248,
+          "floor": 0.0018,
+          "tonal": true
+        },
+        {
+          "msFromStart": 600,
+          "at": 1792446304424.287,
+          "amp": 0.2464,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 700,
+          "at": 1792446304524.287,
+          "amp": 0.249,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 800,
+          "at": 1792446304624.287,
+          "amp": 0.2471,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 900,
+          "at": 1792446304724.287,
+          "amp": 0.248,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1000,
+          "at": 1792446304824.287,
+          "amp": 0.2484,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1100,
+          "at": 1792446304924.287,
+          "amp": 0.2474,
+          "floor": 0.0007,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1200,
+          "at": 1792446305024.287,
+          "amp": 0.2466,
+          "floor": 0.0013,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1300,
+          "at": 1792446305124.287,
+          "amp": 0.2484,
+          "floor": 0.0005,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1400,
+          "at": 1792446305224.287,
+          "amp": 0.2487,
+          "floor": 0.0008,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1500,
+          "at": 1792446305324.287,
+          "amp": 0.2471,
+          "floor": 0.0008,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1600,
+          "at": 1792446305424.287,
+          "amp": 0.248,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1700,
+          "at": 1792446305524.287,
+          "amp": 0.2474,
+          "floor": 0.0021,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1800,
+          "at": 1792446305624.287,
+          "amp": 0.2459,
+          "floor": 0.001,
+          "tonal": true
+        },
+        {
+          "msFromStart": 1900,
+          "at": 1792446305724.287,
+          "amp": 0.2463,
+          "floor": 0.0013,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2000,
+          "at": 1792446305824.287,
+          "amp": 0.2473,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2100,
+          "at": 1792446305924.287,
+          "amp": 0.2468,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2200,
+          "at": 1792446306024.287,
+          "amp": 0.2464,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2300,
+          "at": 1792446306124.287,
+          "amp": 0.249,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2400,
+          "at": 1792446306224.287,
+          "amp": 0.2471,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2500,
+          "at": 1792446306324.287,
+          "amp": 0.248,
+          "floor": 0.0011,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2600,
+          "at": 1792446306424.287,
+          "amp": 0.2484,
+          "floor": 0.0009,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2700,
+          "at": 1792446306524.287,
+          "amp": 0.2474,
+          "floor": 0.0007,
+          "tonal": true
+        },
+        {
+          "msFromStart": 2800,
+          "at": 1792446306624.287,
+          "amp": 0.2336,
+          "floor": 0.0051,
+          "tonal": true
+        }
+      ],
+      "broadband": [],
+      "controlWindows": 0
+    }
+  ],
+  "partialLeftovers": [],
+  "rebuilds": [],
+  "tailDrops": [],
+  "leakedWindows100ms": 89,
+  "controlWindows100ms": 21,
+  "stopped": {
+    "event": "stopped",
+    "reason": "signal",
+    "v": 1
+  }
+}

@@ -1,7 +1,8 @@
 // WHAT: `gs-capture run`, the production capture process the Electron supervisor spawns.
 // It takes a screenshot every --shot-sec, keeps only frames that changed, writes them as HEIC
 // under <media-root>/<day>/, runs OCR on them, and reports each one as a protocol-v1 JSON line
-// (docs/changes/2026-10-18-day-recorder/protocol.md). System audio joins in PR 3b-2.
+// (docs/changes/2026-10-18-day-recorder/protocol.md). System audio is written alongside as
+// segments (Segments.swift, PR 3b-2).
 // WHY one long-lived process: TCC grants, the SCK watchdog and the denylist apply to one
 // signed binary, and the supervisor only has to watch one child (spec R3).
 import AppKit
@@ -25,12 +26,15 @@ enum Run {
     static let menuBarLayer = 24
     // Same shape the Convex boundary accepts (convex/lib/dayRecorder.ts).
     static let bundleIDPattern = #"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$"#
+    static let defaultSegmentSec = 300.0
+    // Below this a segment is mostly AAC priming and container overhead.
+    static let minSegmentSec = 2.0
 
-    static func line(_ event: String, _ fields: [String: Any] = [:]) {
+    static func line(_ event: String, _ fields: [String: Any] = [:], terminal: Bool = false) {
         var object = fields
         object["v"] = protocolVersion
         object["event"] = event
-        emit(object)
+        emit(object, terminal: terminal)
     }
 
     /// The denylist rule the tap uses too: the app itself or any "<app>." helper bundle.
@@ -86,14 +90,14 @@ enum Run {
         return blanked
     }
 
-    static func dayAndFile(_ date: Date) -> (day: String, file: String) {
+    static func dayAndFile(_ date: Date, prefix: String = "shot", ext: String = "heic") -> (day: String, file: String) {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
         formatter.dateFormat = "yyyy-MM-dd"
         let day = formatter.string(from: date)
         formatter.dateFormat = "HHmmss-SSS"
-        return (day, "shot-\(formatter.string(from: date)).heic")
+        return (day, "\(prefix)-\(formatter.string(from: date)).\(ext)")
     }
 
     static func run(_ args: Args) async {
@@ -107,10 +111,30 @@ enum Run {
             fail("--denylist entry is not a bundle id: \(id)")
         }
         let shotSec = args.double("shot-sec", default: 30)
+        // SEGMENT_SEC (spec R2). A smaller value is for proofs.
+        let segmentSec = args.double("segment-sec", default: defaultSegmentSec)
+        guard segmentSec >= minSegmentSec else { fail("--segment-sec must be at least \(minSegmentSec), got \(segmentSec)") }
         // --duration is for proofs; the supervisor runs the helper until it stops it.
         let duration = args.optionalDouble("duration")
 
-        line("ready", ["pid": Int(getpid()), "shotSec": shotSec, "denylist": denylist])
+        // The supervisor stops the helper with SIGTERM (a denylist change is a restart), so a
+        // signal must finalize the open segment, not lose it. Default handlers are replaced
+        // first, or the signal would kill the process before the source sees it. Installed
+        // BEFORE `ready`: the supervisor may stop the helper the moment it is ready (Codex
+        // review of PR 3b-2, round 5).
+        let signals = [SIGTERM, SIGINT].map { number -> DispatchSourceSignal in
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+            source.setEventHandler { shutdown(reason: "signal") }
+            source.resume()
+            return source
+        }
+        line("ready", ["pid": Int(getpid()), "shotSec": shotSec, "segmentSec": segmentSec, "denylist": denylist])
+        ProcWatch.detachHALFromMainRunLoop()
+        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec) { event, fields in
+            line(event, fields)
+        }
+        adopt(audio)
         Task.detached {
             while true {
                 try? await Task.sleep(nanoseconds: UInt64(heartbeatSec * 1_000_000_000))
@@ -170,6 +194,25 @@ enum Run {
             if let duration { wait = min(wait, duration * 1000 - (nowMs() - started)) }
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000)) }
         }
-        line("stopped", ["reason": "duration"])
+        // The signal sources must outlive the loop; shutdown never returns.
+        withExtendedLifetime(signals) { shutdown(reason: "duration") }
+    }
+
+    /// Once only: a signal can arrive while --duration is finishing. The second caller blocks
+    /// here until the first one exits the process. Guards `recorder` too.
+    private static let shutdownLock = NSLock()
+    private static var recorder: SystemAudioRecorder?
+
+    /// Hand the started recorder to shutdown. If a stop is already in progress, this blocks
+    /// until that stop exits the process.
+    static func adopt(_ audio: SystemAudioRecorder) { shutdownLock.withLock { recorder = audio } }
+
+    /// A stop before `adopt` (during startup) has no recorder to stop, and nothing to lose:
+    /// the first segment needs the 500 ms hold to pass before anything is written.
+    static func shutdown(reason: String) -> Never {
+        shutdownLock.lock()
+        recorder?.stop()
+        line("stopped", ["reason": reason], terminal: true)
+        exit(0)
     }
 }

@@ -540,3 +540,176 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       the R3 proof with James at the Mac (PR 3c), not claimed here.
   - **Also fixed, found in the smoke test:** `--duration` overran by up to a whole
     `--shot-sec` (12 s asked, 30 s taken). The wait is now capped at the time remaining.
+- **2026-10-19, PR 3b-2, system-audio segments.** `gs-capture run` now writes system audio
+  from the tap as segments (`protocol.md`: `segment`, `tapRebuilt`, `tailDropped`,
+  `sessionUnverified`, and `--segment-sec`).
+  - **The PR 3a loop is shared, not copied.** `TapRunner` (`Tap.swift`) holds the rebuild,
+    delivery and tail-check logic. Both `tap` (the proof command) and `run` use it, through
+    a `TapSink` protocol: the RMS meter for `tap`, and a `PCMHold` of real mono PCM for
+    `run`. The PR 3a proof was re-run on the shared loop with the same result: **0 leaked
+    windows in 3 of 3 runs**, control captured every time, 5–6 windows dropped per
+    rebuild. The no-rebuild control still leaks (17).
+  - **AAC `.m4a`, not Opus.** AVFoundation writes AAC natively and the transcriber's ffmpeg
+    path decodes it. Opus in CAF is less reliably handled by ffmpeg. The format is mono at
+    32 kbps, about 2.4 MB per 5-minute segment.
+  - **A rebuild closes the segment.** Dropped audio becomes a gap *between* segments, so a
+    file's own timeline always matches its `[start, end]`, and PR 5's transcript time ranges
+    can rely on it.
+  - **SIGTERM finalizes.** The supervisor stops the helper with a signal (a denylist change
+    is a restart), so the open segment is finalized and announced before exit 0.
+  - **For PR 3c (purge):** a crash can leave a hidden `.partial-*.m4a`, and a kill between
+    writing and announcing a file leaves a shot or segment with no Convex row. Purge works
+    from rows, so it must also sweep files in day folders older than the retention period.
+  - **Proof** (`node scripts/spike-day-recorder.mjs run-segments`, 3 runs):
+    - SpikeTone (denylisted, 440 Hz) plays throughout. A second instance starts at 2 s and
+      forces a rebuild, a non-denylisted 660 Hz control plays at 3.5 s, and SIGTERM comes
+      at 9 s with 3 s segments.
+    - Every segment is converted alone through the transcriber's exact ffmpeg call
+      (`meetingProcessor.mjs`, 16 kHz mono wav).
+    - Each 100 ms window is then measured with a Hann-windowed Goertzel at 440 Hz and 660 Hz.
+
+    | Run | Tonal 440 Hz windows (leak) | Control windows | Segments | Rebuild dropped | Stop |
+    |---|---|---|---|---|---|
+    | 1–3 | **0**, **0**, **0** | 21 each | 4 each | 6 windows, silent | `signal`, no partials |
+    | Negative control, nothing denylisted | **88** (fails, exit 1) | 21 | 4 | none | `signal` |
+
+    - **The leak gate was tightened after the first run, and here is why.** The first run
+      flagged 2 windows at 440 Hz (0.004 and 0.0025). Both were within 30 ms of the control
+      tone's start and stop. The same windows read *higher* at 370 Hz and 520 Hz, which
+      neither tone uses, and the windows next to them read 0 at 440 Hz. That is the
+      broadband click of a gated sine.
+    - A window now counts as a leak only if 440 Hz is more than 3 × the louder reference
+      band. Excluded windows are still recorded (`broadband` in the result). The negative
+      control shows the gate is not blind.
+    - The 3b-1 `run-menubar` proof still passes with audio running.
+    - `swift test`: 20 tests, including an AAC round trip in which each segment decodes
+      alone.
+    - Evidence: `spike-evidence/results/pr3b2-run-segments-*.json` and
+      `pr3a-second-instance-rebuild-3b2-*.json`.
+  - **Not covered here:** memory over 8 hours (R2) is PR 3c's 2-hour soak. Changing the
+    default output device mid-run (headphones plugged in) is not tested live. The
+    aggregate is built on the output device found at start (but see Codex round 1 below).
+- **2026-10-19, PR 3b-2, Codex round 1 (3 × P2), all fixed.** The gate passed, but each
+  finding was a real gap in the long-running path.
+  - **Delivery that stopped after it started went unnoticed.** The check covered only the
+    first second after a (re)build, and the screenshot heartbeat kept running. `TapRunner`
+    now fails when the sample count has not advanced for 1 s at *any* point. The check is
+    shared, so `tap` gets it too.
+  - **A pause in delivery was joined into one segment.** `end` is start plus samples, so
+    audio resumed after sleep would have been stamped too early. A chunk more than 500 ms
+    from where the segment's samples end now closes the segment. Test first: a 1 h pause
+    gives two segments with the right times. Disabling the check fails that test (mutation
+    run).
+  - **A rebuilt tap at a new sample rate would have been written at the old rate.** After a
+    rebuild the hold is empty and the segment closed (the drop does both), so the hold and
+    the writer are retuned there and `sampleRateChanged` is reported. Both refuse a retune
+    with anything held or open.
+  - **Re-proof after the fixes:** `run-segments` 3 of 3 (0 leaks, 21 control windows, 4
+    segments each), the PR 3a proof once (0 leaked, control heard in 7 windows) and
+    `swift test` (24 tests). The stall check is **not** proven live, because that would
+    need an output device unplugged mid-run. It is PR 3c soak material.
+- **2026-10-19, PR 3b-2, Codex round 2 was untagged; round 3 ran tagged (1 × P1, 1 × P2), both fixed.**
+  Round 3 used the `codex exec` custom-instructions path, which requires a severity tag on
+  every finding.
+  - **P1: a denylisted process that starts, plays and exits between two polls was never
+    seen.** A poll compares only live processes, so the held audio was released and written.
+    This gap was present in PR 3a's design as well.
+    - **Fix:** `ProcessArrivals` (`Tap.swift`) listens for HAL process-list notifications
+      and classifies each added object at once, while its pid and bundle ID can still be
+      read. A denylisted arrival forces `TapRunner` to drop and rebuild on the next tick,
+      before the caller releases. An arrival also forces a tail drop at stop. An added
+      object whose pid is already unreadable counts as denylisted. The listener is off when
+      the denylist is empty.
+    - **Measured, and why a heuristic was removed:** the HAL sends every list notification
+      **twice**, about 1 ms apart. A first version treated "nothing added or removed" as an
+      object that came and went. With the duplicates, that produced 3 spurious rebuilds in
+      every run, each costing held audio. That rule is gone.
+    - **Residual:** an object added *and* removed inside the handler's ~1 ms read latency
+      leaves no trace. It would have had to produce audio in that time.
+    - **Proof** (`tap-transient-instance`): polls 2.5 s apart. Instance 2 plays for 0.4 s and
+      then **exits** (SpikeTone's new `linger` argument is set to 0), about 1.1 s before the
+      next poll. That is checked from its own `exiting` log and from its pid being gone.
+      - The first attempt was invalid: SpikeTone lingers 2 s after its audio stops by
+        default, so a poll caught the still-live process.
+      - Control (`--listen 0`): **5 windows leaked**, no rebuild.
+      - Listener: **0 leaked in 3 of 3 runs**, one rebuild each, triggered by the listener,
+        dropping silence. The listener fired before the tone played.
+      - A window ending 103–128 ms after the *control* tone's logged stop appeared in 3 of 8
+        tap runs, including a listener-off one. That is the control's output tail. This
+        proof counts windows within 150 ms after the control stops as `controlTail` and
+        reports them, not as a leak. The 3a counter is unchanged.
+    - **Re-run on the listener:** `run-segments` 3 of 3 (0 leaks, rebuild by `listener`),
+      the PR 3a proof (0 leaked) and `swift test` (24 tests).
+  - **P2: a line could follow `stopped`.** The shot loop and heartbeat keep running during
+    shutdown. `stopped` is now written as the terminal line: `emit` refuses every line after
+    it under the same output lock, so a line in progress finishes first. A shot written but
+    not announced in that window is an orphan file, covered by the PR 3c sweep noted above.
+    `run-segments` asserts the last line is `stopped/signal` (3 of 3).
+- **2026-10-19, PR 3b-2, Codex round 4 (tagged, 2 × P1), both fixed.** Both were races in
+  the round-3 listener.
+  - **Audio could pass the hold while `tick` blocked.** The release used the time *after*
+    `tick` had checked arrivals. A flag raised while `tick` blocked (for example writing
+    `tapRebuilt` to a full pipe) could miss audio that had meanwhile become old enough to
+    release.
+    - **Fix:** the release boundary is taken **before** the arrival check, in both `run`
+      and `tap`. A later flag belongs to a process added after that moment, so none of its
+      audio is old enough. A slow tick now delays a release; it never widens one.
+  - **A process exiting mid-classification read as allowed.** `Tap.denylisted` answers a
+    yes/no question, so an unreadable bundle ID or parent became "no".
+    - **Fix:** the listener now uses `Tap.classify`, which returns `denylisted`, `allowed`
+      or `unreadable`, with every property read status-checked (`ProcWatch.checkedPid` and
+      `checkedBundleID`). An unreadable result is flagged and forces a drop.
+    - A parent that is not an app (launchd, a shell) is `allowed`, not `unreadable`.
+      Measured: the bundle-less control tone caused no extra rebuild in any run.
+  - **Re-proof:**
+    - `tap-transient-instance`: control **5 leaked**; listener **0 in 3 of 3**, one
+      listener rebuild each.
+    - `run-segments`: 3 of 3, 0 leaks, 21 control windows, last line `stopped/signal`.
+    - PR 3a proof: 0 leaked.
+    - `swift test`: 28 tests (4 new classification cases).
+- **2026-10-19, PR 3b-2, Codex round 5 (tagged, 2 × P1, 1 × P2): the listener moves to a
+  follow-up PR (James).**
+  - Both P1s were the same class as round 4: races inside the `ProcessArrivals` listener.
+    - Classification still in flight on its queue when audio is released.
+    - A parent that exits mid-lookup reads as a non-app parent.
+  - Two rounds of same-class findings point to a design that needs its own review, so the
+    review loop stopped (L42 cap).
+  - **What moves:** `ProcessArrivals`, its tri-state classification, the
+    `tap-transient-instance` proof and SpikeTone's `linger` argument. They move to
+    `feat/day-recorder-arrivals`, which starts by reverting the removal commit, plus a
+    redesign of the release cap. For example: release only up to the time the arrivals
+    queue last *finished* classifying, minus the hold.
+  - **What PR 3b-2 keeps:**
+    - poll-only detection, as proven in PR 3a;
+    - the release boundary taken before the poll (round 4; correct ordering without the
+      listener too);
+    - the terminal `stopped` line (round 3);
+    - the round-5 P2 fix below.
+  - **OPEN RISK, accepted until the follow-up merges:** a denylisted process (a second
+    instance or a helper) that **starts, plays and exits between two 100 ms polls** has its
+    held audio released and written.
+    - The `tap-transient-instance` control reproduced it: 5 leaked windows, with polls 2.5 s
+      apart.
+    - The same gap exists on `main` since PR 3a. It is not new here.
+    - **Exposure:** the process must live under 100 ms of poll interval plus whatever part
+      of the 500 ms hold had not yet passed. A process that is still alive at the next poll
+      is caught and its held audio dropped (PR 3a proof).
+    - **Not acceptable for v1.** The follow-up must merge before PR 3c's soak is counted as
+      evidence for R4.
+  - **P2, fixed: signal handling now comes before `ready`.** Before this, a SIGTERM sent
+    just after `ready` hit the default disposition and ended with no `stopped`. Handlers are
+    installed first now. A stop during startup has no recorder to stop, and nothing to lose,
+    because the first segment needs the 500 ms hold to pass.
+    - **Probe:** SIGTERM sent the instant `ready` appears, **5 of 5:** `ready`, `stopped`,
+      exit 0.
+    - A signal *before* `ready` can still arrive during process startup (exit 143, no
+      lines). `protocol.md` says so.
+- **2026-10-19, PR 3b-2, Codex round 6 (tagged, 0 × P1, 1 × P2): gate passed; the P2 is fixed.**
+  - The finding: the `run-segments` negative control (`GS_RUN_DENYLIST=""`) exited 1 on the
+    "no rebuild" assertion *before* its leak check ran. Its exit code therefore did not prove
+    the detector.
+  - The fix: the rebuild is required only when something is denylisted.
+  - Re-run: the negative control now fails on the leak check, **"89 window(s) carried the
+    denylisted tone"**, exit 1. A normal run passes: 0 leaks, 21 control windows, 4
+    segments, `stopped/signal`.
+

@@ -8,13 +8,23 @@ import Foundation
 // longer than PIPE_BUF (512 bytes; an OCR line easily is) is not atomic on a pipe, so two
 // lines could interleave and the supervisor would parse neither.
 private let emitLock = NSLock()
+// Set by the terminal line; guarded by emitLock.
+private var outputClosed = false
 
-func emit(_ object: [String: Any]) {
+/// `terminal: true` writes the last line the process will ever write (protocol: `stopped`).
+/// Lines from other tasks after it are deliberately discarded: the process is exiting, and a
+/// line after `stopped` would make a clean stop look like a failure to the supervisor
+/// (Codex review of PR 3b-2). A line already being written finishes first, under the lock.
+func emit(_ object: [String: Any], terminal: Bool = false) {
     guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
           let line = String(data: data, encoding: .utf8) else {
         fail("could not encode output line for keys \(object.keys.sorted())")
     }
-    emitLock.withLock { FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!) }
+    emitLock.withLock {
+        guard !outputClosed else { return }
+        FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
+        if terminal { outputClosed = true }
+    }
 }
 
 func fail(_ message: String) -> Never {

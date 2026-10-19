@@ -44,6 +44,19 @@ const LEAK_RMS = 0.001;
 // PR 3b-1 run-menubar proof.
 const RUN_SHOT_SEC = 2;
 const RUN_SECONDS = 5;
+// PR 3b-2 run-segments proof: instance 2 starts at RUN_SEG_SECOND_MS (forcing a rebuild),
+// the non-denylisted control at RUN_SEG_CONTROL_MS, and SIGTERM ends the run.
+const RUN_SEGMENT_SEC = 3;
+const RUN_SEG_SECOND_MS = 2_000;
+const RUN_SEG_CONTROL_MS = 3_500;
+const RUN_SEG_STOP_MS = 9_000;
+const RUN_SEG_SHOT_SEC = 60;
+// A gated sine's onset and offset click is broadband, so it reads at 440 Hz too (measured:
+// 0.004 at 440 Hz with 0.006 at 520 Hz, at the control tone's edges). A leak window must
+// carry 440 Hz this many times above the louder of two bands neither tone uses. A real leak
+// (amplitude 0.25 against a near-zero floor) passes this easily, even on top of a click.
+const TONAL_RATIO = 3;
+const REFERENCE_HZ = [370, 520];
 const MENU_BAR_PT = 30; // measured: the menu bar is 0,0 1920x30 points on the Mac Studio's display
 const DISPLAY_WIDTH_PT = 1920;
 const BAND_BLACK_LUMA = 2; // a blanked band is painted black
@@ -83,7 +96,7 @@ function run(cmd, args, opts = {}) {
   const result = spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 256 * BYTES_PER_MB, ...opts });
   if (result.error) throw new Error(`${cmd} failed to start: ${result.error.message}`);
   if (result.status !== 0) {
-    throw new Error(`${cmd} ${args.join(" ")} exited ${result.status}: ${result.stderr.trim().slice(0, 2_000)}`);
+    throw new Error(`${cmd} ${args.join(" ")} exited ${result.status}: ${String(result.stderr).trim().slice(0, 2_000)}`);
   }
   return result.stdout;
 }
@@ -103,7 +116,7 @@ function save(name, result) {
 async function captureLive(handle, timeoutMs = CAPTURE_LIVE_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (handle.lines.some((line) => line.event === "started" || line.event === "watching")) return;
+    if (handle.lines.some((line) => ["started", "watching", "ready"].includes(line.event))) return;
     await sleep(TONE_LOG_POLL_MS / 4);
   }
   throw new Error(`capture did not report started within ${timeoutMs} ms`);
@@ -137,7 +150,31 @@ function background(args, logFile) {
     // caller a result missing its last lines (Codex review of PR 71).
     child.on("close", (code) => (code === 0 ? resolve(lines) : reject(new Error(`gs-capture ${args[0]} exited ${code}: ${stderr.trim()}`))));
   });
-  return { lines, done };
+  return { lines, done, child };
+}
+
+/**
+ * Per-100 ms amplitude of `hz` in mono 16 kHz samples: a Hann-windowed Goertzel, so a tone
+ * 220 Hz away (the control) does not read as this one through spectral leakage.
+ */
+function toneAmplitudes(samples, hz, rate = SPEECH_SAMPLE_RATE) {
+  const n = rate * WINDOW_MS / 1000;
+  const coeff = 2 * Math.cos((2 * Math.PI * hz) / rate);
+  const out = [];
+  for (let start = 0; start + n <= samples.length; start += n) {
+    let s1 = 0;
+    let s2 = 0;
+    for (let i = 0; i < n; i++) {
+      const hann = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1));
+      const s0 = samples[start + i] * hann + coeff * s1 - s2;
+      s2 = s1;
+      s1 = s0;
+    }
+    const power = s1 * s1 + s2 * s2 - coeff * s1 * s2;
+    // Hann's coherent gain is 0.5, so a full-scale sine of amplitude A reads A.
+    out.push((2 * Math.sqrt(Math.max(power, 0))) / (n * 0.5));
+  }
+  return out;
 }
 
 /** Launch the stand-in app as its own responsible process; its JSON lines land in a file. */
@@ -498,6 +535,84 @@ const commands = {
    * excludes every process of a denylisted app, helpers included. Same scenarios as Q2,
    * plus the Chromium helper case SCK failed.
    */
+  /**
+   * PR 3b-2 proof: `gs-capture run` writes system audio as segments, and:
+   * - every segment converts alone through the transcriber's ffmpeg call (meetingProcessor.mjs);
+   * - the denylisted app (SpikeTone, 440 Hz) never reaches a segment, including a second
+   *   instance that starts mid-run and forces a tap rebuild;
+   * - a non-denylisted tone (bare spike-tone, 660 Hz) does: the positive control;
+   * - SIGTERM finalizes the open segment and leaves no partial file.
+   */
+  async "run-segments"() {
+    const root = fs.mkdtempSync(path.join(OUT_DIR, "run-segments-"));
+    const runSeconds = RUN_SEG_STOP_MS / 1000;
+    const firstLog = launchTone("play", runSeconds + 4, "run-seg-first");
+    await waitForToneStart(firstLog);
+    // GS_RUN_DENYLIST="" is the negative control: nothing excluded, so the gate must report
+    // the 440 Hz tone as leaked. Without it a passing run could mean a blind detector.
+    const denylist = process.env.GS_RUN_DENYLIST ?? TONE_BUNDLE_ID;
+    const handle = background(["run", "--media-root", root, "--denylist", denylist,
+      "--shot-sec", RUN_SEG_SHOT_SEC, "--segment-sec", RUN_SEGMENT_SEC]);
+    await captureLive(handle);
+    const readyAt = Date.now();
+    await sleep(RUN_SEG_SECOND_MS);
+    const secondLog = launchTone("play", 3, "run-seg-second");
+    await sleep(RUN_SEG_CONTROL_MS - RUN_SEG_SECOND_MS);
+    const controlLog = bareTone(CONTROL_SECONDS * 2, "run-seg-control", CONTROL_HZ);
+    await sleep(RUN_SEG_STOP_MS - (Date.now() - readyAt));
+    handle.child.kill("SIGTERM");
+    const lines = await handle.done;
+    const first = await spikeToneInterval(firstLog, runSeconds + 4);
+    const second = await spikeToneInterval(secondLog, 3);
+    const control = await spikeToneInterval(controlLog, CONTROL_SECONDS * 2);
+
+    const stopped = lines.at(-1);
+    if (stopped?.event !== "stopped" || stopped.reason !== "signal") throw new Error(`last line is not stopped/signal: ${JSON.stringify(stopped)}`);
+    if (lines.some((line) => line.v !== 1)) throw new Error("a line without v: 1");
+    const segments = lines.filter((line) => line.event === "segment");
+    if (segments.length < 2) throw new Error(`only ${segments.length} segment(s) for a ${runSeconds} s run`);
+    const leftovers = fs.readdirSync(root, { recursive: true }).filter((name) => path.basename(String(name)).startsWith(".partial-"));
+    const decoded = segments.map((segment, index) => {
+      const file = path.join(root, segment.path);
+      // The transcriber's exact conversion, on this segment alone.
+      const wav = path.join(OUT_DIR, `run-seg-${index}.wav`);
+      run("ffmpeg", ["-y", "-loglevel", "error", "-i", file, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav]);
+      const raw = run("ffmpeg", ["-loglevel", "error", "-i", wav, "-f", "f32le", "-ac", "1", "-ar", String(SPEECH_SAMPLE_RATE), "-"],
+        { encoding: "buffer" });
+      const samples = new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
+      const denied = toneAmplitudes(samples, TONE_HZ);
+      const heard = toneAmplitudes(samples, CONTROL_HZ);
+      const [refLow, refHigh] = REFERENCE_HZ.map((hz) => toneAmplitudes(samples, hz));
+      const floor = (i) => Math.max(refLow[i], refHigh[i]);
+      // Window i covers [start + i*100, start + (i+1)*100) ms of wall clock.
+      const at = (i) => segment.start + i * WINDOW_MS;
+      return {
+        path: segment.path, start: segment.start, end: segment.end, bytes: fs.statSync(file).size,
+        decodedMs: round((samples.length / SPEECH_SAMPLE_RATE) * 1000), spanMs: round(segment.end - segment.start),
+        ...Object.fromEntries(["leaked", "broadband"].map((kind) => [kind, denied
+          .map((amp, i) => ({ msFromStart: i * WINDOW_MS, at: at(i), amp: round(amp, 4), floor: round(floor(i), 4),
+            tonal: amp > TONAL_RATIO * floor(i) }))
+          .filter((w) => w.amp > LEAK_RMS && w.tonal === (kind === "leaked"))])),
+        controlWindows: heard.filter((amp, i) => amp > LEAK_RMS && at(i) > control.startT && at(i) < control.stopT).length,
+      };
+    });
+    const result = {
+      tones: { first, second, control }, segments: decoded, partialLeftovers: leftovers,
+      rebuilds: lines.filter((line) => line.event === "tapRebuilt"), tailDrops: lines.filter((line) => line.event === "tailDropped"),
+      leakedWindows100ms: decoded.reduce((sum, d) => sum + d.leaked.length, 0),
+      controlWindows100ms: decoded.reduce((sum, d) => sum + d.controlWindows, 0),
+      stopped,
+    };
+    save(denylist ? "pr3b2-run-segments" : "pr3b2-run-segments-control", result);
+    if (leftovers.length) throw new Error(`partial files left behind: ${leftovers.join(", ")}`);
+    // Only a denylisted run expects a rebuild. The negative control (nothing denylisted) must
+    // reach the leak check below and fail THERE, so its exit code proves the detector
+    // (Codex review of PR 3b-2, round 6).
+    if (denylist && !result.rebuilds.length) throw new Error("instance 2 did not force a tap rebuild; the scenario proves nothing");
+    if (result.controlWindows100ms === 0) throw new Error("the control tone reached no segment: capture is not working");
+    if (result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) carried the denylisted tone`);
+  },
+
   /**
    * PR 3a proof: only the second-instance scenario, bundle IDs plus live process objects.
    * GS_TAP_EXTRA adds tap flags ("--rebuild-ms 100 --hold-ms 500"); GS_SPIKE_LABEL names
