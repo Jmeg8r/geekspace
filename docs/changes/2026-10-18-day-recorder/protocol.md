@@ -92,7 +92,8 @@ There is no error event. Failures include a missing permission, a ScreenCaptureK
 hangs past 10 s (a process-exiting watchdog), an unwritable file, and a menu bar that can't
 be found to blank while the denylist is non-empty. On the audio side they include a tap that
 delivers no samples within 1 s of being (re)built or stops delivering for 1 s at any point
-(an output device unplugged), a tap buffer whose channel layout is not
+(an output device unplugged), process classification that has not completed a pass for 5 s
+(held audio can't be judged, so it is never released unjudged), a tap buffer whose channel layout is not
 the tap's, and a segment that cannot be written, finalized or read back. The supervisor
 treats each of these as "Not recording" (spec R3):
 

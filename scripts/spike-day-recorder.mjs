@@ -64,6 +64,7 @@ const TRANSIENT_HOLD_MS = TRANSIENT_POLL_MS * 2;
 const TRANSIENT_TAP_SECONDS = 6;
 const TRANSIENT_START_MS = 600;
 const TRANSIENT_PLAY_SECONDS = 0.4;
+const SLOW_CLASSIFIER = { pollMs: 700, holdMs: 1_500, playSeconds: 0.1, classifyDelayMs: 2_200 };
 const TRANSIENT_CONTROL_MS = 3_500;
 // The control tone keeps sounding briefly after it logs "stopped" (output latency). Measured
 // across 8 tap runs: every stray window ended 103-128 ms after that log, never later. Windows
@@ -639,24 +640,36 @@ const commands = {
    * between two polls. A poll compares only live processes, so it never sees it; the
    * arrivals listener must. GS_TAP_LISTEN=0 is the control (listener off): it must leak.
    * A non-denylisted tone after the rebuild shows the tap still captures.
+   *
+   * GS_TRANSIENT=slow-classifier is the round-5 race (classification still in flight when
+   * audio would be released): polls every 700 ms, a 1.5 s hold, a 0.1 s tone, and every
+   * classification slowed to 2.2 s (longer than the hold, under the 5 s stall limit).
+   * GS_TAP_EXTRA="--release-cap 0" is its control: release by the clock must leak.
    */
   async "tap-transient-instance"() {
     const listen = process.env.GS_TAP_LISTEN !== "0";
+    const slow = process.env.GS_TRANSIENT === "slow-classifier";
+    const pollMs = slow ? SLOW_CLASSIFIER.pollMs : TRANSIENT_POLL_MS;
+    const holdMs = slow ? SLOW_CLASSIFIER.holdMs : TRANSIENT_HOLD_MS;
+    const playSeconds = slow ? SLOW_CLASSIFIER.playSeconds : TRANSIENT_PLAY_SECONDS;
+    const extra = [...(slow ? ["--classify-delay-ms", SLOW_CLASSIFIER.classifyDelayMs] : []),
+      ...(process.env.GS_TAP_EXTRA ?? "").split(/\s+/).filter(Boolean)];
+    const capped = !extra.includes("--release-cap");
     const firstSeconds = TRANSIENT_TAP_SECONDS + 4;
     const firstLog = launchTone("play", firstSeconds, "transient-first");
     await waitForToneStart(firstLog);
     const tap = background(["tap", "--seconds", TRANSIENT_TAP_SECONDS, "--exclude", TONE_BUNDLE_ID, "--by", "both",
-      "--rebuild-ms", TRANSIENT_POLL_MS, "--hold-ms", TRANSIENT_HOLD_MS, ...(listen ? [] : ["--listen", "0"])]);
+      "--rebuild-ms", pollMs, "--hold-ms", holdMs, ...(listen ? [] : ["--listen", "0"]), ...extra]);
     await captureLive(tap);
     const liveAt = Date.now();
     await sleep(TRANSIENT_START_MS);
     // Linger 0: the process exits as soon as its tone stops.
-    const secondLog = launchTone("play", TRANSIENT_PLAY_SECONDS, "transient-second", [TONE_HZ, 0]);
+    const secondLog = launchTone("play", playSeconds, "transient-second", [TONE_HZ, 0]);
     await sleep(TRANSIENT_CONTROL_MS - (Date.now() - liveAt));
     const controlLog = bareTone(CONTROL_SECONDS, "transient-control", CONTROL_HZ);
     const lines = await tap.done;
     const window = captureWindow(lines);
-    const second = requireAudible("transient-second", await spikeToneInterval(secondLog, TRANSIENT_PLAY_SECONDS), window, "late");
+    const second = requireAudible("transient-second", await spikeToneInterval(secondLog, playSeconds), window, "late");
     const first = requireAudible("transient-first", await spikeToneInterval(firstLog, firstSeconds), window, "cover");
     const heardTone = requireAudible("transient-control", await spikeToneInterval(controlLog, CONTROL_SECONDS), window, "late");
     if (first.pid === second.pid) throw new Error("both instances report the same pid");
@@ -667,14 +680,14 @@ const commands = {
     const exiting = readTone(secondLog).find((event) => event.event === "exiting");
     if (!exiting) throw new Error("instance 2 did not log its exit");
     if (pidAlive(second.pid)) throw new Error(`instance 2 (pid ${second.pid}) is still running`);
-    const nextPoll = window.startT + Math.ceil((second.startT - window.startT) / TRANSIENT_POLL_MS) * TRANSIENT_POLL_MS;
+    const nextPoll = window.startT + Math.ceil((second.startT - window.startT) / pollMs) * pollMs;
     if (exiting.t >= nextPoll) throw new Error(`instance 2 exited ${Math.round(exiting.t - nextPoll)} ms after the next poll`);
     const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
     const overlapsControl = (line) => line.t > heardTone.startT && line.t - WINDOW_MS < heardTone.stopT;
     const inControlTail = (line) => !overlapsControl(line) && line.t > heardTone.stopT && line.t <= heardTone.stopT + CONTROL_TAIL_MS;
     const leaked = loud.filter((line) => !overlapsControl(line) && !inControlTail(line));
     const result = {
-      listen, first, second, controlTone: { ...heardTone, capturedWindows100ms: loud.filter(overlapsControl).length },
+      listen, capped, pollMs, holdMs, tapExtra: extra, first, second, controlTone: { ...heardTone, capturedWindows100ms: loud.filter(overlapsControl).length },
       controlTail: loud.filter(inControlTail).map((line) => ({ rms: line.windowRms, msAfterControlStop: Math.round(line.t - heardTone.stopT) })),
       exitedMsBeforeNextPoll: Math.round(nextPoll - exiting.t),
       leakedWindows100ms: leaked.length,
@@ -682,10 +695,12 @@ const commands = {
       rebuilds: lines.filter((line) => line.event === "tapRebuilt"), tailDrops: lines.filter((line) => line.event === "tailDropped"),
       summary: lines.find((line) => line.event === "summary"),
     };
-    save(`pr3b2-transient-instance-${listen ? "listener" : "control"}`, result);
+    const label = `${slow ? "slow-" : ""}${listen ? "listener" : "control"}${capped ? "" : "-uncapped"}`;
+    save(`pr3b2-transient-instance-${label}`, result);
     if (result.controlTone.capturedWindows100ms === 0) throw new Error("the tap captured nothing of the control: it stopped capturing");
-    if (listen && result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) of instance 2 leaked`);
-    if (!listen && !result.leakedWindows100ms) throw new Error("control: no leak without the listener, so the scenario proves nothing");
+    const protectedRun = listen && capped;
+    if (protectedRun && result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) of instance 2 leaked`);
+    if (!protectedRun && !result.leakedWindows100ms) throw new Error("control: no leak without the protection, so the scenario proves nothing");
   },
 
   /**

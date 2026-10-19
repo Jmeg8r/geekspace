@@ -283,12 +283,9 @@ final class SystemAudioRecorder {
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(Int(Tap.releaseTickMs)))
             timer.setEventHandler {
-                // The release boundary is fixed BEFORE tick checks arrivals: a flag raised
-                // while tick runs (or blocks) belongs to a process added after this moment, so
-                // none of its audio is old enough to release (Codex review of PR 3b-2, round 4).
-                let boundary = nowMs()
-                runner.tick(poll: true)
-                runner.sink.release(now: boundary)
+                // tick returns the release limit, read before it checks arrivals and capped at
+                // the last completed classification pass (Codex review of PR 3b-2, rounds 4-5).
+                runner.sink.release(now: runner.tick(poll: true))
             }
             timer.resume()
             self.timer = timer

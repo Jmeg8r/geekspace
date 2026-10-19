@@ -200,6 +200,9 @@ enum Tap {
     // A session this short may end before its first IO cycle (about 10 ms each), so a
     // missing sample proves nothing; it is reported as unverified instead of passed.
     static let minVerifiableSessionMs = 200.0
+    // A classifier this far behind means held audio can't be judged; the run fails rather
+    // than holding (and buffering) without bound (spec R3 wants an error within 10 s).
+    static let arrivalsStallMs = 5000.0
 
     static func osCheck(_ status: OSStatus, _ what: String) {
         if status != noErr { fail("\(what) failed, OSStatus \(status)") }
@@ -225,17 +228,25 @@ enum Tap {
               let bundle = ProcWatch.checkedBundleID(object) else { return .unreadable }
         return classify(bundle: bundle, parent: parentPid(pid), parentBundle: { pid in
             NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
-        }, denylist)
+        }, parentAlive: processAlive, denylist)
     }
 
+    /// kill(pid, 0) probes without signalling; EPERM still means the process exists.
+    static func processAlive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 || errno == EPERM }
+
     /// The pure half, testable: `parent` is -1 when the parent could not be read.
-    static func classify(bundle: String, parent: pid_t, parentBundle: (pid_t) -> String?, _ denylist: [String]) -> Classification {
+    static func classify(bundle: String, parent: pid_t, parentBundle: (pid_t) -> String?,
+                         parentAlive: (pid_t) -> Bool, _ denylist: [String]) -> Classification {
         if denylist.contains(where: { bundle == $0 || bundle.hasPrefix($0 + ".") }) { return .denylisted(bundle) }
         guard parent > 0 else { return .unreadable }
-        // A parent that is not an app (launchd, a shell) has no bundle ID: that is allowed,
-        // not unreadable. A live process always has a readable parent.
-        if let parentID = parentBundle(parent), denylist.contains(parentID) { return .denylisted(parentID) }
-        return .allowed
+        if let parentID = parentBundle(parent) {
+            return denylist.contains(parentID) ? .denylisted(parentID) : .allowed
+        }
+        // No bundle ID: a parent that is not an app (launchd, a shell), OR a denylisted
+        // parent that exited before the lookup (Codex review of PR 3b-2, round 5). Checked
+        // AFTER the lookup: a parent alive now was alive during it, so its nil is a real
+        // "not an app". A gone parent proves nothing either way.
+        return parentAlive(parent) ? .allowed : .unreadable
     }
 
     static func denylisted(_ object: AudioObjectID, _ denylist: [String]) -> Bool {
@@ -299,10 +310,18 @@ enum Tap {
         var shared: TapMeter?
         // --listen 0 turns the arrivals listener off: the proof's control for a process that
         // starts and exits between polls (Codex review of PR 3b-2), like --helpers 0.
+        // --classify-delay-ms N slows every classification on purpose, so the proof can make a
+        // pass still be in flight when audio would be released (Codex review of PR 3b-2,
+        // round 5). --release-cap 0 releases by the clock instead of the last completed pass:
+        // the control for that proof. Both are proof-only.
+        let classifyDelayMs = args.double("classify-delay-ms", default: 0)
         let arrivals = rebuildMs != nil && !denylist.isEmpty && args.string("listen") != "0"
-            ? ProcessArrivals(classify: { classify($0, denylist) }) : nil
+            ? ProcessArrivals(classify: { object in
+                if classifyDelayMs > 0 { usleep(useconds_t(classifyDelayMs * 1000)) }
+                return classify(object, denylist)
+            }) : nil
         let runner = TapRunner(objectsNow: objectsNow, bundleIDs: byBundle ? excludedBundleIDs : nil, rebuildMs: rebuildMs,
-                               arrivals: arrivals, report: { event, fields in emit(fields.merging(["event": event]) { _, new in new }) }) { format in
+                               arrivals: arrivals, capRelease: args.string("release-cap") != "0", report: { event, fields in emit(fields.merging(["event": event]) { _, new in new }) }) { format in
             if let shared { return shared }
             let made = TapMeter(holdMs: holdMs, sampleRate: format.mSampleRate, channels: Int(max(format.mChannelsPerFrame, 1)))
             shared = made
@@ -328,12 +347,10 @@ enum Tap {
             }
             try? await Task.sleep(nanoseconds: UInt64(releaseTickMs * 1_000_000))
             let polling = nowMs() < deadline - pollStopMs
-            // Fixed before the arrival check, as in SystemAudioRecorder (Codex, PR 3b-2 round 4).
-            let boundary = nowMs()
-            runner.tick(poll: polling)
+            let limit = runner.tick(poll: polling)
             // While polls are suppressed (--poll-stop-ms), hold everything: the shutdown check
             // must judge the whole unpolled span, not just its last --hold-ms (Codex, PR 3a).
-            if polling { meter.release(now: boundary) }
+            if polling { meter.release(now: limit) }
         }
         // --tail-check 0 releases the tail unchecked: the proof's control, like --helpers 0.
         runner.finish(tailCheck: rebuildMs != nil && args.string("tail-check") != "0")
@@ -400,25 +417,58 @@ final class ProcessArrivals: @unchecked Sendable {
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "gs-capture.arrivals")
     private let classify: (AudioObjectID) -> Tap.Classification
+    private let list: () -> [AudioObjectID]
     // Touched only on `queue`.
     private var known: Set<AudioObjectID> = []
-    // Guarded by `lock`: what was flagged since the last `take`.
+    // Guarded by `lock`: what was flagged since the last `take`, and the start time of the
+    // last COMPLETED pass. Every process added before `checkedThrough` has been classified
+    // and its flag published (Codex review of PR 3b-2, round 5: release must not pass a
+    // classification still in flight).
     private var flagged: [String] = []
+    private var checkedThrough: Double
+    private var passRequested = false
     private var listener: AudioObjectPropertyListenerBlock?
 
-    init(classify: @escaping (AudioObjectID) -> Tap.Classification) {
+    /// `list` and `listen` exist for tests: production reads the HAL and listens to it.
+    init(classify: @escaping (AudioObjectID) -> Tap.Classification,
+         list: @escaping () -> [AudioObjectID] = ProcWatch.processList, listen: Bool = true) {
         self.classify = classify
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
-        var addr = ProcWatch.address(kAudioHardwarePropertyProcessObjectList)
-        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, queue, block)
-        guard status == noErr else { fail("cannot listen for process list changes, status \(status)") }
-        listener = block
+        self.list = list
+        checkedThrough = nowMs()
+        if listen {
+            let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
+            var addr = ProcWatch.address(kAudioHardwarePropertyProcessObjectList)
+            let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, queue, block)
+            guard status == noErr else { fail("cannot listen for process list changes, status \(status)") }
+            listener = block
+        }
         // Snapshot after the listener is in place, on its queue, so no add falls between.
-        queue.sync { known = Set(ProcWatch.processList()) }
+        queue.sync {
+            let started = nowMs()
+            known = Set(list())
+            lock.withLock { checkedThrough = started }
+        }
     }
 
     /// Re-read the list now (on the listener's queue), for a caller about to release audio.
     func refresh() { queue.sync { changed() } }
+
+    /// Ask for a pass without waiting, so `checkedThrough` keeps advancing when nothing
+    /// notifies. At most one is queued: a slow classifier can't pile up work.
+    func requestPass() {
+        let enqueue = lock.withLock {
+            defer { passRequested = true }
+            return !passRequested
+        }
+        guard enqueue else { return }
+        queue.async { [self] in
+            lock.withLock { passRequested = false }
+            changed()
+        }
+    }
+
+    /// The start of the last completed pass. Audio may be released only up to here.
+    func checked() -> Double { lock.withLock { checkedThrough } }
 
     /// What was flagged since the last call: bundle IDs, or `unclassified`.
     func take() -> [String] {
@@ -435,9 +485,10 @@ final class ProcessArrivals: @unchecked Sendable {
         self.listener = nil
     }
 
-    /// On `queue`. Classifies the objects added since the last change.
+    /// On `queue`. Classifies the objects added since the last pass.
     private func changed() {
-        let current = Set(ProcWatch.processList())
+        let started = nowMs()
+        let current = Set(list())
         let added = current.subtracting(known)
         known = current
         var hits: [String] = []
@@ -448,8 +499,12 @@ final class ProcessArrivals: @unchecked Sendable {
             case .allowed: break
             }
         }
-        guard !hits.isEmpty else { return }
-        lock.withLock { flagged += hits }
+        // Flags and the new limit are published together, so a reader that sees the limit
+        // can also see every flag behind it.
+        lock.withLock {
+            flagged += hits
+            checkedThrough = max(checkedThrough, started)
+        }
     }
 }
 
@@ -463,6 +518,7 @@ final class TapRunner {
     private let rebuildMs: Double?
     private let report: (String, [String: Any]) -> Void
     private let arrivals: ProcessArrivals?
+    private let capRelease: Bool
     // Arrivals taken while polling was suppressed; they still force a drop at finish.
     private var pendingArrivals: [String] = []
     let sink: TapSink
@@ -482,12 +538,13 @@ final class TapRunner {
     /// tap's format and must return the same sink every time.
     /// `arrivals`, when given, adds listener-driven rebuilds to the poll (see ProcessArrivals).
     init(objectsNow: @escaping () -> [AudioObjectID], bundleIDs: [String]?, rebuildMs: Double?,
-         arrivals: ProcessArrivals? = nil,
+         arrivals: ProcessArrivals? = nil, capRelease: Bool = true,
          report: @escaping (String, [String: Any]) -> Void,
          sinkFor: @escaping (AudioStreamBasicDescription) -> TapSink) {
         self.objectsNow = objectsNow
         self.rebuildMs = rebuildMs
         self.arrivals = arrivals
+        self.capRelease = capRelease
         self.report = report
         var first: TapSink?
         makeSession = { excluded in
@@ -510,7 +567,22 @@ final class TapRunner {
 
     /// Rebuild around any new denylisted process (when `poll` and a poll is due), then fail
     /// if delivery has not advanced for `Tap.sessionDeliveryDeadlineMs`.
-    func tick(poll: Bool) {
+    /// Returns the time the caller may release held audio up to. It is read at ENTRY, before
+    /// any flag is taken: a flag published by a pass at or before this limit is then always
+    /// taken (and dropped on) here, before the caller releases. Without arrivals it is simply
+    /// now; with them it is capped at the last completed classification pass.
+    @discardableResult
+    func tick(poll: Bool) -> Double {
+        let now = nowMs()
+        var limit = now
+        if let arrivals {
+            let checked = arrivals.checked()
+            if now - checked > Tap.arrivalsStallMs {
+                fail("process classification has not completed a pass for \(Int(now - checked)) ms")
+            }
+            if capRelease { limit = min(now, checked) }
+            arrivals.requestPass()
+        }
         pendingArrivals += arrivals?.take() ?? []
         // An arrival forces the check now, not at the next due poll: its audio is already in
         // the hold and must be dropped before the caller's next release.
@@ -553,6 +625,7 @@ final class TapRunner {
                  ? "the tap delivered no samples in \(Int(Tap.sessionDeliveryDeadlineMs)) ms after it was (re)built"
                  : "the tap stopped delivering samples for \(Int(nowMs() - lastAdvance)) ms")
         }
+        return limit
     }
 
     /// Stop IO and settle the held tail. The tail has not been checked yet: a denylisted

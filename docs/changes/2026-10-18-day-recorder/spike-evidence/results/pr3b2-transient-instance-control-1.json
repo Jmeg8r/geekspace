@@ -1,55 +1,64 @@
 {
   "listen": false,
+  "capped": true,
+  "pollMs": 2500,
+  "holdMs": 5000,
+  "tapExtra": [],
   "first": {
-    "startT": 1792445109854.5562,
-    "stopT": 1792445120360.972,
-    "pid": 71435
+    "startT": 1792448107087.117,
+    "stopT": 1792448117582.597,
+    "pid": 41326
   },
   "second": {
-    "startT": 1792445111187.362,
-    "stopT": 1792445111612.855,
-    "pid": 71479
+    "startT": 1792448108296.889,
+    "stopT": 1792448108720.8381,
+    "pid": 41351
   },
   "controlTone": {
-    "startT": 1792445114017.188,
-    "stopT": 1792445115071.871,
-    "pid": 71499,
-    "capturedWindows100ms": 12
+    "startT": 1792448111147.866,
+    "stopT": 1792448112205.727,
+    "pid": 41384,
+    "capturedWindows100ms": 11
   },
-  "controlTail": [],
-  "exitedMsBeforeNextPoll": 1141,
+  "controlTail": [
+    {
+      "rms": 0.030041733213422767,
+      "msAfterControlStop": 117
+    }
+  ],
+  "exitedMsBeforeNextPoll": 1190,
   "leakedWindows100ms": 5,
   "leakedDetail": [
     {
-      "rms": 0.12221083221440684,
-      "msAfterSecondStart": 73
+      "rms": 0.16844599358823123,
+      "msAfterSecondStart": 122
     },
     {
-      "rms": 0.17677659840943008,
-      "msAfterSecondStart": 180
+      "rms": 0.17677668454912632,
+      "msAfterSecondStart": 228
     },
     {
-      "rms": 0.17677659927816314,
-      "msAfterSecondStart": 276
+      "rms": 0.17677668126523127,
+      "msAfterSecondStart": 324
     },
     {
-      "rms": 0.1767766012031653,
-      "msAfterSecondStart": 372
+      "rms": 0.17677667389443608,
+      "msAfterSecondStart": 420
     },
     {
-      "rms": 0.1458988859910636,
-      "msAfterSecondStart": 479
+      "rms": 0.06774995017030416,
+      "msAfterSecondStart": 527
     }
   ],
   "rebuilds": [],
   "tailDrops": [],
   "summary": {
-    "dbfs": -21.213,
+    "dbfs": -21.22,
     "droppedWindows": 0,
     "event": "summary",
-    "excludedProcesses": 1,
-    "peak": 0.25051558017730713,
-    "rms": 0.08696185881243479,
-    "samples": 575488
+    "excludedProcesses": 2,
+    "peak": 0.25214725732803345,
+    "rms": 0.08689141743709973,
+    "samples": 576512
   }
 }

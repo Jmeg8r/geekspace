@@ -2,6 +2,7 @@
 // the position-based OCR merge. Run with `swift test` in native/gs-capture.
 // WHY pure functions: the races they guard against (a switch while a capture is in flight)
 // can't be hit on demand in a live run. See Codex review of PR 3b-1.
+import CoreAudio
 import CoreGraphics
 import XCTest
 @testable import gs_capture
@@ -97,24 +98,79 @@ final class OCRMergeTests: XCTestCase {
 final class ArrivalClassificationTests: XCTestCase {
     let denylist = ["com.example.work"]
     let noApps: (pid_t) -> String? = { _ in nil }
+    let alive: (pid_t) -> Bool = { _ in true }
 
     func testDenylistedBundleAndHelper() {
-        XCTAssertEqual(Tap.classify(bundle: "com.example.work", parent: 1, parentBundle: noApps, denylist), .denylisted("com.example.work"))
-        XCTAssertEqual(Tap.classify(bundle: "com.example.work.helper", parent: 1, parentBundle: noApps, denylist),
+        XCTAssertEqual(Tap.classify(bundle: "com.example.work", parent: 1, parentBundle: noApps, parentAlive: alive, denylist), .denylisted("com.example.work"))
+        XCTAssertEqual(Tap.classify(bundle: "com.example.work.helper", parent: 1, parentBundle: noApps, parentAlive: alive, denylist),
                        .denylisted("com.example.work.helper"))
     }
 
     func testChildOfADenylistedAppIsDenylisted() {
         let parentIsWork: (pid_t) -> String? = { $0 == 42 ? "com.example.work" : nil }
-        XCTAssertEqual(Tap.classify(bundle: "", parent: 42, parentBundle: parentIsWork, denylist), .denylisted("com.example.work"))
+        XCTAssertEqual(Tap.classify(bundle: "", parent: 42, parentBundle: parentIsWork, parentAlive: alive, denylist), .denylisted("com.example.work"))
     }
 
     func testAnUnreadableParentIsUnreadableNotAllowed() {
         // The process exited between reading its bundle and reading its parent.
-        XCTAssertEqual(Tap.classify(bundle: "", parent: -1, parentBundle: noApps, denylist), .unreadable)
+        XCTAssertEqual(Tap.classify(bundle: "", parent: -1, parentBundle: noApps, parentAlive: alive, denylist), .unreadable)
+    }
+
+    func testAParentThatExitedBeforeItsLookupIsUnreadable() {
+        // Codex review of PR 3b-2, round 5: a denylisted parent that exits between reading its
+        // pid and resolving its app looks exactly like a non-app parent. Gone means unknown.
+        XCTAssertEqual(Tap.classify(bundle: "", parent: 42, parentBundle: noApps, parentAlive: { _ in false }, denylist), .unreadable)
     }
 
     func testAParentThatIsNotAnAppIsAllowed() {
-        XCTAssertEqual(Tap.classify(bundle: "com.apple.TextEdit", parent: 1, parentBundle: noApps, denylist), .allowed)
+        XCTAssertEqual(Tap.classify(bundle: "com.apple.TextEdit", parent: 1, parentBundle: noApps, parentAlive: alive, denylist), .allowed)
+    }
+}
+
+/// The release cap (Codex review of PR 3b-2, round 5): audio may be released only up to the
+/// start of the last COMPLETED classification pass, and a pass's flags are visible no later
+/// than its limit.
+final class ArrivalsReleaseCapTests: XCTestCase {
+    func waitForPass(_ arrivals: ProcessArrivals, after before: Double) {
+        let deadline = Date().addingTimeInterval(2)
+        while arrivals.checked() <= before && Date() < deadline { usleep(1000) }
+    }
+
+    func testAPassAdvancesTheLimitAndPublishesItsFlagsWithIt() {
+        var objects: [AudioObjectID] = [1]
+        let arrivals = ProcessArrivals(classify: { $0 == 2 ? .denylisted("com.example.work") : .allowed },
+                                       list: { objects }, listen: false)
+        let before = arrivals.checked()
+        objects = [1, 2]
+        arrivals.requestPass()
+        waitForPass(arrivals, after: before)
+        XCTAssertGreaterThan(arrivals.checked(), before)
+        XCTAssertEqual(arrivals.take(), ["com.example.work"])
+    }
+
+    func testAStalledPassHoldsTheLimitBack() {
+        var objects: [AudioObjectID] = [1]
+        let gate = DispatchSemaphore(value: 0)
+        let arrivals = ProcessArrivals(classify: { _ in gate.wait(); return .denylisted("com.example.work") },
+                                       list: { objects }, listen: false)
+        let before = arrivals.checked()
+        objects = [1, 2]
+        arrivals.requestPass()
+        usleep(100_000)
+        // The pass is stuck inside classification: the limit must not move, and no flag
+        // may appear yet.
+        XCTAssertEqual(arrivals.checked(), before)
+        XCTAssertEqual(arrivals.take(), [])
+        gate.signal()
+        waitForPass(arrivals, after: before)
+        XCTAssertEqual(arrivals.take(), ["com.example.work"])
+    }
+
+    func testUnreadableArrivalsAreFlagged() {
+        var objects: [AudioObjectID] = []
+        let arrivals = ProcessArrivals(classify: { _ in .unreadable }, list: { objects }, listen: false)
+        objects = [7]
+        arrivals.refresh()
+        XCTAssertEqual(arrivals.take(), [ProcessArrivals.unclassified])
     }
 }

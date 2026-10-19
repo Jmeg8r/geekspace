@@ -724,4 +724,44 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - Re-run: the negative control now fails on the leak check, **"89 window(s) carried the
     denylisted tone"**, exit 1. A normal run passes: 0 leaks, 21 control windows, 4
     segments, `stopped/signal`.
+- **2026-10-19, `feat/day-recorder-arrivals`: both round-5 P1s fixed by redesign, not by patch.**
+  - **Release is capped at the last *completed* classification pass.**
+    - `ProcessArrivals` stamps each pass with its start time (`checkedThrough`). The stamp
+      is published together with that pass's flags, under one lock.
+    - `TapRunner.tick` now *returns* the release limit. It reads the limit at entry, before
+      it takes flags, so every flag behind the limit has been acted on before the caller
+      releases. Both callers (`run`, `tap`) release against it. The ordering lives in one
+      place.
+    - Each tick also requests a pass, so the limit advances when nothing notifies. At most
+      one is queued.
+    - A classifier stalled for 5 s fails the run (spec R3), rather than holding without
+      bound.
+    - **Result:** a slow or stuck classifier now delays audio. It can no longer let audio
+      through.
+  - **A parent that has exited reads as `unreadable`.** After the app lookup returns no
+    bundle ID, the parent's liveness is checked with `kill(pid, 0)`. If it is alive now, it
+    was alive during the lookup, so "not an app" is real. If it is gone, it is unknown, and
+    unknown is dropped.
+  - **Unit tests (32):**
+    - a pass publishes its flags with its limit;
+    - a stalled pass holds the limit back and shows no flag;
+    - unreadable arrivals are flagged;
+    - an exited parent is `unreadable`.
+    - Mutation check: with the limit taken from the wall clock, both cap tests fail.
+  - **Live proof of the race** (`GS_TRANSIENT=slow-classifier`): polls every 700 ms, a
+    1.5 s hold, a 0.1 s second instance, and every classification slowed to 2.2 s with the
+    proof-only `--classify-delay-ms`.
+
+    | Run | Leaked | Rebuild dropped |
+    |---|---|---|
+    | Control, release by the clock (`--release-cap 0`) | **2** (115 and 221 ms after start) | silence |
+    | Capped, 3 of 3 | **0, 0, 0** | **loud audio** (0.15–0.17 RMS): the cap held instance 2's tone until its flag |
+
+    - Every capped run flagged instance 2 as `unclassified`. After 2.2 s it had exited, so
+      the fail-closed path was exercised too.
+    - Runs where instance 2 met a poll are rejected by the harness and re-run.
+  - **Regression:** the fast transient proof (control 5 leaked, listener 0), `run-segments`
+    (0 leaks, rebuild by `listener`, `stopped/signal`) and the PR 3a proof (0 leaked).
+  - The residual is unchanged: an object added and removed inside the ~1 ms handler read
+    latency leaves no trace.
 
