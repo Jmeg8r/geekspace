@@ -384,3 +384,23 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - The cost is system audio lost during each rebuild (5–6 windows, about 0.5 s, plus the
     rebuild itself). Only a new denylisted process triggers one.
   - Evidence: `spike-evidence/results/pr3a-second-instance-*.json`.
+- **2026-10-18, PR 3a, Codex round 1 (2 × P2), both fixed.**
+  - **Shutdown tail.** `releaseAll()` emitted the last `--hold-ms` of windows unchecked.
+    Shutdown now stops IO, polls once more, and drops the tail (event `tailDropped`) if a
+    new denylisted process appeared.
+  - **`--by bundle --rebuild-ms` is refused.** Bundle-only mode tracks no process objects,
+    so the rebuild could never fire.
+  - **Tail proof.** It uses a proof-only `--poll-stop-ms 1500` (no regular polls in the
+    last 1.5 s), with instance 2 launched at 2.6 s, so only the shutdown check stands
+    between instance 2 and a leak.
+    - With the check (`tailcheck-on`): 3 of 3 runs dropped the tail (5 windows) and
+      **0 leaked**.
+    - With `--tail-check 0` (`tailcheck-off`): **10 windows leaked in 1 of 3 runs**.
+      The other two leaked nothing even unprotected. That fits the spike's Q2 note that
+      bundle-ID exclusion silences one of two live processes; which one it picks appears
+      to vary between runs. So the hazard is intermittent, and the control showed it once
+      in three.
+  - **Timing sweeps without `--poll-stop-ms` were dropped.** The real tail window is about
+    20 ms, smaller than `open -n` launch jitter (about 300 ms), so most runs fell outside
+    it. One unforced hit (3.72 s) also dropped its tail with 0 leaked (seen in run output;
+    its result file was not kept).

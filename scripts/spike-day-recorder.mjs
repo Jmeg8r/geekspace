@@ -233,7 +233,7 @@ function requireAudible(label, tone, window, mode) {
  * of PR 71: an instance 1 that had already exited would turn this into the passing
  * single-late-launch case). `extra` is passed to the tap, e.g. the PR 3a rebuild flags.
  */
-async function secondInstance(by, extra = [], { control = false } = {}) {
+async function secondInstance(by, extra = [], { control = false, secondAtMs = LATE_LAUNCH_MS / 2 } = {}) {
   const firstSeconds = AUDIO_SECONDS * 3;
   const firstLog = launchTone("play", firstSeconds, "tap-first-instance");
   const firstPid = await waitForToneStart(firstLog);
@@ -243,7 +243,7 @@ async function secondInstance(by, extra = [], { control = false } = {}) {
   }
   const late = background(["tap", "--seconds", AUDIO_SECONDS, "--exclude", TONE_BUNDLE_ID, ...by, ...extra]);
   await captureLive(late);
-  await sleep(LATE_LAUNCH_MS / 2);
+  await sleep(secondAtMs);
   const log = launchTone("play", AUDIO_SECONDS, "tap-second-instance");
   // The control: a tone the tap must NOT exclude, starting after any rebuild would be done.
   let bgLog = null;
@@ -271,6 +271,7 @@ async function secondInstance(by, extra = [], { control = false } = {}) {
     leakedBeforeSecondStart: loud.filter((line) => line.t < tone.startT).length,
     leakedWindows100ms: leaked.length, windows100ms: lines.filter((line) => line.windowRms !== undefined).length,
     rebuilds: lines.filter((line) => line.event === "tapRebuilt"),
+    tailDrops: lines.filter((line) => line.event === "tailDropped"),
     summary: lines.find((line) => line.event === "summary") };
 }
 
@@ -441,7 +442,14 @@ const commands = {
     const extra = (process.env.GS_TAP_EXTRA ?? "").split(/\s+/).filter(Boolean);
     const label = process.env.GS_SPIKE_LABEL ?? (extra.length ? "rebuild" : "control");
     if (!/^[a-z0-9-]+$/.test(label)) throw new Error(`GS_SPIKE_LABEL must be [a-z0-9-], got ${label}`);
-    save(`pr3a-second-instance-${label}`, await secondInstance(["--by", "both"], extra, { control: true }));
+    // GS_SECOND_AT_MS launches instance 2 that long after capture starts. Near the deadline
+    // (AUDIO_SECONDS) it tests the shutdown tail; there is then no room for the control.
+    const secondAtMs = process.env.GS_SECOND_AT_MS ? Number(process.env.GS_SECOND_AT_MS) : undefined;
+    if (secondAtMs !== undefined && !(secondAtMs > 0 && secondAtMs < AUDIO_SECONDS * 1000)) {
+      throw new Error(`GS_SECOND_AT_MS must be inside the ${AUDIO_SECONDS} s capture, got ${process.env.GS_SECOND_AT_MS}`);
+    }
+    const control = secondAtMs === undefined;
+    save(`pr3a-second-instance-${label}`, await secondInstance(["--by", "both"], extra, { control, secondAtMs }));
   },
 
   async tap() {

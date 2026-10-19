@@ -218,7 +218,14 @@ enum Tap {
         let followMs = args.string("follow-ms").flatMap(Double.init)
         let rebuildMs = args.string("rebuild-ms").flatMap(Double.init)
         let holdMs = args.double("hold-ms", default: 0)
+        // --poll-stop-ms N: no rebuild polls in the last N ms, so a process starting then can
+        // only be caught by the shutdown check. A proof control that widens the race on
+        // purpose; never used in production.
+        let pollStopMs = args.double("poll-stop-ms", default: 0)
         if followMs != nil && rebuildMs != nil { fail("--follow-ms and --rebuild-ms are alternatives; pass one") }
+        // Rebuilds are driven by process objects; bundle-only mode tracks none, so a rebuild
+        // would never fire and the second-instance leak would stay (Codex review, PR 3a).
+        if rebuildMs != nil && args.string("by") == "bundle" { fail("--rebuild-ms needs process objects: use --by both") }
         // A rebuild can only drop what is still held: holding less than two polls would let
         // audio from a new process out before the poll that finds it has run.
         if let rebuildMs, holdMs < rebuildMs * 2 {
@@ -271,7 +278,7 @@ enum Tap {
                 break
             }
             try? await Task.sleep(nanoseconds: UInt64(releaseTickMs * 1_000_000))
-            if let rebuildMs, nowMs() >= nextCheck {
+            if let rebuildMs, nowMs() >= nextCheck, nowMs() < deadline - pollStopMs {
                 nextCheck = nowMs() + rebuildMs
                 let fresh = objectsNow()
                 let added = Set(fresh).subtracting(session.excluded)
@@ -292,8 +299,23 @@ enum Tap {
             meter.release(now: nowMs())
         }
         session.stop()
+        // The held tail has not been checked yet: a denylisted process that started after the
+        // last poll would be in it. Poll once more with IO stopped; release the tail only if
+        // nothing new appeared, otherwise drop it (Codex review, PR 3a).
+        // --tail-check 0 releases the tail unchecked: the proof's control, like --helpers 0.
+        if rebuildMs != nil && args.string("tail-check") != "0" {
+            let added = Set(objectsNow()).subtracting(session.excluded)
+            if added.isEmpty {
+                meter.releaseAll()
+            } else {
+                let dropped = meter.drop()
+                emit(["event": "tailDropped", "t": round3(nowMs()), "droppedWindows": dropped,
+                      "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID)])
+            }
+        } else {
+            meter.releaseAll()
+        }
         session.destroy()
-        meter.releaseAll()
 
         let totals = meter.totals()
         if let mismatch = totals.mismatch {

@@ -1,0 +1,39 @@
+{
+  "firstInstance": {
+    "startT": 1792371915953.9749,
+    "stopT": 1792371928561.3198,
+    "pid": 51964
+  },
+  "tone": {
+    "startT": 1792371920342.248,
+    "stopT": 1792371924554.2212,
+    "pid": 52199
+  },
+  "controlTone": null,
+  "tapArgs": [
+    "--by",
+    "both",
+    "--rebuild-ms",
+    "100",
+    "--hold-ms",
+    "500",
+    "--poll-stop-ms",
+    "1500",
+    "--tail-check",
+    "0"
+  ],
+  "leakedBeforeSecondStart": 0,
+  "leakedWindows100ms": 0,
+  "windows100ms": 40,
+  "rebuilds": [],
+  "tailDrops": [],
+  "summary": {
+    "dbfs": -999,
+    "droppedWindows": 0,
+    "event": "summary",
+    "excludedProcesses": 2,
+    "peak": 0,
+    "rms": 0,
+    "samples": 384000
+  }
+}
