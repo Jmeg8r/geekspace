@@ -9,40 +9,47 @@ import XCTest
 final class MenuBarDecisionTests: XCTestCase {
     let denylist = ["com.example.work"]
 
-    func testAllowedThroughoutNamesTheApp() {
+    func testAnyDenylistBlanksEveryFrame() {
+        // Covers allowed -> denylisted -> allowed DURING a capture: both samples say
+        // TextEdit, and the frame is still blanked (Codex review of PR 3b-1, round 2).
         let d = Run.menuBarDecision(before: "com.apple.TextEdit", after: "com.apple.TextEdit", denylist: denylist)
+        XCTAssertTrue(d.blank)
+        XCTAssertEqual(d.appBundleId, "com.apple.TextEdit")
+    }
+
+    func testEmptyDenylistBlanksNothing() {
+        let d = Run.menuBarDecision(before: "com.apple.TextEdit", after: "com.apple.TextEdit", denylist: [])
         XCTAssertFalse(d.blank)
         XCTAssertEqual(d.appBundleId, "com.apple.TextEdit")
     }
 
-    func testSwitchToDenylistedDuringCaptureBlanks() {
-        // The case the stale before-sample missed: allowed, then denylisted.
+    func testSwitchToDenylistedDuringCaptureNamesNoApp() {
         let d = Run.menuBarDecision(before: "com.apple.TextEdit", after: "com.example.work", denylist: denylist)
         XCTAssertTrue(d.blank)
         XCTAssertNil(d.appBundleId)
     }
 
-    func testSwitchAwayFromDenylistedBlanks() {
+    func testSwitchAwayFromDenylistedNamesNoApp() {
         let d = Run.menuBarDecision(before: "com.example.work", after: "com.apple.TextEdit", denylist: denylist)
         XCTAssertTrue(d.blank)
         XCTAssertNil(d.appBundleId)
     }
 
-    func testDenylistedHelperBundleCounts() {
+    func testDenylistedHelperBundleIsNotNamed() {
         let d = Run.menuBarDecision(before: "com.example.work.helper", after: "com.example.work.helper", denylist: denylist)
         XCTAssertTrue(d.blank)
+        XCTAssertNil(d.appBundleId)
     }
 
     func testSwitchBetweenAllowedAppsNamesNeither() {
         let d = Run.menuBarDecision(before: "com.apple.TextEdit", after: "com.apple.finder", denylist: denylist)
-        XCTAssertFalse(d.blank)
         XCTAssertNil(d.appBundleId)
     }
 
     func testPrefixWithoutDotIsNotTheApp() {
         // "com.example.workshop" is a different app, not a helper of com.example.work.
         let d = Run.menuBarDecision(before: "com.example.workshop", after: "com.example.workshop", denylist: denylist)
-        XCTAssertFalse(d.blank)
+        XCTAssertEqual(d.appBundleId, "com.example.workshop")
     }
 }
 

@@ -515,3 +515,15 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - putting the string dedupe back fails 4 of the 5 merge tests.
   - Both live proofs were re-run on the fixed binary: `run-menubar` 3 of 3, and OCR recall
     0.976.
+- **2026-10-18, PR 3b-1, Codex round 2 (1 × P1), fixed by closing the class.** Before and
+  after samples still miss an **allowed → denylisted → allowed** switch during a capture:
+  both say "allowed", yet the frame holds the denylisted app's menus. Ownership can't be
+  observed *during* a capture, so the round-1 approach couldn't be made complete.
+  - **Fix:** whenever the denylist is non-empty, **every frame's menu bar is blanked.**
+  - **Cost:** the menu-bar strip (app menus, clock, status icons), not window content.
+  - **App naming:** the app is still named only when both samples agree and neither is
+    denylisted.
+  - **Tests:** 12 `swift test` cases. A mutation back to endpoint-only blanking fails
+    exactly the mid-capture test.
+  - **Live proof re-run:** `run-menubar` 3 of 3. Every denylisted-run frame had a black
+    band; the control read TextEdit's Format menu and the canary.

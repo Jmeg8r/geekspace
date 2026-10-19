@@ -39,14 +39,17 @@ enum Run {
         return denylist.contains { bundle == $0 || bundle.hasPrefix($0 + ".") }
     }
 
-    /// What to do with a frame's menu bar, from its owner sampled BEFORE and AFTER the
-    /// capture. WHY both (Codex review of PR 3b-1): a switch to a denylisted app while the
-    /// capture is in flight puts that app's menus in the frame while the earlier sample still
-    /// says "allowed". So blank if either sample is denylisted, and name an app only when both
-    /// samples agree on it.
+    /// What to do with a frame's menu bar. Blank it whenever ANY app is denylisted.
+    /// WHY always, not only when a denylisted app owns it (Codex review of PR 3b-1, rounds 1
+    /// and 2): ownership can only be sampled around a capture, never during it, so a switch
+    /// allowed → denylisted → allowed while the capture is in flight puts the denylisted app's
+    /// menus in the frame with both samples saying "allowed". The menu bar has no owning app,
+    /// so the SCK filter can't remove it. Blanking every frame closes that whole class; the
+    /// cost is the menu-bar strip (app menus, clock, status icons), not window content.
+    /// The app is named only when both samples agree on it and neither is denylisted.
     static func menuBarDecision(before: String?, after: String?, denylist: [String]) -> (blank: Bool, appBundleId: String?) {
-        if denylisted(before, denylist) || denylisted(after, denylist) { return (true, nil) }
-        return (false, before == after ? before : nil)
+        let named = denylisted(before, denylist) || denylisted(after, denylist) || before != after ? nil : before
+        return (!denylist.isEmpty, named)
     }
 
     /// The menu bar's on-screen rects in global points. Excluding an app cannot remove them:
@@ -126,9 +129,8 @@ enum Run {
             let decision = menuBarDecision(before: ownerBefore, after: ownerAfter, denylist: denylist)
             if decision.blank {
                 let rects = menuBarRects()
-                // Never keep a frame whose menu bar could not be found while it shows a
-                // denylisted app's menus.
-                guard !rects.isEmpty else { fail("a denylisted app owns the menu bar, but no menu-bar window was found to blank") }
+                // Never keep a frame whose menu bar could not be found to blank.
+                guard !rects.isEmpty else { fail("an app is denylisted, but no menu-bar window was found to blank") }
                 image = blank(image, rects: rects, scale: captureScale)
             }
             let hash = Screen.dHash(image, grid: hashGrid)

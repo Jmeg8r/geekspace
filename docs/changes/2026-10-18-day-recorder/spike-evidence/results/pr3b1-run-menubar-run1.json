@@ -13,8 +13,16 @@
     {
       "menuBarBlanked": false,
       "appBundleId": "com.apple.TextEdit",
-      "bandMeanLuma": 128.322,
-      "bandLines": 3,
+      "bandMeanLuma": 128.286,
+      "bandLines": 2,
+      "bandHasFormatMenu": true,
+      "frameHasCanary": true
+    },
+    {
+      "menuBarBlanked": false,
+      "appBundleId": "com.apple.TextEdit",
+      "bandMeanLuma": 128.315,
+      "bandLines": 2,
       "bandHasFormatMenu": true,
       "frameHasCanary": true
     }

@@ -34,11 +34,12 @@ More detail on the fields:
 - **`shot.path`** is `<day>/shot-HHmmss-SSS.heic`, relative to the media root. That is the
   shape `dayRecorder.addScreenshot` accepts. Files are written atomically, so a path is never
   announced for a partial file.
-- **`shot.appBundleId`** is the app that owns the menu bar. It is `null` when that app is
-  denylisted, because when a work app was in use is information too, and when no app owns
-  the menu bar. The supervisor must store `null` as "unknown", never guess.
-- **`shot.menuBarBlanked`** is `true` when a denylisted app owned the menu bar and its band
-  was painted black before hashing, encoding and OCR.
+- **`shot.appBundleId`** is the app that owns the menu bar, sampled before and after the
+  capture. It is `null` when either sample is denylisted (when a work app was in use is
+  information too), when the two samples differ, or when no app owns the menu bar. The supervisor must store `null` as "unknown", never guess.
+- **`shot.menuBarBlanked`** is `true` whenever the denylist is non-empty. The menu-bar band is
+  then painted black before hashing, encoding and OCR, because a switch to a denylisted app
+  *during* a capture can't be observed (plan.md, PR 3b-1).
 - **`shot.ocrText`** is the full OCR text of the frame. **It must never reach a log.** It goes
   only into Convex (`screenshots.ocrText`). The same rule applies to any future field that
   carries captured content.
@@ -49,8 +50,8 @@ More detail on the fields:
 
 On any failure the helper writes `gs-capture: <message>` to **stderr** and **exits non-zero**.
 There is no error event. Failures include a missing permission, a ScreenCaptureKit call that
-hangs past 10 s (a process-exiting watchdog), an unwritable file, and a denylisted menu-bar
-owner whose menu bar can't be found to blank. The supervisor treats each of these as "Not
+hangs past 10 s (a process-exiting watchdog), an unwritable file, and a menu bar that can't
+be found to blank while the denylist is non-empty. The supervisor treats each of these as "Not
 recording" (spec R3):
 
 - a non-zero exit, or any exit not preceded by `stopped`;

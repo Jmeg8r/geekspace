@@ -355,12 +355,10 @@ const commands = {
     if (!control.every((s) => s.bandMeanLuma > BAND_CONTENT_LUMA && s.frameHasCanary)) {
       throw new Error("control: the band carried no content or TextEdit was not on screen; the check proves nothing");
     }
-    // Focus can move during a run (someone is using the Mac), and a frame whose menu-bar owner
-    // is NOT denylisted is rightly left alone. So: at least one frame was blanked (the case
-    // happened), every blanked frame's band is black and unread, no frame names TextEdit,
-    // and the canary never appears.
-    if (!denied.some((s) => s.menuBarBlanked)) throw new Error("denylisted: TextEdit never owned the menu bar during the run");
-    const leaks = denied.filter((s) => (s.menuBarBlanked && (s.bandMeanLuma > BAND_BLACK_LUMA || s.bandLines > 0))
+    // With any app denylisted, EVERY frame's menu bar is blanked (Codex review of PR 3b-1,
+    // round 2: a switch during a capture can't be observed). So every frame's band must be
+    // black and unread, no frame names TextEdit, and the canary never appears.
+    const leaks = denied.filter((s) => !s.menuBarBlanked || s.bandMeanLuma > BAND_BLACK_LUMA || s.bandLines > 0
       || s.appBundleId === TEXTEDIT_BUNDLE_ID || s.frameHasCanary);
     if (leaks.length) throw new Error(`denylisted: ${leaks.length} frame(s) kept menu-bar text, the canary or TextEdit's id`);
   },
