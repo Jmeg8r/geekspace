@@ -704,3 +704,16 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       exit 0.
     - A signal *before* `ready` can still arrive during process startup (exit 143, no
       lines). `protocol.md` says so.
+- **2026-10-19, `feat/day-recorder-arrivals` (follow-up to PR 3b-2): the listener's redesign.**
+  This branch reverts the removal commit, so `ProcessArrivals` and the
+  `tap-transient-instance` proof are back as they stood at round 4. It closes the OPEN RISK
+  above. **Not ready to merge.** Codex round 5's two P1s are still open here:
+  - **Release can pass classification still in flight.** `tick` reads only published flags;
+    `changed()` publishes after classifying every added object. Planned fix: the arrivals
+    queue stamps when it last *finished* a pass, and release is capped at that stamp minus
+    the hold. A stalled classifier then holds audio back instead of letting it through.
+  - **A parent that exits mid-lookup reads as a non-app parent (allowed).** Planned fix:
+    re-check the parent pid after resolving it, and return `unreadable` if it is gone.
+  - Proof plan: the existing transient proof (control must leak, listener 0 in 3 of 3),
+    plus unit tests for the release cap and the parent re-check. Then a tagged Codex round.
+
