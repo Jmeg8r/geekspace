@@ -15,9 +15,24 @@ import AudioToolbox
 import CoreAudio
 import Foundation
 
+/// Where a tap's samples go. One sink is shared by every tap session of a run, so a rebuild
+/// changes the session, never the sink. `ingest` runs on the tap's IO queue; the rest run on
+/// the caller's control queue.
+protocol TapSink: AnyObject {
+    func ingest(_ buffers: UnsafeMutableAudioBufferListPointer, tapChannels: Int)
+    /// Samples delivered so far, across every session.
+    func sampleCount() -> Int
+    /// Release everything held at least the hold time before `now`.
+    func release(now: Double)
+    func releaseAll()
+    /// Discard everything held. `windows` counts 100 ms windows and `maxRms` is the loudest,
+    /// so a proof can tell a drop that discarded real audio from one that discarded silence.
+    func drop() -> (windows: Int, maxRms: Double)
+}
+
 /// RMS per 100 ms window, held back `holdMs` before release. Shared by every tap session of
 /// one run, so totals span rebuilds.
-final class TapMeter: @unchecked Sendable {
+final class TapMeter: TapSink, @unchecked Sendable {
     private let lock = NSLock()
     private let holdMs: Double
     private let windowSize: Int
@@ -70,9 +85,7 @@ final class TapMeter: @unchecked Sendable {
         pending.removeFirst(ready.count)
     }
 
-    /// Discard everything held, including the window in progress. Returns how many full
-    /// windows were dropped and the loudest of them, so a proof can tell a drop that
-    /// discarded real leaked audio from one that discarded silence.
+    /// Discard everything held, including the window in progress.
     func drop() -> (windows: Int, maxRms: Double) {
         lock.lock()
         defer { lock.unlock() }
@@ -105,9 +118,9 @@ struct TapSession {
     let excluded: [AudioObjectID]
     let format: AudioStreamBasicDescription
 
-    /// `meterFor` returns the run's meter, creating it from the first session's format.
+    /// `sinkFor` returns the run's sink, creating it from the first session's format.
     static func make(excluding excluded: [AudioObjectID], bundleIDs: [String]?,
-                     meterFor: (AudioStreamBasicDescription) -> TapMeter) -> TapSession {
+                     sinkFor: (AudioStreamBasicDescription) -> TapSink) -> TapSession {
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
         if let bundleIDs {
             guard #available(macOS 26.0, *) else { fail("--by bundle needs macOS 26") }
@@ -155,11 +168,11 @@ struct TapSession {
         guard inputStreams == 1 else {
             fail("aggregate has \(inputStreams) input streams; the output device adds inputs, so the tap can't be measured alone")
         }
-        let meter = meterFor(format)
+        let sink = sinkFor(format)
         let tapChannels = Int(max(format.mChannelsPerFrame, 1))
         var procID: AudioDeviceIOProcID?
         Tap.osCheck(AudioDeviceCreateIOProcIDWithBlock(&procID, deviceID, DispatchQueue(label: "gs-capture.tap")) { _, input, _, _, _ in
-            meter.ingest(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)), tapChannels: tapChannels)
+            sink.ingest(UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input)), tapChannels: tapChannels)
         }, "AudioDeviceCreateIOProcIDWithBlock")
         guard let procID else { fail("AudioDeviceCreateIOProcIDWithBlock returned no IO proc") }
         return TapSession(tapID: tapID, deviceID: deviceID, procID: procID, description: description,
@@ -261,47 +274,24 @@ enum Tap {
         let objectsNow = { byBundle && !byBoth ? [] : excludedObjects(denylist) }
 
         var shared: TapMeter?
-        let makeSession = { (excluded: [AudioObjectID]) -> TapSession in
-            TapSession.make(excluding: excluded, bundleIDs: byBundle ? excludedBundleIDs : nil) { format in
-                if let shared { return shared }
-                let made = TapMeter(holdMs: holdMs, sampleRate: format.mSampleRate, channels: Int(max(format.mChannelsPerFrame, 1)))
-                shared = made
-                return made
-            }
+        let runner = TapRunner(objectsNow: objectsNow, bundleIDs: byBundle ? excludedBundleIDs : nil, rebuildMs: rebuildMs,
+                               report: { event, fields in emit(fields.merging(["event": event]) { _, new in new }) }) { format in
+            if let shared { return shared }
+            let made = TapMeter(holdMs: holdMs, sampleRate: format.mSampleRate, channels: Int(max(format.mChannelsPerFrame, 1)))
+            shared = made
+            return made
         }
-        var session = makeSession(objectsNow())
         guard let meter = shared else { fail("tap meter was not created") }
-        session.start()
-        emit(["event": "started", "t": round3(nowMs()), "excludedProcesses": session.excluded.count,
-              "excludedBundles": byBundle ? excludedBundleIDs : session.excluded.map(ProcWatch.bundleID),
-              "by": byBoth ? "both" : byBundle ? "bundle" : "process", "sampleRate": session.format.mSampleRate,
-              "channels": session.format.mChannelsPerFrame, "holdMs": holdMs, "rebuildMs": rebuildMs ?? -1])
+        emit(["event": "started", "t": round3(nowMs()), "excludedProcesses": runner.session.excluded.count,
+              "excludedBundles": byBundle ? excludedBundleIDs : runner.session.excluded.map(ProcWatch.bundleID),
+              "by": byBoth ? "both" : byBundle ? "bundle" : "process", "sampleRate": runner.session.format.mSampleRate,
+              "channels": runner.session.format.mChannelsPerFrame, "holdMs": holdMs, "rebuildMs": rebuildMs ?? -1])
 
         let deadline = nowMs() + seconds * 1000
-        var nextCheck = nowMs()
-        // The current session's start and the sample count it started from.
-        var sessionStart = nowMs()
-        var sessionBaseline = meter.sampleCount()
-        let requireDelivery = {
-            if nowMs() - sessionStart >= sessionDeliveryDeadlineMs && meter.sampleCount() == sessionBaseline {
-                fail("the tap delivered no samples in \(Int(sessionDeliveryDeadlineMs)) ms after it was (re)built")
-            }
-        }
-        // Every session is judged when it ends (a rebuild or shutdown), not only once it has
-        // lived a full deadline: a silent session in the last second would otherwise pass on
-        // the previous session's samples (Codex review, PR 3a, final check).
-        let endSession = { (why: String) in
-            let lived = nowMs() - sessionStart
-            guard meter.sampleCount() == sessionBaseline else { return }
-            if lived >= minVerifiableSessionMs {
-                fail("the tap delivered no samples in its \(Int(lived)) ms session (ended by \(why))")
-            }
-            emit(["event": "sessionUnverified", "t": round3(nowMs()), "livedMs": round3(lived), "endedBy": why])
-        }
         while nowMs() < deadline {
             if let followMs {
                 try? await Task.sleep(nanoseconds: UInt64(followMs * 1_000_000))
-                session = follow(session, denylist: denylist)
+                runner.session = follow(runner.session, denylist: denylist)
                 meter.release(now: nowMs())
                 continue
             }
@@ -310,53 +300,15 @@ enum Tap {
                 break
             }
             try? await Task.sleep(nanoseconds: UInt64(releaseTickMs * 1_000_000))
-            if let rebuildMs, nowMs() >= nextCheck, nowMs() < deadline - pollStopMs {
-                nextCheck = nowMs() + rebuildMs
-                let fresh = objectsNow()
-                let added = Set(fresh).subtracting(session.excluded)
-                if !added.isEmpty {
-                    // Order matters: stop IO first, so nothing reaches the meter after the
-                    // drop; then drop what is held; then rebuild around the new processes.
-                    let begun = nowMs()
-                    session.stop()
-                    endSession("rebuild")
-                    let dropped = meter.drop()
-                    session.destroy()
-                    session = makeSession(fresh)
-                    session.start()
-                    sessionStart = nowMs()
-                    sessionBaseline = meter.sampleCount()
-                    emit(["event": "tapRebuilt", "t": round3(nowMs()), "droppedWindows": dropped.windows,
-                          "droppedMaxRms": dropped.maxRms,
-                          "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
-                          "excludedProcesses": fresh.count, "rebuildMs": round3(nowMs() - begun)])
-                }
-            }
-            requireDelivery()
+            let polling = nowMs() < deadline - pollStopMs
+            runner.tick(poll: polling)
             // While polls are suppressed (--poll-stop-ms), hold everything: the shutdown check
             // must judge the whole unpolled span, not just its last --hold-ms (Codex, PR 3a).
-            if nowMs() < deadline - pollStopMs { meter.release(now: nowMs()) }
+            if polling { meter.release(now: nowMs()) }
         }
-        session.stop()
-        endSession("shutdown")
-        // The held tail has not been checked yet: a denylisted process that started after the
-        // last poll would be in it. Poll once more with IO stopped; release the tail only if
-        // nothing new appeared, otherwise drop it (Codex review, PR 3a).
         // --tail-check 0 releases the tail unchecked: the proof's control, like --helpers 0.
-        if rebuildMs != nil && args.string("tail-check") != "0" {
-            let added = Set(objectsNow()).subtracting(session.excluded)
-            if added.isEmpty {
-                meter.releaseAll()
-            } else {
-                let dropped = meter.drop()
-                emit(["event": "tailDropped", "t": round3(nowMs()), "droppedWindows": dropped.windows,
-                      "droppedMaxRms": dropped.maxRms,
-                      "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID)])
-            }
-        } else {
-            meter.releaseAll()
-        }
-        session.destroy()
+        runner.finish(tailCheck: rebuildMs != nil && args.string("tail-check") != "0")
+        let session = runner.session
 
         let totals = meter.totals()
         if let mismatch = totals.mismatch {
@@ -398,5 +350,116 @@ enum Tap {
               "excludedBundles": fresh.map(ProcWatch.bundleID)])
         return TapSession(tapID: session.tapID, deviceID: session.deviceID, procID: session.procID,
                           description: updated, excluded: fresh, format: session.format)
+    }
+}
+
+/// The PR 3a rebuild loop, shared by `tap` (the proof command) and `run` (production), so the
+/// second-instance fix and its proof cover one implementation. The caller owns timing: it
+/// calls `tick` every `Tap.releaseTickMs`, releases its sink, and calls `finish` once.
+/// Not thread-safe: call it from one queue.
+final class TapRunner {
+    private let objectsNow: () -> [AudioObjectID]
+    private let makeSession: ([AudioObjectID]) -> TapSession
+    private let rebuildMs: Double?
+    private let report: (String, [String: Any]) -> Void
+    let sink: TapSink
+    /// Settable only for the spike's --follow-ms path, which updates the tap in place.
+    var session: TapSession
+    // The current session's start and the sample count it started from.
+    private var sessionStart: Double
+    private var sessionBaseline: Int
+    private var nextCheck: Double
+
+    /// Builds and starts the first session. `sinkFor` is called once per session with the
+    /// tap's format and must return the same sink every time.
+    init(objectsNow: @escaping () -> [AudioObjectID], bundleIDs: [String]?, rebuildMs: Double?,
+         report: @escaping (String, [String: Any]) -> Void,
+         sinkFor: @escaping (AudioStreamBasicDescription) -> TapSink) {
+        self.objectsNow = objectsNow
+        self.rebuildMs = rebuildMs
+        self.report = report
+        var first: TapSink?
+        makeSession = { excluded in
+            TapSession.make(excluding: excluded, bundleIDs: bundleIDs) { format in
+                let sink = sinkFor(format)
+                if first == nil { first = sink }
+                return sink
+            }
+        }
+        session = makeSession(objectsNow())
+        guard let first else { fail("the tap sink was not created") }
+        sink = first
+        session.start()
+        sessionStart = nowMs()
+        sessionBaseline = sink.sampleCount()
+        nextCheck = nowMs()
+    }
+
+    /// Rebuild around any new denylisted process (when `poll` and a poll is due), then fail
+    /// if the current session has gone silent.
+    func tick(poll: Bool) {
+        if poll, let rebuildMs, nowMs() >= nextCheck {
+            nextCheck = nowMs() + rebuildMs
+            let fresh = objectsNow()
+            let added = Set(fresh).subtracting(session.excluded)
+            if !added.isEmpty {
+                // Order matters: stop IO first, so nothing reaches the sink after the drop;
+                // then drop what is held; then rebuild around the new processes.
+                let begun = nowMs()
+                session.stop()
+                endSession("rebuild")
+                let dropped = sink.drop()
+                session.destroy()
+                session = makeSession(fresh)
+                session.start()
+                sessionStart = nowMs()
+                sessionBaseline = sink.sampleCount()
+                report("tapRebuilt", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
+                                      "droppedMaxRms": dropped.maxRms,
+                                      "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
+                                      "excludedProcesses": fresh.count, "rebuildMs": round3(nowMs() - begun)])
+            }
+        }
+        // AudioDeviceStart returning noErr is not evidence of delivery (see TapAutoStart), and
+        // the shared sink's totals would hide a silent replacement behind the previous
+        // session's samples (Codex review, PR 3a).
+        if nowMs() - sessionStart >= Tap.sessionDeliveryDeadlineMs && sink.sampleCount() == sessionBaseline {
+            fail("the tap delivered no samples in \(Int(Tap.sessionDeliveryDeadlineMs)) ms after it was (re)built")
+        }
+    }
+
+    /// Stop IO and settle the held tail. The tail has not been checked yet: a denylisted
+    /// process that started after the last poll would be in it. With `tailCheck`, poll once
+    /// more with IO stopped and release the tail only if nothing new appeared, otherwise drop
+    /// it (Codex review, PR 3a). Without it the tail is released unchecked.
+    func finish(tailCheck: Bool) {
+        session.stop()
+        endSession("shutdown")
+        if tailCheck {
+            let added = Set(objectsNow()).subtracting(session.excluded)
+            if added.isEmpty {
+                sink.releaseAll()
+            } else {
+                let dropped = sink.drop()
+                report("tailDropped", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
+                                       "droppedMaxRms": dropped.maxRms,
+                                       "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID)])
+            }
+        } else {
+            sink.releaseAll()
+        }
+        session.destroy()
+    }
+
+    /// Every session is judged when it ends (a rebuild or shutdown), not only once it has
+    /// lived a full deadline: a silent session in the last second would otherwise pass on
+    /// the previous session's samples (Codex review, PR 3a, final check).
+    private func endSession(_ why: String) {
+        let lived = nowMs() - sessionStart
+        guard sink.sampleCount() == sessionBaseline else { return }
+        if lived >= Tap.minVerifiableSessionMs {
+            fail("the tap delivered no samples in its \(Int(lived)) ms session (ended by \(why))")
+        }
+        report("sessionUnverified", ["t": round3(nowMs()), "livedMs": round3(lived), "endedBy": why])
     }
 }
