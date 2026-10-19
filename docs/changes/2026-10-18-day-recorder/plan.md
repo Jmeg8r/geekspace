@@ -645,3 +645,25 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     it under the same output lock, so a line in progress finishes first. A shot written but
     not announced in that window is an orphan file, covered by the PR 3c sweep noted above.
     `run-segments` asserts the last line is `stopped/signal` (3 of 3).
+- **2026-10-19, PR 3b-2, Codex round 4 (tagged, 2 × P1), both fixed.** Both were races in
+  the round-3 listener.
+  - **Audio could pass the hold while `tick` blocked.** The release used the time *after*
+    `tick` had checked arrivals. A flag raised while `tick` blocked (for example writing
+    `tapRebuilt` to a full pipe) could miss audio that had meanwhile become old enough to
+    release.
+    - **Fix:** the release boundary is taken **before** the arrival check, in both `run`
+      and `tap`. A later flag belongs to a process added after that moment, so none of its
+      audio is old enough. A slow tick now delays a release; it never widens one.
+  - **A process exiting mid-classification read as allowed.** `Tap.denylisted` answers a
+    yes/no question, so an unreadable bundle ID or parent became "no".
+    - **Fix:** the listener now uses `Tap.classify`, which returns `denylisted`, `allowed`
+      or `unreadable`, with every property read status-checked (`ProcWatch.checkedPid` and
+      `checkedBundleID`). An unreadable result is flagged and forces a drop.
+    - A parent that is not an app (launchd, a shell) is `allowed`, not `unreadable`.
+      Measured: the bundle-less control tone caused no extra rebuild in any run.
+  - **Re-proof:**
+    - `tap-transient-instance`: control **5 leaked**; listener **0 in 3 of 3**, one
+      listener rebuild each.
+    - `run-segments`: 3 of 3, 0 leaks, 21 control windows, last line `stopped/signal`.
+    - PR 3a proof: 0 leaked.
+    - `swift test`: 28 tests (4 new classification cases).

@@ -259,7 +259,7 @@ final class SystemAudioRecorder {
             let bundleIDs = denylist.isEmpty ? nil : denylist.flatMap { [$0, "\($0).helper"] }
             // Nothing denylisted, nothing to protect: an unclassifiable arrival would only
             // cost audio.
-            let arrivals = denylist.isEmpty ? nil : ProcessArrivals(isDenylisted: { Tap.denylisted($0, denylist) })
+            let arrivals = denylist.isEmpty ? nil : ProcessArrivals(classify: { Tap.classify($0, denylist) })
             let runner = TapRunner(objectsNow: { Tap.excludedObjects(denylist) }, bundleIDs: bundleIDs,
                                    rebuildMs: SystemAudioRecorder.rebuildMs, arrivals: arrivals, report: report) { [unowned self] format in
                 if let hold = self.hold, let writer = self.writer {
@@ -283,8 +283,12 @@ final class SystemAudioRecorder {
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(Int(Tap.releaseTickMs)))
             timer.setEventHandler {
+                // The release boundary is fixed BEFORE tick checks arrivals: a flag raised
+                // while tick runs (or blocks) belongs to a process added after this moment, so
+                // none of its audio is old enough to release (Codex review of PR 3b-2, round 4).
+                let boundary = nowMs()
                 runner.tick(poll: true)
-                runner.sink.release(now: nowMs())
+                runner.sink.release(now: boundary)
             }
             timer.resume()
             self.timer = timer

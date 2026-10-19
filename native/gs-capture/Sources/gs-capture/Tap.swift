@@ -215,6 +215,29 @@ enum Tap {
     /// "<app>." (com.github.Electron.helper, com.google.Chrome.helper.renderer), or if its
     /// parent process is the app. Either signal alone has gaps; together they cover both
     /// helper naming conventions seen so far.
+    enum Classification: Equatable { case denylisted(String), allowed, unreadable }
+
+    /// The arrivals listener's classification. Unlike `denylisted`, every property read is
+    /// status-checked: a process that exits at any point during classification reads as
+    /// `unreadable`, never as allowed (Codex review of PR 3b-2, round 4). Same rule otherwise.
+    static func classify(_ object: AudioObjectID, _ denylist: [String]) -> Classification {
+        guard let pid = ProcWatch.checkedPid(object), pid > 0,
+              let bundle = ProcWatch.checkedBundleID(object) else { return .unreadable }
+        return classify(bundle: bundle, parent: parentPid(pid), parentBundle: { pid in
+            NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        }, denylist)
+    }
+
+    /// The pure half, testable: `parent` is -1 when the parent could not be read.
+    static func classify(bundle: String, parent: pid_t, parentBundle: (pid_t) -> String?, _ denylist: [String]) -> Classification {
+        if denylist.contains(where: { bundle == $0 || bundle.hasPrefix($0 + ".") }) { return .denylisted(bundle) }
+        guard parent > 0 else { return .unreadable }
+        // A parent that is not an app (launchd, a shell) has no bundle ID: that is allowed,
+        // not unreadable. A live process always has a readable parent.
+        if let parentID = parentBundle(parent), denylist.contains(parentID) { return .denylisted(parentID) }
+        return .allowed
+    }
+
     static func denylisted(_ object: AudioObjectID, _ denylist: [String]) -> Bool {
         let bundle = ProcWatch.bundleID(object)
         if denylist.contains(where: { bundle == $0 || bundle.hasPrefix($0 + ".") }) { return true }
@@ -277,7 +300,7 @@ enum Tap {
         // --listen 0 turns the arrivals listener off: the proof's control for a process that
         // starts and exits between polls (Codex review of PR 3b-2), like --helpers 0.
         let arrivals = rebuildMs != nil && !denylist.isEmpty && args.string("listen") != "0"
-            ? ProcessArrivals(isDenylisted: { denylisted($0, denylist) }) : nil
+            ? ProcessArrivals(classify: { classify($0, denylist) }) : nil
         let runner = TapRunner(objectsNow: objectsNow, bundleIDs: byBundle ? excludedBundleIDs : nil, rebuildMs: rebuildMs,
                                arrivals: arrivals, report: { event, fields in emit(fields.merging(["event": event]) { _, new in new }) }) { format in
             if let shared { return shared }
@@ -305,10 +328,12 @@ enum Tap {
             }
             try? await Task.sleep(nanoseconds: UInt64(releaseTickMs * 1_000_000))
             let polling = nowMs() < deadline - pollStopMs
+            // Fixed before the arrival check, as in SystemAudioRecorder (Codex, PR 3b-2 round 4).
+            let boundary = nowMs()
             runner.tick(poll: polling)
             // While polls are suppressed (--poll-stop-ms), hold everything: the shutdown check
             // must judge the whole unpolled span, not just its last --hold-ms (Codex, PR 3a).
-            if polling { meter.release(now: nowMs()) }
+            if polling { meter.release(now: boundary) }
         }
         // --tail-check 0 releases the tail unchecked: the proof's control, like --helpers 0.
         runner.finish(tailCheck: rebuildMs != nil && args.string("tail-check") != "0")
@@ -362,8 +387,8 @@ enum Tap {
 /// WHY (Codex review of PR 3b-2, P1): a poll compares only the objects alive *now*. A helper
 /// that lives under one poll interval leaves both snapshots identical, and its held audio
 /// would be released and written. The process-list listener fires on the add itself.
-/// An added object whose pid can no longer be read (it is already exiting) counts as
-/// denylisted: a wrong drop costs 0.5 s of audio, a wrong release writes audio from an app
+/// An added object whose identity can no longer be read at any step (it is exiting) counts
+/// as denylisted: a wrong drop costs 0.5 s of audio, a wrong release writes audio from an app
 /// the user excluded.
 /// Measured on macOS 27.0: the HAL sends every list notification twice, about 1 ms apart, so a
 /// notification that shows no change is normal and proves nothing. RESIDUAL: an object added
@@ -374,15 +399,15 @@ final class ProcessArrivals: @unchecked Sendable {
 
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "gs-capture.arrivals")
-    private let isDenylisted: (AudioObjectID) -> Bool
+    private let classify: (AudioObjectID) -> Tap.Classification
     // Touched only on `queue`.
     private var known: Set<AudioObjectID> = []
     // Guarded by `lock`: what was flagged since the last `take`.
     private var flagged: [String] = []
     private var listener: AudioObjectPropertyListenerBlock?
 
-    init(isDenylisted: @escaping (AudioObjectID) -> Bool) {
-        self.isDenylisted = isDenylisted
+    init(classify: @escaping (AudioObjectID) -> Tap.Classification) {
+        self.classify = classify
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
         var addr = ProcWatch.address(kAudioHardwarePropertyProcessObjectList)
         let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, queue, block)
@@ -417,11 +442,10 @@ final class ProcessArrivals: @unchecked Sendable {
         known = current
         var hits: [String] = []
         for object in added {
-            // A pid that can't be read means the object is already gone: unclassifiable.
-            if ProcWatch.pid(object) <= 0 {
-                hits.append(ProcessArrivals.unclassified)
-            } else if isDenylisted(object) {
-                hits.append(ProcWatch.bundleID(object))
+            switch classify(object) {
+            case .denylisted(let bundle): hits.append(bundle)
+            case .unreadable: hits.append(ProcessArrivals.unclassified)
+            case .allowed: break
             }
         }
         guard !hits.isEmpty else { return }

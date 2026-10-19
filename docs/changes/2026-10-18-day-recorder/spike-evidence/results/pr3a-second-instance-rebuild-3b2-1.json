@@ -1,18 +1,18 @@
 {
   "firstInstance": {
-    "startT": 1792444459221.7031,
-    "stopT": 1792444471829.418,
-    "pid": 58766
+    "startT": 1792445197301.76,
+    "stopT": 1792445209909.828,
+    "pid": 72872
   },
   "tone": {
-    "startT": 1792444462090.856,
-    "stopT": 1792444466293.005,
-    "pid": 58808
+    "startT": 1792445200264.657,
+    "stopT": 1792445204470.1938,
+    "pid": 72907
   },
   "controlTone": {
-    "startT": 1792444463545.843,
-    "stopT": 1792444464598.96,
-    "pid": 58822,
+    "startT": 1792445201717.3518,
+    "stopT": 1792445202775.195,
+    "pid": 72919,
     "capturedWindows100ms": 11
   },
   "tapArgs": [
@@ -40,20 +40,20 @@
       "droppedWindows": 5,
       "event": "tapRebuilt",
       "excludedProcesses": 2,
-      "rebuildMs": 89.503,
-      "t": 1792444462046.442,
+      "rebuildMs": 86.454,
+      "t": 1792445200216.911,
       "trigger": "listener"
     }
   ],
   "tailDrops": [],
   "droppedLoud": false,
   "summary": {
-    "dbfs": -20.818,
+    "dbfs": -20.774,
     "droppedWindows": 5,
     "event": "summary",
     "excludedProcesses": 2,
-    "peak": 0.25236448645591736,
-    "rms": 0.09101072424037929,
+    "peak": 0.25004056096076965,
+    "rms": 0.0914780474092418,
     "samples": 374784
   }
 }
