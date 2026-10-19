@@ -41,6 +41,8 @@ const CAPTURE_LIVE_TIMEOUT_MS = 15_000;
 const FOLLOW_MS = 200;
 // Anything above -60 dBFS in a 100 ms window counts as leaked tone.
 const LEAK_RMS = 0.001;
+// The tap meters 100 ms windows (Tap.swift), each stamped when it completes.
+const WINDOW_MS = 100;
 // PR 3a control tone: starts this long after instance 2, well after a rebuild finishes.
 const CONTROL_DELAY_MS = 1_500;
 const CONTROL_SECONDS = 1;
@@ -261,15 +263,22 @@ async function secondInstance(by, extra = [], { control = false, secondAtMs = LA
   let leaked = loud;
   if (bgLog) {
     const heardTone = requireAudible("background-control", await spikeToneInterval(bgLog, CONTROL_SECONDS), window, "late");
-    // Leaks are loud windows before the control starts; after it, loudness is the control.
-    leaked = loud.filter((line) => line.t < heardTone.startT);
-    const heard = loud.filter((line) => line.t >= heardTone.startT && line.t <= heardTone.stopT).length;
+    // A window is stamped when it completes, so it covers (t - WINDOW_MS, t]. Windows that
+    // overlap the control tone are the control; every other loud window, before OR after
+    // it, is a leak (Codex review of PR 3a: counting only before the control hid late leaks).
+    const overlapsControl = (line) => line.t > heardTone.startT && line.t - WINDOW_MS < heardTone.stopT;
+    leaked = loud.filter((line) => !overlapsControl(line));
+    const heard = loud.filter(overlapsControl).length;
     if (heard === 0) throw new Error("the tap captured nothing of the background control: it stopped capturing");
     controlTone = { ...heardTone, capturedWindows100ms: heard };
   }
   return { firstInstance: first, tone, controlTone, tapArgs: [...by, ...extra],
     leakedBeforeSecondStart: loud.filter((line) => line.t < tone.startT).length,
-    leakedWindows100ms: leaked.length, windows100ms: lines.filter((line) => line.windowRms !== undefined).length,
+    leakedWindows100ms: leaked.length,
+    // Each leaked window relative to the tones, so a leak can be attributed, not guessed at.
+    leakedDetail: leaked.map((line) => ({ rms: line.windowRms, msAfterSecondStart: Math.round(line.t - tone.startT),
+      msAfterControlStop: controlTone ? Math.round(line.t - controlTone.stopT) : null })),
+    windows100ms: lines.filter((line) => line.windowRms !== undefined).length,
     rebuilds: lines.filter((line) => line.event === "tapRebuilt"),
     tailDrops: lines.filter((line) => line.event === "tailDropped"),
     // Did a drop discard audible audio? The direct evidence that the check stopped a leak.

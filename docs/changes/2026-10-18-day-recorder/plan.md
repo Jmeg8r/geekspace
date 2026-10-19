@@ -370,13 +370,25 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   bundle ID) starting 1.5 s after instance 2. That shows the tap still captures after a
   rebuild.
 
-  | Run | Leaked windows before the control | Control windows captured | Rebuild |
-  |---|---|---|---|
-  | Without the rebuild (control) | **17** | 11 | none |
-  | Rebuild, run 1 | **0** | 10 | 6 dropped, 82 ms |
-  | Rebuild, run 2 | **0** | 11 | 5 dropped, 99 ms |
-  | Rebuild, run 3 | **0** | 10 | 5 dropped, 103 ms |
+  Results below use the corrected leak counter from Codex round 3. Any loud window that does
+  not overlap the control tone counts as a leak, before or after the control.
 
+  | Run | Leaked windows | Control windows captured | Rebuild |
+  |---|---|---|---|
+  | Without the rebuild (control) | **15** | 12 | none |
+  | Rebuild, runs 1 and 3 | **0**, **0** | 11, 12 | 6 and 5 dropped |
+  | Rebuild, run 2 | **1** | 11 | 5 dropped |
+  | Rebuild, diagnostic runs a–l (12 runs) | **0** in every run | captured every run | 5–6 dropped each |
+
+  - **One leaked window in 15 rebuild runs, not attributed.** Run 2 had a single 100 ms
+    window above the leak threshold. It predates the per-window detail logging
+    (`leakedDetail`), so which audio it held is unknown. Twelve further runs with detail
+    logging found no leak.
+  - A plausible cause is the control tone's own audio continuing past its logged stop
+    because of output latency. That is **unverified**, so it is not recorded as the
+    cause.
+  - PR 3c's 2-hour soak keeps the detail logging and must attribute any recurrence before
+    v1 relies on the tap.
   - Every run had 0 leaks before instance 2 started, so instance 1 stayed excluded.
   - An earlier control run with no control tone leaked 28 windows. The spike saw 27–31.
   - In every rebuild run the watcher found instance 2's process object 75–82 ms *before*
@@ -420,3 +432,8 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       original leak's level and released none of it. That run is the evidence the check
       matters; it is not inferred from zero-leak runs alone.
     - Results: `spike-evidence/results/pr3a-second-instance-tailcheck-*.json`.
+- **2026-10-18, PR 3a, Codex round 3 (1 × P2), fixed.** The harness counted a leak only
+  *before* the control tone started, so a late leak could read as zero. It now excludes
+  just the windows overlapping the control (allowing for the 100 ms window). Codex's repro
+  case, a leak at 3900 ms after a 2700–3700 ms control, now counts as a leak. The main
+  proof was re-run with this counter; see the table in the PR 3a entry above.
