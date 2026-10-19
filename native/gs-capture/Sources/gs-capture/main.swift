@@ -12,7 +12,8 @@ usage: gs-capture <command> [options]
   audio          [--seconds s] [--exclude ids] [--out f.wav]
   procwatch      [--seconds s] [--poll-ms n]
   tap            [--seconds s] [--exclude ids] [--follow-ms n] [--by bundle|both]  CoreAudio tap
-  ocr            [--level fast|accurate] [--text 1] image...
+  ocr            [--level fast|accurate|merged] [--text 1] image...
+  run            --media-root dir [--denylist ids] [--shot-sec s] [--duration s]  production (protocol v1)
   render-fixtures --spec f.json --dir d
   selftest-timeout [--seconds s]                           must exit 1 (watchdog proof)
 """
@@ -30,6 +31,7 @@ case "audio": await SystemAudio.capture(args)
 case "procwatch": await ProcWatch.run(args)
 case "tap": await Tap.run(args)
 case "ocr": OCR.run(args)
+case "run": await Run.run(args)
 case "render-fixtures": OCR.renderFixtures(args)
 case "selftest-timeout":
     // Proves the watchdog escapes a hang that ignores cancellation, as a stuck SCK call did:

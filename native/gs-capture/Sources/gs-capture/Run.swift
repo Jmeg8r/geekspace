@@ -1,0 +1,153 @@
+// WHAT: `gs-capture run`, the production capture process the Electron supervisor spawns.
+// It takes a screenshot every --shot-sec, keeps only frames that changed, writes them as HEIC
+// under <media-root>/<day>/, runs OCR on them, and reports each one as a protocol-v1 JSON line
+// (docs/changes/2026-10-18-day-recorder/protocol.md). System audio joins in PR 3b-2.
+// WHY one long-lived process: TCC grants, the SCK watchdog and the denylist apply to one
+// signed binary, and the supervisor only has to watch one child (spec R3).
+import AppKit
+import CoreGraphics
+import Foundation
+
+enum Run {
+    static let protocolVersion = 1
+    // The supervisor treats a silent helper as hung (spec R3: an error within 10 s), so the
+    // heartbeat comes well inside that.
+    static let heartbeatSec = 5.0
+    // Settled in the spike (Q6): a 32-wide dHash and a Hamming distance of 8 skip unchanged
+    // screens without dropping a changed paragraph.
+    static let hashGrid = 32
+    static let skipHamming = 8
+    static let heicQuality = 0.6
+    // Point resolution (scale 1) was settled for OCR in the spike (Q5).
+    static let captureScale = 1.0
+    // The menu bar is a Window Server window at this layer (kCGMainMenuWindowLevel). Measured
+    // on macOS 27.0: one window, 0,0 1920x30 points on the main display.
+    static let menuBarLayer = 24
+    // Same shape the Convex boundary accepts (convex/lib/dayRecorder.ts).
+    static let bundleIDPattern = #"^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$"#
+
+    static func line(_ event: String, _ fields: [String: Any] = [:]) {
+        var object = fields
+        object["v"] = protocolVersion
+        object["event"] = event
+        emit(object)
+    }
+
+    /// The denylist rule the tap uses too: the app itself or any "<app>." helper bundle.
+    static func denylisted(_ bundle: String?, _ denylist: [String]) -> Bool {
+        guard let bundle else { return false }
+        return denylist.contains { bundle == $0 || bundle.hasPrefix($0 + ".") }
+    }
+
+    /// The menu bar's on-screen rects in global points. Excluding an app cannot remove them:
+    /// the menu bar has no owning app (spike Q1), so while a denylisted app owns it, it is
+    /// blanked instead.
+    static func menuBarRects() -> [CGRect] {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.compactMap { window in
+            guard (window[kCGWindowLayer as String] as? Int) == menuBarLayer,
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds) else { return nil }
+            return rect
+        }
+    }
+
+    /// `image` with every rect (global points, top-left origin, main display at 0,0) painted
+    /// black. Fails rather than returning the unblanked frame.
+    static func blank(_ image: CGImage, rects: [CGRect], scale: Double) -> CGImage {
+        let width = image.width, height = image.height
+        guard let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            fail("cannot create blanking context \(width)x\(height)")
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        for rect in rects {
+            // CoreGraphics draws bottom-up; window bounds are top-down.
+            let pixels = CGRect(x: rect.minX * scale, y: Double(height) - rect.maxY * scale,
+                                width: rect.width * scale, height: rect.height * scale)
+            context.fill(pixels)
+        }
+        guard let blanked = context.makeImage() else { fail("cannot read back the blanked frame") }
+        return blanked
+    }
+
+    static func dayAndFile(_ date: Date) -> (day: String, file: String) {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let day = formatter.string(from: date)
+        formatter.dateFormat = "HHmmss-SSS"
+        return (day, "shot-\(formatter.string(from: date)).heic")
+    }
+
+    static func run(_ args: Args) async {
+        let root = args.required("media-root")
+        var isDir: ObjCBool = false
+        guard root.hasPrefix("/"), FileManager.default.fileExists(atPath: root, isDirectory: &isDir), isDir.boolValue else {
+            fail("--media-root must be an existing absolute directory, got \(root)")
+        }
+        let denylist = args.list("denylist")
+        for id in denylist where id.range(of: bundleIDPattern, options: .regularExpression) == nil {
+            fail("--denylist entry is not a bundle id: \(id)")
+        }
+        let shotSec = args.double("shot-sec", default: 30)
+        // --duration is for proofs; the supervisor runs the helper until it stops it.
+        let duration = args.optionalDouble("duration")
+
+        line("ready", ["pid": Int(getpid()), "shotSec": shotSec, "denylist": denylist])
+        Task.detached {
+            while true {
+                try? await Task.sleep(nanoseconds: UInt64(heartbeatSec * 1_000_000_000))
+                line("heartbeat", ["t": round3(nowMs())])
+            }
+        }
+
+        let started = nowMs()
+        var lastKept: [Bool]?
+        while duration.map({ nowMs() - started < $0 * 1000 }) ?? true {
+            let tickStart = nowMs()
+            let takenAt = Date()
+            let owner = NSWorkspace.shared.menuBarOwningApplication?.bundleIdentifier
+            let ownerDenied = denylisted(owner, denylist)
+            var (image, _, _) = await Screen.capture(excluding: denylist, scale: captureScale)
+            if ownerDenied {
+                let rects = menuBarRects()
+                // Never keep a frame whose menu bar could not be found while it shows a
+                // denylisted app's menus.
+                guard !rects.isEmpty else { fail("a denylisted app owns the menu bar, but no menu-bar window was found to blank") }
+                image = blank(image, rects: rects, scale: captureScale)
+            }
+            let hash = Screen.dHash(image, grid: hashGrid)
+            if let lastKept, Screen.hamming(lastKept, hash) <= skipHamming {
+                // Unchanged: nothing to report.
+            } else {
+                let (day, file) = dayAndFile(takenAt)
+                let dir = "\(root)/\(day)"
+                do {
+                    try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                    // Atomic: a kill mid-write must never leave a truncated image behind.
+                    try Screen.encode(image, heic: true, quality: heicQuality)
+                        .write(to: URL(fileURLWithPath: "\(dir)/\(file)"), options: .atomic)
+                } catch {
+                    fail("cannot write \(day)/\(file): \(error.localizedDescription)")
+                }
+                lastKept = hash
+                let ocr = OCR.recognizeMerged(image)
+                line("shot", [
+                    "day": day, "path": "\(day)/\(file)", "takenAt": round3(takenAt.timeIntervalSince1970 * 1000),
+                    // A denylisted app's id is not recorded either: when it was in use is
+                    // information too (plan.md, PR 3b-1).
+                    "appBundleId": ownerDenied ? NSNull() : (owner.map { $0 as Any } ?? NSNull()),
+                    "menuBarBlanked": ownerDenied,
+                    "ocrText": ocr.text, "ocrMs": round3(ocr.ms),
+                ])
+            }
+            let wait = shotSec * 1000 - (nowMs() - tickStart)
+            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000)) }
+        }
+        line("stopped", ["reason": "duration"])
+    }
+}
