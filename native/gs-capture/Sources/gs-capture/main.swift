@@ -13,7 +13,7 @@ usage: gs-capture <command> [options]
   procwatch      [--seconds s] [--poll-ms n]
   tap            [--seconds s] [--exclude ids] [--follow-ms n] [--by bundle|both]  CoreAudio tap
   ocr            [--level fast|accurate|merged] [--text 1] image...
-  run            --media-root dir [--denylist ids] [--shot-sec s] [--duration s]  production (protocol v1)
+  run            --media-root dir [--denylist ids] [--shot-sec s] [--segment-sec s] [--duration s]  production (protocol v1)
   render-fixtures --spec f.json --dir d
   selftest-timeout [--seconds s]                           must exit 1 (watchdog proof)
 """
