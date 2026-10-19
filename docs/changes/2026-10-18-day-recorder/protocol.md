@@ -20,6 +20,10 @@ gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segm
   `"reason": "signal"` and exits 0. Audio still held back at that moment is released only
   if no new denylisted process appeared since the last poll; otherwise it is dropped
   (`tailDropped`).
+- Signal handling is installed **before** `ready`, so any stop after `ready` ends with
+  `stopped`. A signal sent before `ready` can arrive while the process is still starting up
+  and end it with the default disposition (exit 143, no lines). Nothing has been captured at
+  that point. A supervisor that stops a helper before its `ready` should expect this.
 - **A denylist change means a restart.** The helper reads its arguments once. The supervisor
   stops it and spawns a new one, so there is no in-band control channel to get wrong.
 

@@ -667,3 +667,40 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - `run-segments`: 3 of 3, 0 leaks, 21 control windows, last line `stopped/signal`.
     - PR 3a proof: 0 leaked.
     - `swift test`: 28 tests (4 new classification cases).
+- **2026-10-19, PR 3b-2, Codex round 5 (tagged, 2 × P1, 1 × P2): the listener moves to a
+  follow-up PR (James).**
+  - Both P1s were the same class as round 4: races inside the `ProcessArrivals` listener.
+    - Classification still in flight on its queue when audio is released.
+    - A parent that exits mid-lookup reads as a non-app parent.
+  - Two rounds of same-class findings point to a design that needs its own review, so the
+    review loop stopped (L42 cap).
+  - **What moves:** `ProcessArrivals`, its tri-state classification, the
+    `tap-transient-instance` proof and SpikeTone's `linger` argument. They move to
+    `feat/day-recorder-arrivals`, which starts by reverting the removal commit, plus a
+    redesign of the release cap. For example: release only up to the time the arrivals
+    queue last *finished* classifying, minus the hold.
+  - **What PR 3b-2 keeps:**
+    - poll-only detection, as proven in PR 3a;
+    - the release boundary taken before the poll (round 4; correct ordering without the
+      listener too);
+    - the terminal `stopped` line (round 3);
+    - the round-5 P2 fix below.
+  - **OPEN RISK, accepted until the follow-up merges:** a denylisted process (a second
+    instance or a helper) that **starts, plays and exits between two 100 ms polls** has its
+    held audio released and written.
+    - The `tap-transient-instance` control reproduced it: 5 leaked windows, with polls 2.5 s
+      apart.
+    - The same gap exists on `main` since PR 3a. It is not new here.
+    - **Exposure:** the process must live under 100 ms of poll interval plus whatever part
+      of the 500 ms hold had not yet passed. A process that is still alive at the next poll
+      is caught and its held audio dropped (PR 3a proof).
+    - **Not acceptable for v1.** The follow-up must merge before PR 3c's soak is counted as
+      evidence for R4.
+  - **P2, fixed: signal handling now comes before `ready`.** Before this, a SIGTERM sent
+    just after `ready` hit the default disposition and ended with no `stopped`. Handlers are
+    installed first now. A stop during startup has no recorder to stop, and nothing to lose,
+    because the first segment needs the 500 ms hold to pass.
+    - **Probe:** SIGTERM sent the instant `ready` appears, **5 of 5:** `ready`, `stopped`,
+      exit 0.
+    - A signal *before* `ready` can still arrive during process startup (exit 143, no
+      lines). `protocol.md` says so.

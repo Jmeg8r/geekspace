@@ -1,62 +1,78 @@
 {
   "tones": {
     "first": {
-      "startT": 1792445182812.166,
-      "stopT": 1792445196464.7642,
-      "pid": 72608
+      "startT": 1792445754852.606,
+      "stopT": 1792445768504.497,
+      "pid": 82939
     },
     "second": {
-      "startT": 1792445185367.128,
-      "stopT": 1792445188517.5427,
-      "pid": 72687
+      "startT": 1792445757412.791,
+      "stopT": 1792445760560.0571,
+      "pid": 82973
     },
     "control": {
-      "startT": 1792445186819.1562,
-      "stopT": 1792445188922.971,
-      "pid": 72700
+      "startT": 1792445758869.211,
+      "stopT": 1792445760977.109,
+      "pid": 82985
     }
   },
   "segments": [
     {
-      "path": "2026-10-19/sys-172623-120.m4a",
-      "start": 1792445183119.686,
-      "end": 1792445184719.686,
-      "bytes": 61752,
-      "decodedMs": 1620,
-      "spanMs": 1600,
+      "path": "2026-10-19/sys-173555-149.m4a",
+      "start": 1792445755149.303,
+      "end": 1792445756781.303,
+      "bytes": 61756,
+      "decodedMs": 1641.31,
+      "spanMs": 1632,
       "leaked": [],
       "broadband": [],
       "controlWindows": 0
     },
     {
-      "path": "2026-10-19/sys-172625-338.m4a",
-      "start": 1792445185338.348,
-      "end": 1792445188346.348,
-      "bytes": 64331,
+      "path": "2026-10-19/sys-173557-443.m4a",
+      "start": 1792445757442.656,
+      "end": 1792445760450.656,
+      "bytes": 64476,
       "decodedMs": 3028,
       "spanMs": 3008,
       "leaked": [],
-      "broadband": [],
+      "broadband": [
+        {
+          "msFromStart": 1400,
+          "at": 1792445758842.656,
+          "amp": 0.0042,
+          "floor": 0.006,
+          "tonal": false
+        }
+      ],
       "controlWindows": 15
     },
     {
-      "path": "2026-10-19/sys-172628-346.m4a",
-      "start": 1792445188346.372,
-      "end": 1792445191354.372,
-      "bytes": 62904,
+      "path": "2026-10-19/sys-173600-451.m4a",
+      "start": 1792445760450.687,
+      "end": 1792445763458.687,
+      "bytes": 62954,
       "decodedMs": 3028,
       "spanMs": 3008,
       "leaked": [],
-      "broadband": [],
+      "broadband": [
+        {
+          "msFromStart": 500,
+          "at": 1792445760950.687,
+          "amp": 0.003,
+          "floor": 0.0042,
+          "tonal": false
+        }
+      ],
       "controlWindows": 6
     },
     {
-      "path": "2026-10-19/sys-172631-354.m4a",
-      "start": 1792445191354.42,
-      "end": 1792445192015.754,
-      "bytes": 61576,
-      "decodedMs": 681.31,
-      "spanMs": 661.33,
+      "path": "2026-10-19/sys-173603-459.m4a",
+      "start": 1792445763458.704,
+      "end": 1792445764056.037,
+      "bytes": 61564,
+      "decodedMs": 617.31,
+      "spanMs": 597.33,
       "leaked": [],
       "broadband": [],
       "controlWindows": 0
@@ -69,16 +85,12 @@
         "dev.geekspace.spike.tone"
       ],
       "addedProcesses": 1,
-      "arrivedBundles": [
-        "dev.geekspace.spike.tone"
-      ],
       "droppedMaxRms": 0,
       "droppedWindows": 6,
       "event": "tapRebuilt",
       "excludedProcesses": 2,
-      "rebuildMs": 90.616,
-      "t": 1792445185336.907,
-      "trigger": "listener",
+      "rebuildMs": 106.314,
+      "t": 1792445757435.795,
       "v": 1
     }
   ],

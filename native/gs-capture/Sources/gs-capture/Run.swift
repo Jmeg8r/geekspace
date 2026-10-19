@@ -117,21 +117,24 @@ enum Run {
         // --duration is for proofs; the supervisor runs the helper until it stops it.
         let duration = args.optionalDouble("duration")
 
+        // The supervisor stops the helper with SIGTERM (a denylist change is a restart), so a
+        // signal must finalize the open segment, not lose it. Default handlers are replaced
+        // first, or the signal would kill the process before the source sees it. Installed
+        // BEFORE `ready`: the supervisor may stop the helper the moment it is ready (Codex
+        // review of PR 3b-2, round 5).
+        let signals = [SIGTERM, SIGINT].map { number -> DispatchSourceSignal in
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+            source.setEventHandler { shutdown(reason: "signal") }
+            source.resume()
+            return source
+        }
         line("ready", ["pid": Int(getpid()), "shotSec": shotSec, "segmentSec": segmentSec, "denylist": denylist])
         ProcWatch.detachHALFromMainRunLoop()
         let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec) { event, fields in
             line(event, fields)
         }
-        // The supervisor stops the helper with SIGTERM (a denylist change is a restart), so a
-        // signal must finalize the open segment, not lose it. Default handlers are replaced
-        // first, or the signal would kill the process before the source sees it.
-        let signals = [SIGTERM, SIGINT].map { number -> DispatchSourceSignal in
-            signal(number, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
-            source.setEventHandler { shutdown(audio, reason: "signal") }
-            source.resume()
-            return source
-        }
+        adopt(audio)
         Task.detached {
             while true {
                 try? await Task.sleep(nanoseconds: UInt64(heartbeatSec * 1_000_000_000))
@@ -192,15 +195,23 @@ enum Run {
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000)) }
         }
         // The signal sources must outlive the loop; shutdown never returns.
-        withExtendedLifetime(signals) { shutdown(audio, reason: "duration") }
+        withExtendedLifetime(signals) { shutdown(reason: "duration") }
     }
 
     /// Once only: a signal can arrive while --duration is finishing. The second caller blocks
-    /// here until the first one exits the process.
+    /// here until the first one exits the process. Guards `recorder` too.
     private static let shutdownLock = NSLock()
-    static func shutdown(_ audio: SystemAudioRecorder, reason: String) -> Never {
+    private static var recorder: SystemAudioRecorder?
+
+    /// Hand the started recorder to shutdown. If a stop is already in progress, this blocks
+    /// until that stop exits the process.
+    static func adopt(_ audio: SystemAudioRecorder) { shutdownLock.withLock { recorder = audio } }
+
+    /// A stop before `adopt` (during startup) has no recorder to stop, and nothing to lose:
+    /// the first segment needs the 500 ms hold to pass before anything is written.
+    static func shutdown(reason: String) -> Never {
         shutdownLock.lock()
-        audio.stop()
+        recorder?.stop()
         line("stopped", ["reason": reason], terminal: true)
         exit(0)
     }
