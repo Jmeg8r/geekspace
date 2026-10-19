@@ -25,7 +25,7 @@ One JSON object per line on **stdout**, keys sorted. Every line has `"v": 1` and
 | event | fields | meaning |
 |---|---|---|
 | `ready` | `pid`, `shotSec`, `denylist` | arguments accepted; capture starts |
-| `heartbeat` | `t` (epoch ms) | every 5 s, whatever else is happening |
+| `heartbeat` | `t` (epoch ms) | every 5 s, after a fresh Screen Recording check passes |
 | `shot` | `day`, `path`, `takenAt`, `appBundleId`, `menuBarBlanked`, `ocrText`, `ocrMs` | a changed frame was written |
 | `stopped` | `reason` | clean end (only with `--duration`) |
 
@@ -36,7 +36,9 @@ More detail on the fields:
   announced for a partial file.
 - **`shot.appBundleId`** is the app that owns the menu bar, sampled before and after the
   capture. It is `null` when either sample is denylisted (when a work app was in use is
-  information too), when the two samples differ, or when no app owns the menu bar. The supervisor must store `null` as "unknown", never guess.
+  information too), when the two samples differ, or when no app owns the menu bar. The
+  supervisor stores `null` by **omitting** `appBundleId` (it is optional in
+  `dayRecorder.addScreenshot`), never by guessing.
 - **`shot.menuBarBlanked`** is `true` whenever the denylist is non-empty. The menu-bar band is
   then painted black before hashing, encoding and OCR, because a switch to a denylisted app
   *during* a capture can't be observed (plan.md, PR 3b-1).

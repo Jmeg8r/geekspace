@@ -527,3 +527,16 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     exactly the mid-capture test.
   - **Live proof re-run:** `run-menubar` 3 of 3. Every denylisted-run frame had a black
     band; the control read TextEdit's Format menu and the canary.
+- **2026-10-18, PR 3b-1, Codex round 3 (2 × P2), both fixed.**
+  - **A shot with no app could not be stored.** PR 2's `addScreenshot` required a bundle-ID
+    string. `appBundleId` is now optional in the schema and the mutation, and still validated
+    when present. The supervisor omits it for `null` (`protocol.md`). Test first: a no-owner
+    shot stores, and an invalid ID is still refused.
+  - **A revoked permission could go unnoticed for up to `--shot-sec`.** Each heartbeat now
+    makes an authorization check first, through `Screen.content()`: the call every capture
+    depends on, with its process-exiting 10 s watchdog. A heartbeat therefore means
+    "capture still authorized", not just "process alive".
+    - **Unverified:** that the call fails promptly after a *live* revocation. That is part of
+      the R3 proof with James at the Mac (PR 3c), not claimed here.
+  - **Also fixed, found in the smoke test:** `--duration` overran by up to a whole
+    `--shot-sec` (12 s asked, 30 s taken). The wait is now capped at the time remaining.

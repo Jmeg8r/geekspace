@@ -216,7 +216,9 @@ export default defineSchema({
     day: v.string(),
     path: v.string(),
     takenAt: v.number(),
-    appBundleId: v.string(),
+    // Absent when unknown: the helper names no app while a denylisted one owned the menu bar
+    // or the owner changed during the capture (protocol.md).
+    appBundleId: v.optional(v.string()),
     ocrText: v.string(),
     purgedAt: v.optional(v.number()), // image deleted; the OCR text is kept
   })

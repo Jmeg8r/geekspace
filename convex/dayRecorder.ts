@@ -164,14 +164,14 @@ export const addScreenshot = mutation({
     day: v.string(),
     path: v.string(),
     takenAt: v.number(),
-    appBundleId: v.string(),
+    appBundleId: v.optional(v.string()),
     ocrText: v.string(),
   },
   handler: async (ctx, args) => {
     assertDay(args.day);
     assertMediaPath(args.path, args.day);
     assertTime("takenAt", args.takenAt);
-    assertBundleId(args.appBundleId);
+    if (args.appBundleId !== undefined) assertBundleId(args.appBundleId);
     assertText("OCR text", args.ocrText);
     return ctx.db.insert("screenshots", args);
   },

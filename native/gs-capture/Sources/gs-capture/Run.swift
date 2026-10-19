@@ -114,6 +114,13 @@ enum Run {
         Task.detached {
             while true {
                 try? await Task.sleep(nanoseconds: UInt64(heartbeatSec * 1_000_000_000))
+                // A heartbeat means "capture still authorised", not just "process alive": a
+                // permission revoked just after a shot would otherwise go unnoticed until the
+                // next one, up to --shot-sec later (Codex review of PR 3b-1; spec R3 wants an
+                // error within 10 s). Screen.content() is the call every capture depends on,
+                // and it exits non-zero on failure or after its 10 s watchdog. UNVERIFIED: that
+                // it fails promptly after a live revocation is PR 3c's R3 proof.
+                _ = await Screen.content()
                 line("heartbeat", ["t": round3(nowMs())])
             }
         }
@@ -158,7 +165,9 @@ enum Run {
                     "ocrText": ocr.text, "ocrMs": round3(ocr.ms),
                 ])
             }
-            let wait = shotSec * 1000 - (nowMs() - tickStart)
+            var wait = shotSec * 1000 - (nowMs() - tickStart)
+            // A proof's --duration must not overrun by up to a whole --shot-sec.
+            if let duration { wait = min(wait, duration * 1000 - (nowMs() - started)) }
             if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000)) }
         }
         line("stopped", ["reason": "duration"])
