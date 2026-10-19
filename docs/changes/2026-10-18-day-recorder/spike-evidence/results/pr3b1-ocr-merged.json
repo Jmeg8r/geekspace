@@ -1,0 +1,573 @@
+{
+  "canvasPoints": "1920x1080",
+  "coldFirstRequestMs": 383.963,
+  "summary": {
+    "1x-accurate": {
+      "meanMs": 101.85,
+      "maxMs": 136.67,
+      "pooledWordRecall": 0.826,
+      "worstFixture": {
+        "scale": 1,
+        "level": "accurate",
+        "fixture": "09-settings-lowcontrast",
+        "ms": 43.101,
+        "hits": 0,
+        "truthWords": 18,
+        "wordRecall": 0
+      }
+    },
+    "1x-fast": {
+      "meanMs": 21.45,
+      "maxMs": 23.93,
+      "pooledWordRecall": 0.793,
+      "worstFixture": {
+        "scale": 1,
+        "level": "fast",
+        "fixture": "09-settings-lowcontrast",
+        "ms": 16.32,
+        "hits": 7,
+        "truthWords": 18,
+        "wordRecall": 0.389
+      }
+    },
+    "1x-merged": {
+      "meanMs": 226.13,
+      "maxMs": 292.04,
+      "pooledWordRecall": 0.976,
+      "worstFixture": {
+        "scale": 1,
+        "level": "merged",
+        "fixture": "02-code-dark",
+        "ms": 265.576,
+        "hits": 15,
+        "truthWords": 21,
+        "wordRecall": 0.714
+      }
+    },
+    "2x-accurate": {
+      "meanMs": 126.68,
+      "maxMs": 159.32,
+      "pooledWordRecall": 0.838,
+      "worstFixture": {
+        "scale": 2,
+        "level": "accurate",
+        "fixture": "09-settings-lowcontrast",
+        "ms": 52.871,
+        "hits": 0,
+        "truthWords": 18,
+        "wordRecall": 0
+      }
+    },
+    "2x-fast": {
+      "meanMs": 37.9,
+      "maxMs": 43.59,
+      "pooledWordRecall": 0.943,
+      "worstFixture": {
+        "scale": 2,
+        "level": "fast",
+        "fixture": "06-spreadsheet",
+        "ms": 35.085,
+        "hits": 12,
+        "truthWords": 22,
+        "wordRecall": 0.545
+      }
+    }
+  },
+  "rows": [
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "01-inbox",
+      "ms": 128.29,
+      "hits": 40,
+      "truthWords": 40,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "02-code-dark",
+      "ms": 136.671,
+      "hits": 15,
+      "truthWords": 21,
+      "wordRecall": 0.714
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "03-chat",
+      "ms": 84.185,
+      "hits": 46,
+      "truthWords": 46,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "04-calendar",
+      "ms": 114.074,
+      "hits": 31,
+      "truthWords": 31,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "05-terminal",
+      "ms": 75.113,
+      "hits": 26,
+      "truthWords": 26,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "06-spreadsheet",
+      "ms": 127.127,
+      "hits": 21,
+      "truthWords": 22,
+      "wordRecall": 0.955
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "07-document",
+      "ms": 133.04,
+      "hits": 49,
+      "truthWords": 49,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "08-slide",
+      "ms": 115.207,
+      "hits": 10,
+      "truthWords": 10,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 43.101,
+      "hits": 0,
+      "truthWords": 18,
+      "wordRecall": 0
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "10-article",
+      "ms": 119.705,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "11-settings-mixed",
+      "ms": 43.806,
+      "hits": 0,
+      "truthWords": 33,
+      "wordRecall": 0
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "01-inbox",
+      "ms": 17.926,
+      "hits": 34,
+      "truthWords": 40,
+      "wordRecall": 0.85
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "02-code-dark",
+      "ms": 23.39,
+      "hits": 12,
+      "truthWords": 21,
+      "wordRecall": 0.571
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "03-chat",
+      "ms": 23.656,
+      "hits": 45,
+      "truthWords": 46,
+      "wordRecall": 0.978
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "04-calendar",
+      "ms": 23.928,
+      "hits": 25,
+      "truthWords": 31,
+      "wordRecall": 0.806
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "05-terminal",
+      "ms": 22.253,
+      "hits": 21,
+      "truthWords": 26,
+      "wordRecall": 0.808
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "06-spreadsheet",
+      "ms": 23.549,
+      "hits": 14,
+      "truthWords": 22,
+      "wordRecall": 0.636
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "07-document",
+      "ms": 23.177,
+      "hits": 48,
+      "truthWords": 49,
+      "wordRecall": 0.98
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "08-slide",
+      "ms": 21.402,
+      "hits": 8,
+      "truthWords": 10,
+      "wordRecall": 0.8
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 16.32,
+      "hits": 7,
+      "truthWords": 18,
+      "wordRecall": 0.389
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "10-article",
+      "ms": 16.967,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "11-settings-mixed",
+      "ms": 23.387,
+      "hits": 13,
+      "truthWords": 33,
+      "wordRecall": 0.394
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "01-inbox",
+      "ms": 264.476,
+      "hits": 40,
+      "truthWords": 40,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "02-code-dark",
+      "ms": 265.576,
+      "hits": 15,
+      "truthWords": 21,
+      "wordRecall": 0.714
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "03-chat",
+      "ms": 222.916,
+      "hits": 46,
+      "truthWords": 46,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "04-calendar",
+      "ms": 257.667,
+      "hits": 31,
+      "truthWords": 31,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "05-terminal",
+      "ms": 147.46,
+      "hits": 26,
+      "truthWords": 26,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "06-spreadsheet",
+      "ms": 215.136,
+      "hits": 21,
+      "truthWords": 22,
+      "wordRecall": 0.955
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "07-document",
+      "ms": 292.044,
+      "hits": 49,
+      "truthWords": 49,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "08-slide",
+      "ms": 220.477,
+      "hits": 10,
+      "truthWords": 10,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 171.17,
+      "hits": 18,
+      "truthWords": 18,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "10-article",
+      "ms": 250.737,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "merged",
+      "fixture": "11-settings-mixed",
+      "ms": 179.802,
+      "hits": 32,
+      "truthWords": 33,
+      "wordRecall": 0.97
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "01-inbox",
+      "ms": 146.927,
+      "hits": 40,
+      "truthWords": 40,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "02-code-dark",
+      "ms": 156.007,
+      "hits": 18,
+      "truthWords": 21,
+      "wordRecall": 0.857
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "03-chat",
+      "ms": 133.95,
+      "hits": 46,
+      "truthWords": 46,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "04-calendar",
+      "ms": 136.573,
+      "hits": 31,
+      "truthWords": 31,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "05-terminal",
+      "ms": 133.901,
+      "hits": 26,
+      "truthWords": 26,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "06-spreadsheet",
+      "ms": 141.803,
+      "hits": 22,
+      "truthWords": 22,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "07-document",
+      "ms": 159.325,
+      "hits": 49,
+      "truthWords": 49,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "08-slide",
+      "ms": 124.076,
+      "hits": 10,
+      "truthWords": 10,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 52.871,
+      "hits": 0,
+      "truthWords": 18,
+      "wordRecall": 0
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "10-article",
+      "ms": 146.281,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "11-settings-mixed",
+      "ms": 61.815,
+      "hits": 0,
+      "truthWords": 33,
+      "wordRecall": 0
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "01-inbox",
+      "ms": 42.423,
+      "hits": 40,
+      "truthWords": 40,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "02-code-dark",
+      "ms": 36.011,
+      "hits": 17,
+      "truthWords": 21,
+      "wordRecall": 0.81
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "03-chat",
+      "ms": 43.585,
+      "hits": 46,
+      "truthWords": 46,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "04-calendar",
+      "ms": 36.696,
+      "hits": 31,
+      "truthWords": 31,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "05-terminal",
+      "ms": 39.254,
+      "hits": 23,
+      "truthWords": 26,
+      "wordRecall": 0.885
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "06-spreadsheet",
+      "ms": 35.085,
+      "hits": 12,
+      "truthWords": 22,
+      "wordRecall": 0.545
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "07-document",
+      "ms": 36.356,
+      "hits": 49,
+      "truthWords": 49,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "08-slide",
+      "ms": 37.131,
+      "hits": 8,
+      "truthWords": 10,
+      "wordRecall": 0.8
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 34.63,
+      "hits": 18,
+      "truthWords": 18,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "10-article",
+      "ms": 36.764,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "11-settings-mixed",
+      "ms": 38.914,
+      "hits": 33,
+      "truthWords": 33,
+      "wordRecall": 1
+    }
+  ]
+}

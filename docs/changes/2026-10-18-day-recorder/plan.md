@@ -456,3 +456,87 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     the tail dropped.
   - This last commit had no further Codex round, because the loop had reached its cap.
     James reads it in the PR.
+- **2026-10-18, PR 3b is split again, into 3b-1 to 3b-3.**
+  - **3b-1 (this one):** `gs-capture run` with protocol v1 (`protocol.md`) and the
+    screenshot pipeline.
+  - **3b-2:** system-audio segments through the tap. Those need real PCM held back and
+    dropped, not RMS windows.
+  - **3b-3:** process-audio events, the build script, packaging and the signed-build proof.
+- **2026-10-18, PR 3b-1, menu-bar ownership comes from `NSWorkspace`.** Probed in a CLI with
+  top-level `await`: `menuBarOwningApplication` followed two app switches, so Swift's async
+  main delivers the notifications. `CGWindowList`'s topmost window lagged one sample. The
+  menu bar is a Window Server window at layer 24, `0,0` 1920×30 points on the Mac Studio.
+- **2026-10-18, PR 3b-1, OCR always runs both passes and merges them.** The second pass is
+  accurate OCR on a copy binarised at luminance 190. The spike's "retry when few lines"
+  needed a threshold to tune; merging doesn't. Fixtures (`pr3b1-ocr-merged.json`), 1x:
+  - accurate alone: pooled word recall **0.826**, 107 ms;
+  - merged: **0.976**, 226 ms a kept frame (positional merge, after Codex round 1; the
+    first string-based merge scored 0.979).
+  - A new synthetic `11-settings-mixed` fixture (black and grey labels on `#ececec`) read
+    **nothing** in the plain pass, not just the grey lines. So it doesn't show the failure
+    the fixture was added for; it shows a whole-frame miss on that background, which
+    merging recovers.
+- **2026-10-18, PR 3b-1, menu-bar blanking proof** (`run-menubar`, 3 of 3 runs). The run is
+  `gs-capture run --denylist com.apple.TextEdit`, with TextEdit frontmost showing the
+  canary.
+  - **Denylisted:** every frame whose menu bar TextEdit owned had a black band (mean
+    luminance 0), no canary in the frame's OCR, and `appBundleId: null`.
+  - **Control (no denylist):** the band carried content (luminance 128), TextEdit's
+    **Format** menu was read in it, and the canary was in the frame. So both would have
+    leaked.
+  - **Two pitfalls hit on the way.**
+    - `sips --cropOffset` did not crop where asked. The band is now cropped with the
+      helper's own `ocr --crop`, and checked by luminance.
+    - A visual check of a downscaled frame was misread as "not blanked". The pixel
+      measurement (luminance 0.3) is what counts.
+  - **Focus moved during runs** (someone was using the Mac). Frames whose menu-bar owner
+    wasn't denylisted were rightly left alone, so the proof asserts per frame rather than
+    per run.
+- **2026-10-18, PR 3b-1, a denylisted app is not named in the shot either.** `appBundleId`
+  is `null` while a denylisted app owns the menu bar. This is the conservative choice:
+  when a work app was in use is information too.
+- **2026-10-18, PR 3b-1, Codex round 1 (1 × P1, 1 × P2), both fixed. Both decisions are
+  now pure functions with `swift test` coverage.**
+  - **P1: the menu bar could leak during an app switch.** The owner was sampled only
+    *before* the capture, so a switch to a denylisted app while the capture was in flight
+    left its menus in the frame unblanked. `Run.menuBarDecision` now samples before **and**
+    after: if either sample is denylisted the band is blanked and the app is not named.
+    When two allowed owners disagree, no app is named either.
+  - **P2: the OCR merge changed content.** Deduplicating by string dropped repeated lines
+    ("Pending" under two tasks) and appended second-pass lines at the end.
+    `OCR.merge` now works by position:
+    - a second-pass line is dropped only when it covers a first-pass line (half of the
+      smaller box);
+    - repeats elsewhere are kept;
+    - everything is put in reading order.
+  - **Tests** (`native/gs-capture/Tests`, 11 cases, run locally because CI doesn't build
+    Swift). A **mutation check** shows they bite:
+    - putting the before-only decision back fails exactly the switch-during-capture test;
+    - putting the string dedupe back fails 4 of the 5 merge tests.
+  - Both live proofs were re-run on the fixed binary: `run-menubar` 3 of 3, and OCR recall
+    0.976.
+- **2026-10-18, PR 3b-1, Codex round 2 (1 × P1), fixed by closing the class.** Before and
+  after samples still miss an **allowed → denylisted → allowed** switch during a capture:
+  both say "allowed", yet the frame holds the denylisted app's menus. Ownership can't be
+  observed *during* a capture, so the round-1 approach couldn't be made complete.
+  - **Fix:** whenever the denylist is non-empty, **every frame's menu bar is blanked.**
+  - **Cost:** the menu-bar strip (app menus, clock, status icons), not window content.
+  - **App naming:** the app is still named only when both samples agree and neither is
+    denylisted.
+  - **Tests:** 12 `swift test` cases. A mutation back to endpoint-only blanking fails
+    exactly the mid-capture test.
+  - **Live proof re-run:** `run-menubar` 3 of 3. Every denylisted-run frame had a black
+    band; the control read TextEdit's Format menu and the canary.
+- **2026-10-18, PR 3b-1, Codex round 3 (2 × P2), both fixed.**
+  - **A shot with no app could not be stored.** PR 2's `addScreenshot` required a bundle-ID
+    string. `appBundleId` is now optional in the schema and the mutation, and still validated
+    when present. The supervisor omits it for `null` (`protocol.md`). Test first: a no-owner
+    shot stores, and an invalid ID is still refused.
+  - **A revoked permission could go unnoticed for up to `--shot-sec`.** Each heartbeat now
+    makes an authorization check first, through `Screen.content()`: the call every capture
+    depends on, with its process-exiting 10 s watchdog. A heartbeat therefore means
+    "capture still authorized", not just "process alive".
+    - **Unverified:** that the call fails promptly after a *live* revocation. That is part of
+      the R3 proof with James at the Mac (PR 3c), not claimed here.
+  - **Also fixed, found in the smoke test:** `--duration` overran by up to a whole
+    `--shot-sec` (12 s asked, 30 s taken). The wait is now capped at the time remaining.

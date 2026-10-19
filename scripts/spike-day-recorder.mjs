@@ -41,6 +41,13 @@ const CAPTURE_LIVE_TIMEOUT_MS = 15_000;
 const FOLLOW_MS = 200;
 // Anything above -60 dBFS in a 100 ms window counts as leaked tone.
 const LEAK_RMS = 0.001;
+// PR 3b-1 run-menubar proof.
+const RUN_SHOT_SEC = 2;
+const RUN_SECONDS = 5;
+const MENU_BAR_PT = 30; // measured: the menu bar is 0,0 1920x30 points on the Mac Studio's display
+const DISPLAY_WIDTH_PT = 1920;
+const BAND_BLACK_LUMA = 2; // a blanked band is painted black
+const BAND_CONTENT_LUMA = 20; // anything on screen reads well above black
 // The tap meters 100 ms windows (Tap.swift), each stamped when it completes.
 const WINDOW_MS = 100;
 // PR 3a control tone: starts this long after instance 2, well after a rebuild finishes.
@@ -307,6 +314,53 @@ const commands = {
 `);
     run("codesign", ["--force", "--sign", "-", TONE_APP]);
     save("build", { helper: HELPER, toneApp: TONE_APP, outDir: OUT_DIR });
+  },
+
+  /**
+   * PR 3b-1 proof: `gs-capture run` blanks the menu bar while a denylisted app owns it.
+   * TextEdit (frontmost, showing the canary) is denylisted in one run and not in the control.
+   * Each kept frame's menu-bar band is OCR'd: it must read nothing with the denylist, and
+   * TextEdit's menus without it (the control proves the band check can see them at all).
+   */
+  async "run-menubar"() {
+    const doc = path.join(OUT_DIR, `${CANARY}.txt`);
+    fs.writeFileSync(doc, `SYNTHETIC test document for the Day Recorder spike.\n\n${CANARY}\n${CANARY}\n${CANARY}\n`);
+    const result = {};
+    try {
+      for (const [tag, denylist] of [["denylisted", TEXTEDIT_BUNDLE_ID], ["control", ""]]) {
+        run("open", ["-a", "TextEdit", doc]);
+        await sleep(WINDOW_SETTLE_MS);
+        const root = fs.mkdtempSync(path.join(OUT_DIR, `run-${tag}-`));
+        const lines = helper("run", "--media-root", root, "--denylist", denylist, "--shot-sec", RUN_SHOT_SEC, "--duration", RUN_SECONDS);
+        const shots = lines.filter((line) => line.event === "shot");
+        if (!shots.length) throw new Error(`${tag}: run kept no frames`);
+        result[tag] = shots.map((shot) => {
+          // The helper's own crop (Screen.crop): `sips --cropOffset` did not crop where asked.
+          const [band] = helper("ocr", "--level", "merged", "--text", "1", "--crop", `0,0,${DISPLAY_WIDTH_PT},${MENU_BAR_PT}`,
+            path.join(root, shot.path));
+          return { menuBarBlanked: shot.menuBarBlanked, appBundleId: shot.appBundleId,
+            bandMeanLuma: band.meanLuma, bandLines: band.lines,
+            bandHasFormatMenu: band.text.some((t) => /\bFormat\b/.test(t)), frameHasCanary: shot.ocrText.includes(CANARY) };
+        });
+      }
+    } finally {
+      spawnSync("osascript", ["-e", `tell application "TextEdit" to close (every document whose name contains "${CANARY}") saving no`], { encoding: "utf8" });
+    }
+    const denied = result.denylisted;
+    const control = result.control;
+    save("pr3b1-run-menubar", result);
+    // The control must show the band carrying content and TextEdit on screen, or the
+    // denylisted run's black band and missing canary prove nothing. Menu TEXT can only be
+    // asserted where the menu bar is drawn; with "hide the menu bar" on it never is.
+    if (!control.every((s) => s.bandMeanLuma > BAND_CONTENT_LUMA && s.frameHasCanary)) {
+      throw new Error("control: the band carried no content or TextEdit was not on screen; the check proves nothing");
+    }
+    // With any app denylisted, EVERY frame's menu bar is blanked (Codex review of PR 3b-1,
+    // round 2: a switch during a capture can't be observed). So every frame's band must be
+    // black and unread, no frame names TextEdit, and the canary never appears.
+    const leaks = denied.filter((s) => !s.menuBarBlanked || s.bandMeanLuma > BAND_BLACK_LUMA || s.bandLines > 0
+      || s.appBundleId === TEXTEDIT_BUNDLE_ID || s.frameHasCanary);
+    if (leaks.length) throw new Error(`denylisted: ${leaks.length} frame(s) kept menu-bar text, the canary or TextEdit's id`);
   },
 
   /** Q1: does excluding TextEdit's bundle ID remove its window from the frame? */
@@ -591,7 +645,8 @@ const commands = {
     for (const scale of OCR_SCALES) {
       const dir = path.join(OUT_DIR, `ocr-fixtures-${scale}x`);
       helper("render-fixtures", "--spec", OCR_FIXTURES, "--dir", dir, "--scale", scale);
-      for (const level of ["accurate", "fast"]) {
+      // "merged" (PR 3b-1): accurate plus a thresholded pass, at point resolution only.
+      for (const level of scale === 1 ? ["accurate", "fast", "merged"] : ["accurate", "fast"]) {
         // One process per level and scale, warmed by a throwaway first image.
         const files = [spec.fixtures[0], ...spec.fixtures].map((fixture) => path.join(dir, `${fixture.name}.png`));
         const results = helper("ocr", "--level", level, "--text", "1", ...files).slice(1);
@@ -606,7 +661,7 @@ const commands = {
     }
     const summary = {};
     for (const scale of OCR_SCALES) {
-      for (const level of ["accurate", "fast"]) {
+      for (const level of scale === 1 ? ["accurate", "fast", "merged"] : ["accurate", "fast"]) {
         const set = rows.filter((row) => row.level === level && row.scale === scale);
         summary[`${scale}x-${level}`] = {
           meanMs: round(set.reduce((sum, row) => sum + row.ms, 0) / set.length),

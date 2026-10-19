@@ -4,12 +4,17 @@
 // so a failed capture can never look like an empty-but-successful one.
 import Foundation
 
+// WHY a lock: `run` emits from a heartbeat task and the capture loop at once, and a write
+// longer than PIPE_BUF (512 bytes; an OCR line easily is) is not atomic on a pipe, so two
+// lines could interleave and the supervisor would parse neither.
+private let emitLock = NSLock()
+
 func emit(_ object: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
           let line = String(data: data, encoding: .utf8) else {
         fail("could not encode output line for keys \(object.keys.sorted())")
     }
-    FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!)
+    emitLock.withLock { FileHandle.standardOutput.write((line + "\n").data(using: .utf8)!) }
 }
 
 func fail(_ message: String) -> Never {

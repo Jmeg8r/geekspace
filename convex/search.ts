@@ -93,7 +93,7 @@ export const searchAll = query({
       screenshots: screenshots.map((sh) => ({
         _id: sh._id,
         takenAt: sh.takenAt,
-        appBundleId: sh.appBundleId,
+        appBundleId: sh.appBundleId ?? null,
         snippet: sh.ocrText.slice(0, SNIPPET_CHARS),
         purged: sh.purgedAt !== undefined,
       })),

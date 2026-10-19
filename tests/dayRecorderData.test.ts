@@ -82,6 +82,24 @@ describe("dayRecorder.addTranscript", () => {
   });
 });
 
+// Codex review of PR 3b-1: the helper names no app when a denylisted app owned the menu bar
+// or the owner changed during the capture (protocol.md), so a shot with no app must store.
+describe("dayRecorder.addScreenshot", () => {
+  const shot = { day: "2026-10-18", path: "2026-10-18/shot-150000-000.heic", takenAt: NOW, ocrText: "Quarterly numbers" };
+
+  it("stores a shot whose app is unknown", async () => {
+    const t = convexTest(schema, modules);
+    const id = await t.mutation(api.dayRecorder.addScreenshot, shot);
+    const row = await t.run((ctx) => ctx.db.get(id));
+    expect(row?.appBundleId).toBeUndefined();
+  });
+
+  it("still refuses an app id that is not a bundle id", async () => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.addScreenshot, { ...shot, appBundleId: "not a bundle" })).rejects.toThrow(/bundle/i);
+  });
+});
+
 describe("dayRecorder retention", () => {
   async function aged() {
     const t = convexTest(schema, modules);

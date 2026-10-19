@@ -429,6 +429,57 @@
           "color": "#444444"
         }
       ]
+    },
+    {
+      "name": "11-settings-mixed",
+      "background": "#ececec",
+      "lines": [
+        {
+          "text": "Focus and Notifications",
+          "x": 200,
+          "y": 160,
+          "size": 15
+        },
+        {
+          "text": "Allow notifications from Calendar",
+          "x": 200,
+          "y": 200,
+          "size": 13
+        },
+        {
+          "text": "Deliver quietly to Notification Centre",
+          "x": 220,
+          "y": 220,
+          "size": 11,
+          "color": "#8a8a8a"
+        },
+        {
+          "text": "Allow time-sensitive alerts",
+          "x": 200,
+          "y": 260,
+          "size": 13
+        },
+        {
+          "text": "Stays on screen until you dismiss it",
+          "x": 220,
+          "y": 280,
+          "size": 11,
+          "color": "#8a8a8a"
+        },
+        {
+          "text": "Show previews: When unlocked",
+          "x": 200,
+          "y": 320,
+          "size": 13
+        },
+        {
+          "text": "Applies to every app on this Mac",
+          "x": 220,
+          "y": 340,
+          "size": 11,
+          "color": "#8a8a8a"
+        }
+      ]
     }
   ]
 }
