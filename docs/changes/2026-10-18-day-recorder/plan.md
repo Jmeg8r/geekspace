@@ -349,3 +349,38 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     `probe:schema-failure`, so the dev deployment was never contacted.
   - No backend was running for the PR #64 procedure, and starting `convex dev` would have
     pushed this branch's schema into James's dev data.
+- **2026-10-18, PR 3 is split into sub-PRs 3a–3e.** One PR for all of it would recreate
+  #71's failure: the forge's AI review stops reading past a large diff, and splitting is
+  what got #72 and #73 through. Each sub-PR touches its own files:
+  - **3a:** the tap's second-instance leak (this entry).
+  - **3b:** the production helper (screenshots, OCR, watchdog, JSON-lines protocol), the
+    build script and packaging.
+  - **3c:** the supervisor, media root, purge, and the FileVault and Time Machine gates.
+  - **3d:** mic capture, IPC and preload, and `probe:segment-decode`.
+  - **3e:** the UI and the a11y pass.
+- **2026-10-18, PR 3a, the second-instance leak is closed.** `gs-capture tap --rebuild-ms
+  100 --hold-ms 500` does two things:
+  - It polls the denylisted process objects every 100 ms. When a new one appears, it
+    stops IO, **drops every held window**, rebuilds the tap and aggregate around the new
+    list, and restarts.
+  - It holds each 100 ms window back 500 ms before releasing it.
+  - A guard refuses a hold shorter than two polls.
+- **Proof** (`node scripts/spike-day-recorder.mjs tap-second-instance`, `--by both`). Each
+  run added a positive control: a **non-denylisted** tone (a bare `spike-tone`, so no
+  bundle ID) starting 1.5 s after instance 2. That shows the tap still captures after a
+  rebuild.
+
+  | Run | Leaked windows before the control | Control windows captured | Rebuild |
+  |---|---|---|---|
+  | Without the rebuild (control) | **17** | 11 | none |
+  | Rebuild, run 1 | **0** | 10 | 6 dropped, 82 ms |
+  | Rebuild, run 2 | **0** | 11 | 5 dropped, 99 ms |
+  | Rebuild, run 3 | **0** | 10 | 5 dropped, 103 ms |
+
+  - Every run had 0 leaks before instance 2 started, so instance 1 stayed excluded.
+  - An earlier control run with no control tone leaked 28 windows. The spike saw 27–31.
+  - In every rebuild run the watcher found instance 2's process object 75–82 ms *before*
+    its tone logged "started". The hold-back is a margin, not the main defence.
+  - The cost is system audio lost during each rebuild (5–6 windows, about 0.5 s, plus the
+    rebuild itself). Only a new denylisted process triggers one.
+  - Evidence: `spike-evidence/results/pr3a-second-instance-*.json`.
