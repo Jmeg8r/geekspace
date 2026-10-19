@@ -390,17 +390,33 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     new denylisted process appeared.
   - **`--by bundle --rebuild-ms` is refused.** Bundle-only mode tracks no process objects,
     so the rebuild could never fire.
-  - **Tail proof.** It uses a proof-only `--poll-stop-ms 1500` (no regular polls in the
-    last 1.5 s), with instance 2 launched at 2.6 s, so only the shutdown check stands
-    between instance 2 and a leak.
-    - With the check (`tailcheck-on`): 3 of 3 runs dropped the tail (5 windows) and
-      **0 leaked**.
-    - With `--tail-check 0` (`tailcheck-off`): **10 windows leaked in 1 of 3 runs**.
-      The other two leaked nothing even unprotected. That fits the spike's Q2 note that
-      bundle-ID exclusion silences one of two live processes; which one it picks appears
-      to vary between runs. So the hazard is intermittent, and the control showed it once
-      in three.
+  - **Tail proof** (corrected after Codex round 2; see the next entry).
   - **Timing sweeps without `--poll-stop-ms` were dropped.** The real tail window is about
     20 ms, smaller than `open -n` launch jitter (about 300 ms), so most runs fell outside
     it. One unforced hit (3.72 s) also dropped its tail with 0 leaked (seen in run output;
     its result file was not kept).
+- **2026-10-18, PR 3a, Codex round 2 (2 × P2), both fixed.**
+  - **The round-1 tail proof was weaker than claimed.** Windows kept being released after
+    polls stopped, so most of instance 2's audio could leave before the shutdown check
+    ran. Under `--poll-stop-ms` nothing is released once polls stop, so the check judges
+    the whole unpolled span. Each drop now reports `droppedMaxRms`, which shows directly
+    whether the check discarded real audio or silence.
+  - **A malformed `--rebuild-ms` (for example `100ms`) silently turned protection off.**
+    `--follow-ms` had the same parse, so both now use `Args.optionalDouble`: nil when
+    absent, a failure when invalid.
+  - **Corrected tail proof:** `--poll-stop-ms 1500`, instance 2 at 2.6 s, so only the
+    shutdown check stands between instance 2 and a leak.
+
+    | Run | Leaked | Shutdown check | Loudest dropped window |
+    |---|---|---|---|
+    | `--tail-check 0`, runs 1–3 | **11**, 0, 0 | off | — |
+    | Check on, runs 1–3 | 0, 0, 0 | dropped 21 windows | 0 (silence) |
+    | Check on, run 4 | **0** | dropped 21 windows | **0.177 RMS (about −15 dBFS)** |
+
+    - Whether instance 2 leaks at all depends on which of the two live processes the OS's
+      bundle-ID exclusion silences, and that varies between runs (it leaked 1 time in 3
+      unprotected).
+    - Runs 1–3 with the check on dropped silence. Run 4 dropped audible leaked audio at the
+      original leak's level and released none of it. That run is the evidence the check
+      matters; it is not inferred from zero-leak runs alone.
+    - Results: `spike-evidence/results/pr3a-second-instance-tailcheck-*.json`.

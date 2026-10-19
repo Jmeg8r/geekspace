@@ -71,16 +71,18 @@ final class TapMeter: @unchecked Sendable {
     }
 
     /// Discard everything held, including the window in progress. Returns how many full
-    /// windows were dropped.
-    func drop() -> Int {
+    /// windows were dropped and the loudest of them, so a proof can tell a drop that
+    /// discarded real leaked audio from one that discarded silence.
+    func drop() -> (windows: Int, maxRms: Double) {
         lock.lock()
         defer { lock.unlock() }
         let count = pending.count
+        let maxRms = pending.map(\.rms).max() ?? 0
         dropped += count
         pending.removeAll()
         squares = 0
         self.count = 0
-        return count
+        return (count, maxRms)
     }
 
     func releaseAll() { release(now: .infinity) }
@@ -215,8 +217,8 @@ enum Tap {
     static func run(_ args: Args) async {
         let seconds = args.double("seconds", default: 4)
         let denylist = args.list("exclude")
-        let followMs = args.string("follow-ms").flatMap(Double.init)
-        let rebuildMs = args.string("rebuild-ms").flatMap(Double.init)
+        let followMs = args.optionalDouble("follow-ms")
+        let rebuildMs = args.optionalDouble("rebuild-ms")
         let holdMs = args.double("hold-ms", default: 0)
         // --poll-stop-ms N: no rebuild polls in the last N ms, so a process starting then can
         // only be caught by the shutdown check. A proof control that widens the race on
@@ -291,12 +293,15 @@ enum Tap {
                     session.destroy()
                     session = makeSession(fresh)
                     session.start()
-                    emit(["event": "tapRebuilt", "t": round3(nowMs()), "droppedWindows": dropped,
+                    emit(["event": "tapRebuilt", "t": round3(nowMs()), "droppedWindows": dropped.windows,
+                          "droppedMaxRms": dropped.maxRms,
                           "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
                           "excludedProcesses": fresh.count, "rebuildMs": round3(nowMs() - begun)])
                 }
             }
-            meter.release(now: nowMs())
+            // While polls are suppressed (--poll-stop-ms), hold everything: the shutdown check
+            // must judge the whole unpolled span, not just its last --hold-ms (Codex, PR 3a).
+            if nowMs() < deadline - pollStopMs { meter.release(now: nowMs()) }
         }
         session.stop()
         // The held tail has not been checked yet: a denylisted process that started after the
@@ -309,7 +314,8 @@ enum Tap {
                 meter.releaseAll()
             } else {
                 let dropped = meter.drop()
-                emit(["event": "tailDropped", "t": round3(nowMs()), "droppedWindows": dropped,
+                emit(["event": "tailDropped", "t": round3(nowMs()), "droppedWindows": dropped.windows,
+                      "droppedMaxRms": dropped.maxRms,
                       "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID)])
             }
         } else {

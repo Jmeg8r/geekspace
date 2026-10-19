@@ -1,13 +1,13 @@
 {
   "firstInstance": {
-    "startT": 1792371903005.91,
-    "stopT": 1792371915602.366,
-    "pid": 51369
+    "startT": 1792372187562.364,
+    "stopT": 1792372200167.8472,
+    "pid": 58651
   },
   "tone": {
-    "startT": 1792371907402.446,
-    "stopT": 1792371911603.821,
-    "pid": 51500
+    "startT": 1792372191972.11,
+    "stopT": 1792372196167.784,
+    "pid": 58711
   },
   "controlTone": null,
   "tapArgs": [
@@ -27,6 +27,7 @@
   "windows100ms": 40,
   "rebuilds": [],
   "tailDrops": [],
+  "droppedLoud": false,
   "summary": {
     "dbfs": -999,
     "droppedWindows": 0,
@@ -34,6 +35,6 @@
     "excludedProcesses": 2,
     "peak": 0,
     "rms": 0,
-    "samples": 386048
+    "samples": 384000
   }
 }

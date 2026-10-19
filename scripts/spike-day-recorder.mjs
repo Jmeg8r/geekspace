@@ -272,6 +272,8 @@ async function secondInstance(by, extra = [], { control = false, secondAtMs = LA
     leakedWindows100ms: leaked.length, windows100ms: lines.filter((line) => line.windowRms !== undefined).length,
     rebuilds: lines.filter((line) => line.event === "tapRebuilt"),
     tailDrops: lines.filter((line) => line.event === "tailDropped"),
+    // Did a drop discard audible audio? The direct evidence that the check stopped a leak.
+    droppedLoud: lines.some((line) => (line.event === "tailDropped" || line.event === "tapRebuilt") && line.droppedMaxRms > LEAK_RMS),
     summary: lines.find((line) => line.event === "summary") };
 }
 
