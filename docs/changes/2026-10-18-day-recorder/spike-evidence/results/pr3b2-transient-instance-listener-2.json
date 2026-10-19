@@ -1,0 +1,51 @@
+{
+  "listen": true,
+  "first": {
+    "startT": 1792445131812.222,
+    "stopT": 1792445142316.765,
+    "pid": 71866
+  },
+  "second": {
+    "startT": 1792445133126.517,
+    "stopT": 1792445133539.33,
+    "pid": 71902
+  },
+  "controlTone": {
+    "startT": 1792445135909.957,
+    "stopT": 1792445136962.562,
+    "pid": 71923,
+    "capturedWindows100ms": 11
+  },
+  "controlTail": [],
+  "exitedMsBeforeNextPoll": 1095,
+  "leakedWindows100ms": 0,
+  "leakedDetail": [],
+  "rebuilds": [
+    {
+      "addedBundles": [
+        "dev.geekspace.spike.tone"
+      ],
+      "addedProcesses": 1,
+      "arrivedBundles": [
+        "dev.geekspace.spike.tone"
+      ],
+      "droppedMaxRms": 0,
+      "droppedWindows": 8,
+      "event": "tapRebuilt",
+      "excludedProcesses": 3,
+      "rebuildMs": 92.581,
+      "t": 1792445133093.112,
+      "trigger": "listener"
+    }
+  ],
+  "tailDrops": [],
+  "summary": {
+    "dbfs": -22.603,
+    "droppedWindows": 8,
+    "event": "summary",
+    "excludedProcesses": 3,
+    "peak": 0.2517280578613281,
+    "rms": 0.07410777918202117,
+    "samples": 565248
+  }
+}
