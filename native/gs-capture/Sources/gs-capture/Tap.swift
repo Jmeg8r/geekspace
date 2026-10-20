@@ -123,7 +123,6 @@ struct TapSession {
                      sinkFor: (AudioStreamBasicDescription) -> TapSink) -> TapSession {
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
         if let bundleIDs {
-            guard #available(macOS 26.0, *) else { fail("--by bundle needs macOS 26") }
             description.bundleIDs = bundleIDs
             description.isProcessRestoreEnabled = true
         }
