@@ -122,6 +122,19 @@ final class ArrivalClassificationTests: XCTestCase {
         XCTAssertEqual(Tap.classify(bundle: "", parent: 42, parentBundle: noApps, parentAlive: { _ in false }, denylist), .unreadable)
     }
 
+    func testAnotherUsersDaemonIsJudgedByItsOwnBundle() {
+        // Codex review of PR #79, round 2: a system daemon arriving after the baseline has an
+        // unreadable parent but is alive. It must not be denied (the tap would exclude its
+        // audio and audioUse would pause the mic), unless its own bundle is denylisted.
+        XCTAssertEqual(Tap.classify(bundle: "systemsoundserverd", parent: -1, otherUser: true, parentBundle: noApps,
+                                    parentAlive: alive, denylist), .allowed)
+        XCTAssertEqual(Tap.classify(bundle: "com.example.work", parent: -1, otherUser: true, parentBundle: noApps,
+                                    parentAlive: alive, denylist), .denylisted("com.example.work"))
+        // Unreadable because it is gone: still fail-closed.
+        XCTAssertEqual(Tap.classify(bundle: "", parent: -1, otherUser: false, parentBundle: noApps,
+                                    parentAlive: alive, denylist), .unreadable)
+    }
+
     func testAParentThatIsNotAnAppIsAllowed() {
         XCTAssertEqual(Tap.classify(bundle: "com.apple.TextEdit", parent: 1, parentBundle: noApps, parentAlive: alive, denylist), .allowed)
     }
@@ -245,6 +258,23 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         XCTAssertEqual(TapRunner.exclusion(polled: [7], denied: [7], previous: [5], alive: [1, 5, 7]), [5, 7])
         // Gone from the process list: dropped from the exclusion.
         XCTAssertEqual(TapRunner.exclusion(polled: [7], denied: [7], previous: [5], alive: [1, 7]), [7])
+    }
+
+    func testADaemonArrivingAfterTheBaselineIsNotDenied() {
+        // The end-to-end shape of the round-2 finding: object 9 arrives after the baseline,
+        // alive, parent unreadable (another user's daemon). It must not reach the denied set,
+        // which feeds both the tap's exclusion and audioUse.
+        var objects: [AudioObjectID] = [1]
+        let arrivals = ProcessArrivals(
+            identify: { ProcessIdentity(pid: pid_t($0), bundle: $0 == 9 ? "systemsoundserverd" : "", parent: $0 == 9 ? -1 : 1,
+                                        otherUser: $0 == 9) },
+            judge: { Tap.classify(bundle: $0.bundle, parent: $0.parent, otherUser: $0.otherUser, parentBundle: { _ in nil },
+                                  parentAlive: { _ in true }, ["com.example.work"]) },
+            list: { objects }, listen: false)
+        objects = [1, 9]
+        XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
+        XCTAssertEqual(arrivals.take(), [])
+        XCTAssertEqual(arrivals.deniedLive(), [])
     }
 
     func testAnArrivalAlreadyGoneIsFlaggedWithoutJudgement() {

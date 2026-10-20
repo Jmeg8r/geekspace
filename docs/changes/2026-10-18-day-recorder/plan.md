@@ -986,4 +986,22 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Re-proof:** `run-audio-use` 3 of 3, 0 violations. A fresh signed package passes
     `codesign --verify --deep --strict`, and the helper's entitlements equal the app's.
     `signed-run` 3 of 3, exit 0, 0 violations.
+- **2026-10-20, PR 3b-3, Codex round 2 (0 × P1, 1 × P2): gate passed; the P2 is fixed.**
+  - **The finding:** the daemon exemption covered only `audioUse`'s own check. A system
+    daemon *arriving after the baseline* went through PR #78's arrival classification. There
+    an unreadable parent means `unreadable`, so the daemon was **denied**. The tap then
+    excluded its audio, and through `knownDenied()` `audioUse` folded it in anyway.
+  - **The fix, in the shared path:** `Tap.identity` records `otherUser` when a process's
+    parent can't be read but the process is alive. `Tap.classify` judges such a process by
+    its own bundle only. Unreadable *because it is gone* stays `unreadable` (fail closed),
+    and #78's orphan path (a parent that dies after the snapshot) is unchanged.
+  - Tests: 46, including a daemon arriving after the baseline that must not reach `denied`.
+    Mutation check: without the `otherUser` branch, both new tests fail.
+  - **Regression on this build (dev):** `run-audio-use` (0 violations), orphan arrival and
+    baseline (0 leaked, decisive rebuild kept the child excluded; one attempt rejected by
+    its own precondition and re-run), b-during-a (0 leaked), `run-segments` (0 leaked),
+    `npm run verify` (40 files, 348 tests).
+  - **Not re-run:** the signed package. The signed-build proof above was taken at `8e6c619`.
+    This change is classification logic only, with no packaging or signing change, so it was
+    proven on the dev build.
 

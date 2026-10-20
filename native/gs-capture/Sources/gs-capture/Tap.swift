@@ -225,12 +225,15 @@ enum Tap {
     static func identity(_ object: AudioObjectID) -> ProcessIdentity? {
         guard let pid = ProcWatch.checkedPid(object), pid > 0,
               let bundle = ProcWatch.checkedBundleID(object) else { return nil }
-        return ProcessIdentity(pid: pid, bundle: bundle, parent: parentPid(pid))
+        let parent = parentPid(pid)
+        // Unreadable because it is gone stays unreadable (fail closed). Unreadable while alive
+        // is another user's process: measured, 6 of 37 live objects are such daemons.
+        return ProcessIdentity(pid: pid, bundle: bundle, parent: parent, otherUser: parent <= 0 && processAlive(pid))
     }
 
     /// The arrivals listener's judgement, on its judge queue: the same rule as `denylisted`.
     static func judge(_ identity: ProcessIdentity, _ denylist: [String]) -> Classification {
-        classify(bundle: identity.bundle, parent: identity.parent, parentBundle: { pid in
+        classify(bundle: identity.bundle, parent: identity.parent, otherUser: identity.otherUser, parentBundle: { pid in
             NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
         }, parentAlive: processAlive, denylist)
     }
@@ -239,9 +242,10 @@ enum Tap {
     static func processAlive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 || errno == EPERM }
 
     /// The pure half, testable: `parent` is -1 when the parent could not be read.
-    static func classify(bundle: String, parent: pid_t, parentBundle: (pid_t) -> String?,
+    static func classify(bundle: String, parent: pid_t, otherUser: Bool = false, parentBundle: (pid_t) -> String?,
                          parentAlive: (pid_t) -> Bool, _ denylist: [String]) -> Classification {
         if denylist.contains(where: { bundle == $0 || bundle.hasPrefix($0 + ".") }) { return .denylisted(bundle) }
+        if otherUser { return .allowed }
         guard parent > 0 else { return .unreadable }
         if let parentID = parentBundle(parent) {
             return denylist.contains(parentID) ? .denylisted(parentID) : .allowed
@@ -410,6 +414,10 @@ struct ProcessIdentity: Equatable {
     let bundle: String
     /// -1 when the parent could not be read.
     let parent: pid_t
+    /// The parent could not be read but the process is alive: another user's process (a
+    /// system daemon such as systemsoundserverd). It can't be a child of the user's denylisted
+    /// app, so it is judged by its own bundle only (Codex review of PR #79, round 2).
+    var otherUser = false
 }
 
 /// Observes every CoreAudio process object the moment the HAL reports it added, so a
