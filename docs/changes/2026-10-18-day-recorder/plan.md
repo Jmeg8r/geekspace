@@ -914,4 +914,52 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     | `pr78-run-segments.json` | 1 |
     | `pr78-3a-second-instance.json` | 3 |
     | `pr78-shutdown-unjudged-tail.json` | 1, the helper's output lines and exit code |
+- **2026-10-20, PR 3b-3: `audioUse` events, the build script, packaging, and the signed-build proof.**
+  - **`audioUse`** (`AudioUse.swift`, `protocol.md`) is polled every 100 ms on the audio
+    control queue (spike Q3), for PR 4's mic pause (F2) and call detection (F3).
+    - **Denylisted apps are never named.** They are folded into one `app: null,
+      denylisted: true` entry, by the same rule as `shot.appBundleId`.
+    - **"Denylisted" includes the tap's current exclusion**, so a helper orphaned from a
+      denylisted app (PR #78) pauses the mic too. F2 and the tap can't disagree.
+    - **Ignored:** `replayd` and `avconferenced` (our own capture, Q3/Q4), the helper
+      itself, and the supervisor with its children.
+    - **Found while documenting:** `tapRebuilt`/`tailDropped` name denylisted bundles in
+      their diagnostic fields. `protocol.md` now says the supervisor must not store or log
+      them (a **PR 3c** requirement).
+  - **Build and packaging:**
+    - `scripts/build-gs-capture.mjs` (`npm run build:gs-capture`, run by `package`) does a
+      release `swift build` on macOS, fails loudly if the binary is missing, and skips
+      with a message on other platforms.
+    - `mac.extraResources` ships it as `Contents/Resources/gs-capture`.
+    - `extendInfo` gains a real `NSAudioCaptureUsageDescription`.
+    - The helper's deployment target is now **macOS 26** (bundle-ID taps), and two
+      always-true `#available` checks are gone.
+    - `tests/dayRecorderPackaging.test.ts` checks the packaging config. A missing helper or a
+      generic usage string only shows on end-user machines.
+  - **Proof:**
+    - `swift test`: 41 tests, 4 of them new for `audioUse`.
+    - `run-audio-use`, **3 of 3**: the allowed app is named on start and stop. The
+      denylisted one appears only anonymously, and its ID is in no `audioUse` line (the gate
+      compares whole values, with a positive control). Latency was −17 to +84 ms.
+    - **Signed `npm run package`:** `codesign --verify --deep --strict` passes. The bundled
+      helper is signed with Hardened Runtime, team `Z4CHD4858S`, and the app's **five
+      inherited entitlements**, the same set spike Q7 settled; nothing new is needed. Its
+      minimum OS is 26.0, and the real usage string is in the Info.plist.
+    - **`signed-run`** runs the bundled helper from inside the signed app, with Geekspace as
+      the TCC-responsible process (`scripts/spike/signed-run.cjs`, the spike's Q7 method
+      now kept in the repo). **3 runs, all exit 0, ending `stopped`.** Frames were kept,
+      segments convert through the transcriber's ffmpeg call, and `audioUse` names the
+      allowed app and keeps the denylisted one anonymous.
+    - Evidence: `pr3b3-run-audio-use.json` and `pr3b3-signed-build.json`.
+  - **Observed, cause unverified: the first OCR under the newly signed app took 35.3 s**
+    (run 1). Runs 2 and 3 took 440–620 ms per frame. It looks like a one-time first-use
+    cost, but that is not proven.
+    - OCR runs synchronously in the capture loop, so a slow OCR stalls screenshots, and
+      `--duration` overran to 35.8 s.
+    - **For PR 3c:** consider moving OCR off the capture loop, and watch first-launch OCR
+      time in the soak.
+  - **Still open (needs James at the Mac):** the clean-TCC-state proof (a new macOS user),
+    to settle whether the tap needs its own grant (spike Q7). This Mac already has
+    Geekspace's grants from the spike. The proofs above show the packaged helper works
+    under them, not on a fresh install.
 

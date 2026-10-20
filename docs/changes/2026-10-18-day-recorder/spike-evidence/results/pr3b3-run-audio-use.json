@@ -1,0 +1,339 @@
+{
+  "proof": "run reports audioUse: the allowed app by name, the denylisted app only as the anonymous entry",
+  "command": "node scripts/spike-day-recorder.mjs run-audio-use",
+  "runs": [
+    {
+      "label": "run-1",
+      "result": {
+        "allowed": {
+          "tone": {
+            "startT": 1792464862830.627,
+            "stopT": 1792464864408.4138,
+            "pid": 77176
+          },
+          "events": [
+            {
+              "app": "dev.geekspace.spike.tone2",
+              "denylisted": false,
+              "event": "audioUse",
+              "input": false,
+              "output": true,
+              "t": 1792464862891.835,
+              "v": 1
+            },
+            {
+              "app": "dev.geekspace.spike.tone2",
+              "denylisted": false,
+              "event": "audioUse",
+              "input": false,
+              "output": false,
+              "t": 1792464864492.555,
+              "v": 1
+            }
+          ],
+          "latency": {
+            "startMs": 61,
+            "stopMs": 84
+          }
+        },
+        "denylisted": {
+          "tone": {
+            "startT": 1792464865917.407,
+            "stopT": 1792464867508.769,
+            "pid": 77214
+          },
+          "events": [
+            {
+              "app": null,
+              "denylisted": true,
+              "event": "audioUse",
+              "input": false,
+              "output": true,
+              "t": 1792464865921.58,
+              "v": 1
+            },
+            {
+              "app": null,
+              "denylisted": true,
+              "event": "audioUse",
+              "input": false,
+              "output": false,
+              "t": 1792464867572.909,
+              "v": 1
+            }
+          ],
+          "latency": {
+            "startMs": 4,
+            "stopMs": 64
+          }
+        },
+        "deniedBundleNamedInAudioUse": false,
+        "allAudioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792464862891.835,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792464864492.555,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792464865921.58,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792464867572.909,
+            "v": 1
+          }
+        ],
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    },
+    {
+      "label": "run-2",
+      "result": {
+        "allowed": {
+          "tone": {
+            "startT": 1792464872109.709,
+            "stopT": 1792464873693.021,
+            "pid": 77353
+          },
+          "events": [
+            {
+              "app": "dev.geekspace.spike.tone2",
+              "denylisted": false,
+              "event": "audioUse",
+              "input": false,
+              "output": true,
+              "t": 1792464872119.292,
+              "v": 1
+            },
+            {
+              "app": "dev.geekspace.spike.tone2",
+              "denylisted": false,
+              "event": "audioUse",
+              "input": false,
+              "output": false,
+              "t": 1792464873768.443,
+              "v": 1
+            }
+          ],
+          "latency": {
+            "startMs": 10,
+            "stopMs": 75
+          }
+        },
+        "denylisted": {
+          "tone": {
+            "startT": 1792464875259.603,
+            "stopT": 1792464876838.023,
+            "pid": 77407
+          },
+          "events": [
+            {
+              "app": null,
+              "denylisted": true,
+              "event": "audioUse",
+              "input": false,
+              "output": true,
+              "t": 1792464875303.063,
+              "v": 1
+            },
+            {
+              "app": null,
+              "denylisted": true,
+              "event": "audioUse",
+              "input": false,
+              "output": false,
+              "t": 1792464876842.543,
+              "v": 1
+            }
+          ],
+          "latency": {
+            "startMs": 43,
+            "stopMs": 5
+          }
+        },
+        "deniedBundleNamedInAudioUse": false,
+        "allAudioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792464872119.292,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792464873768.443,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792464875303.063,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792464876842.543,
+            "v": 1
+          }
+        ],
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    },
+    {
+      "label": "run-3",
+      "result": {
+        "allowed": {
+          "tone": {
+            "startT": 1792464881464.762,
+            "stopT": 1792464883039.845,
+            "pid": 77496
+          },
+          "events": [
+            {
+              "app": "dev.geekspace.spike.tone2",
+              "denylisted": false,
+              "event": "audioUse",
+              "input": false,
+              "output": true,
+              "t": 1792464881495.148,
+              "v": 1
+            },
+            {
+              "app": "dev.geekspace.spike.tone2",
+              "denylisted": false,
+              "event": "audioUse",
+              "input": false,
+              "output": false,
+              "t": 1792464883022.385,
+              "v": 1
+            }
+          ],
+          "latency": {
+            "startMs": 30,
+            "stopMs": -17
+          }
+        },
+        "denylisted": {
+          "tone": {
+            "startT": 1792464884481.865,
+            "stopT": 1792464886059.211,
+            "pid": 77558
+          },
+          "events": [
+            {
+              "app": null,
+              "denylisted": true,
+              "event": "audioUse",
+              "input": false,
+              "output": true,
+              "t": 1792464884494.134,
+              "v": 1
+            },
+            {
+              "app": null,
+              "denylisted": true,
+              "event": "audioUse",
+              "input": false,
+              "output": false,
+              "t": 1792464886136.222,
+              "v": 1
+            }
+          ],
+          "latency": {
+            "startMs": 12,
+            "stopMs": 77
+          }
+        },
+        "deniedBundleNamedInAudioUse": false,
+        "allAudioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792464881495.148,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792464883022.385,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792464884494.134,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792464886136.222,
+            "v": 1
+          }
+        ],
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    }
+  ]
+}

@@ -21,6 +21,10 @@ const HELPER = process.env.GS_CAPTURE_BIN ?? path.join(RELEASE_DIR, "gs-capture"
 const OCR_FIXTURES = path.join(ROOT, "tests", "fixtures", "day-recorder", "ocr-fixtures.json");
 const TONE_BUNDLE_ID = "dev.geekspace.spike.tone";
 const TONE_APP = path.join(OUT_DIR, "SpikeTone.app");
+// The same stand-in under a second bundle ID that is never denylisted: an allowed, named app
+// for the PR 3b-3 audioUse proof (a bare spike-tone would be the harness's own child).
+const ALLOWED_BUNDLE_ID = "dev.geekspace.spike.tone2";
+const ALLOWED_APP = path.join(OUT_DIR, "SpikeToneAllowed.app");
 const TEXTEDIT_BUNDLE_ID = "com.apple.TextEdit";
 const FINDER_BUNDLE_ID = "com.apple.finder";
 const ELECTRON_BUNDLE_ID = "com.github.Electron";
@@ -65,6 +69,10 @@ const TRANSIENT_TAP_SECONDS = 6;
 const TRANSIENT_START_MS = 600;
 const TRANSIENT_PLAY_SECONDS = 0.4;
 const SLOW_CLASSIFIER = { pollMs: 700, holdMs: 1_500, playSeconds: 0.1, classifyDelayMs: 2_200 };
+// PR 3b-3 signed-build proof: how long the bundled helper runs, and how long to wait past it.
+const SIGNED_RUN = { seconds: 9, graceSeconds: 60 };
+// PR 3b-3 audioUse proof: the allowed app plays at 1 s, the denylisted one at 4 s.
+const AUDIO_USE = { runSeconds: 9, allowedAtMs: 1_000, denylistedAtMs: 4_000, playSeconds: 1.5 };
 // The orphan child plays this long; the parent exits 0.8 s after spawning it (spike-tone).
 const ORPHAN = { tapSeconds: 9, startMs: 300, childSeconds: 5, controlMs: 7_000, minOrphanMs: 2_000,
   // Baseline variant: the parent lives this long, and the unrelated trigger instance starts
@@ -363,23 +371,125 @@ const commands = {
   /** Build the helper, and wrap spike-tone in an ad-hoc-signed .app with its own bundle ID. */
   build() {
     run("swift", ["build", "-c", "release", "--package-path", PACKAGE_DIR], { stdio: ["ignore", "pipe", "inherit"] });
-    const macos = path.join(TONE_APP, "Contents", "MacOS");
-    fs.rmSync(TONE_APP, { recursive: true, force: true });
-    fs.mkdirSync(macos, { recursive: true });
-    fs.copyFileSync(path.join(RELEASE_DIR, "spike-tone"), path.join(macos, "spike-tone"));
-    fs.writeFileSync(path.join(TONE_APP, "Contents", "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
+    for (const [app, bundleId, name] of [[TONE_APP, TONE_BUNDLE_ID, "SpikeTone"], [ALLOWED_APP, ALLOWED_BUNDLE_ID, "SpikeToneAllowed"]]) {
+      const macos = path.join(app, "Contents", "MacOS");
+      fs.rmSync(app, { recursive: true, force: true });
+      fs.mkdirSync(macos, { recursive: true });
+      fs.copyFileSync(path.join(RELEASE_DIR, "spike-tone"), path.join(macos, "spike-tone"));
+      fs.writeFileSync(path.join(app, "Contents", "Info.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-  <key>CFBundleIdentifier</key><string>${TONE_BUNDLE_ID}</string>
-  <key>CFBundleName</key><string>SpikeTone</string>
+  <key>CFBundleIdentifier</key><string>${bundleId}</string>
+  <key>CFBundleName</key><string>${name}</string>
   <key>CFBundleExecutable</key><string>spike-tone</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSUIElement</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Geekspace spike: holds the mic open to test detection.</string>
 </dict></plist>
 `);
-    run("codesign", ["--force", "--sign", "-", TONE_APP]);
-    save("build", { helper: HELPER, toneApp: TONE_APP, outDir: OUT_DIR });
+      run("codesign", ["--force", "--sign", "-", app]);
+    }
+    save("build", { helper: HELPER, toneApp: TONE_APP, allowedApp: ALLOWED_APP, outDir: OUT_DIR });
+  },
+
+  /**
+   * PR 3b-3 signed-build proof: the BUNDLED helper, run from inside the signed package with
+   * Geekspace as the TCC-responsible process (scripts/spike/signed-run.cjs). It must keep
+   * frames, write segments that convert through the transcriber's ffmpeg call, report the
+   * allowed app by name and the denylisted one anonymously, and stop cleanly.
+   * GS_SIGNED_APP overrides the app path (default: release/mac-arm64/Geekspace.app).
+   */
+  async "signed-run"() {
+    const app = process.env.GS_SIGNED_APP ?? path.join(ROOT, "release", "mac-arm64", "Geekspace.app");
+    if (!fs.existsSync(app)) throw new Error(`no signed app at ${app}; run npm run package first`);
+    const root = fs.mkdtempSync(path.join(OUT_DIR, "signed-run-"));
+    const out = path.join(OUT_DIR, "signed-run.out.json");
+    fs.rmSync(out, { force: true });
+    run("open", ["-n", "-g", "--env", "ELECTRON_RUN_AS_NODE=1", app, "--args",
+      path.join(ROOT, "scripts", "spike", "signed-run.cjs"), out, root, TONE_BUNDLE_ID, String(SIGNED_RUN.seconds)]);
+    await sleep(AUDIO_USE.allowedAtMs);
+    const allowedLog = path.join(OUT_DIR, "tone-signed-allowed.jsonl");
+    fs.rmSync(allowedLog, { force: true });
+    run("open", ["-n", "-g", "--stdout", allowedLog, "--stderr", allowedLog, ALLOWED_APP, "--args", "play",
+      String(AUDIO_USE.playSeconds), String(TONE_HZ), "0"]);
+    await sleep(AUDIO_USE.denylistedAtMs - AUDIO_USE.allowedAtMs);
+    launchTone("play", AUDIO_USE.playSeconds, "signed-denied", [TONE_HZ, 0]);
+    const deadline = Date.now() + (SIGNED_RUN.seconds + SIGNED_RUN.graceSeconds) * 1000;
+    while (!fs.existsSync(out)) {
+      if (Date.now() > deadline) throw new Error("the signed app wrote no result");
+      await sleep(TONE_LOG_POLL_MS);
+    }
+    await sleep(TONE_LOG_POLL_MS);
+    const raw = JSON.parse(fs.readFileSync(out, "utf8"));
+    const lines = raw.lines ?? [];
+    const shots = lines.filter((line) => line.event === "shot");
+    const segments = lines.filter((line) => line.event === "segment");
+    const uses = lines.filter((line) => line.event === "audioUse");
+    const decodes = segments.map((segment, index) => {
+      const wav = path.join(OUT_DIR, `signed-seg-${index}.wav`);
+      run("ffmpeg", ["-y", "-loglevel", "error", "-i", path.join(root, segment.path), "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav]);
+      return { path: segment.path, wavBytes: fs.statSync(wav).size };
+    });
+    const result = {
+      app, helper: raw.helper, exitCode: raw.exitCode, spawnError: raw.spawnError ?? null, stderr: raw.stderr,
+      events: lines.map((line) => line.event),
+      shots: shots.map((shot) => ({ path: shot.path, menuBarBlanked: shot.menuBarBlanked, ocrChars: shot.ocrText?.chars })),
+      segments: decodes,
+      audioUse: uses,
+      allowedNamed: uses.some((line) => line.app === ALLOWED_BUNDLE_ID && line.output),
+      deniedAnonymous: uses.some((line) => line.denylisted && line.app === null && line.output),
+      last: lines.at(-1),
+    };
+    save("pr3b3-signed-run", result);
+    if (raw.spawnError || raw.exitCode !== 0) throw new Error(`the bundled helper failed: exit ${raw.exitCode} ${raw.spawnError ?? ""} ${raw.stderr}`);
+    if (!shots.length) throw new Error("no frame was kept: is Geekspace granted Screen & System Audio Recording?");
+    if (!segments.length) throw new Error("no audio segment was written");
+    if (!result.allowedNamed || !result.deniedAnonymous) throw new Error("audioUse did not report both apps as required");
+    if (result.last?.event !== "stopped") throw new Error("the run did not end with stopped");
+  },
+
+  /**
+   * PR 3b-3 proof: `run` reports audioUse. An allowed app (SpikeToneAllowed) is named when it
+   * plays; a denylisted one (SpikeTone) is reported only as the unnamed denylisted entry, and
+   * its bundle ID appears in no audioUse line. Each must start and stop.
+   */
+  async "run-audio-use"() {
+    const root = fs.mkdtempSync(path.join(OUT_DIR, "run-audio-use-"));
+    const handle = background(["run", "--media-root", root, "--denylist", TONE_BUNDLE_ID, "--shot-sec", 60,
+      "--duration", AUDIO_USE.runSeconds]);
+    await captureLive(handle);
+    await sleep(AUDIO_USE.allowedAtMs);
+    const allowedLog = path.join(OUT_DIR, "tone-audio-use-allowed.jsonl");
+    fs.rmSync(allowedLog, { force: true });
+    run("open", ["-n", "-g", "--stdout", allowedLog, "--stderr", allowedLog, ALLOWED_APP, "--args", "play",
+      String(AUDIO_USE.playSeconds), String(TONE_HZ), "0"]);
+    await sleep(AUDIO_USE.denylistedAtMs - AUDIO_USE.allowedAtMs);
+    const deniedLog = launchTone("play", AUDIO_USE.playSeconds, "audio-use-denied", [TONE_HZ, 0]);
+    const lines = await handle.done;
+    const allowed = await spikeToneInterval(allowedLog, AUDIO_USE.playSeconds);
+    const denied = await spikeToneInterval(deniedLog, AUDIO_USE.playSeconds);
+    const uses = lines.filter((line) => line.event === "audioUse");
+    const named = (app) => uses.filter((line) => line.app === app);
+    const deniedUses = uses.filter((line) => line.denylisted);
+    const latency = (events, tone) => ({
+      startMs: Math.round((events.find((line) => line.output)?.t ?? NaN) - tone.startT),
+      stopMs: Math.round((events.find((line) => !line.output && !line.input)?.t ?? NaN) - tone.stopT),
+    });
+    const result = {
+      allowed: { tone: allowed, events: named(ALLOWED_BUNDLE_ID), latency: latency(named(ALLOWED_BUNDLE_ID), allowed) },
+      denylisted: { tone: denied, events: deniedUses, latency: latency(deniedUses, denied) },
+      // Whole values, not substrings: the allowed app's ID starts with the denylisted one's.
+      deniedBundleNamedInAudioUse: uses.some((line) => Object.values(line).some((value) =>
+        value === TONE_BUNDLE_ID || (typeof value === "string" && value.startsWith(`${TONE_BUNDLE_ID}.`)))),
+      allAudioUse: uses,
+      last: lines.at(-1),
+    };
+    save("pr3b3-run-audio-use", result);
+    const startsAndStops = (events) => events.some((line) => line.output) && events.some((line) => !line.output && !line.input);
+    if (!startsAndStops(result.allowed.events)) throw new Error("the allowed app's audio use did not start and stop by name");
+    if (!startsAndStops(result.denylisted.events)) throw new Error("the denylisted app's audio use did not start and stop");
+    if (result.deniedBundleNamedInAudioUse) throw new Error("an audioUse line named the denylisted app");
+    if (result.denylisted.events.some((line) => line.app !== null)) throw new Error("a denylisted audioUse line carries an app");
   },
 
   /**

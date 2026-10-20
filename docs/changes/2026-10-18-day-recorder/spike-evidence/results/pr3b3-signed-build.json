@@ -1,0 +1,249 @@
+{
+  "proof": "Signed npm run package build: the bundled helper is signed, inherits the app entitlements, and runs from inside the app with Geekspace as the TCC-responsible process",
+  "command": "npm run package; node scripts/spike-day-recorder.mjs signed-run",
+  "static": {
+    "codesignVerifyDeepStrict": "OK",
+    "helperSignature": [
+      "Identifier=gs-capture",
+      "CodeDirectory v=20500 size=1462 flags=0x10000(runtime) hashes=35+7 location=embedded",
+      "TeamIdentifier=Z4CHD4858S",
+      "Runtime Version=26.0.0"
+    ],
+    "appEntitlements": {
+      "com.apple.security.cs.allow-unsigned-executable-memory": true,
+      "com.apple.security.automation.apple-events": true,
+      "com.apple.security.cs.allow-jit": true,
+      "com.apple.security.device.audio-input": true,
+      "com.apple.security.cs.disable-library-validation": true
+    },
+    "helperEntitlements": {
+      "com.apple.security.cs.allow-unsigned-executable-memory": true,
+      "com.apple.security.automation.apple-events": true,
+      "com.apple.security.cs.allow-jit": true,
+      "com.apple.security.device.audio-input": true,
+      "com.apple.security.cs.disable-library-validation": true
+    },
+    "NSAudioCaptureUsageDescription": "Geekspace's Day Recorder records your Mac's system audio, leaving out the apps on your denylist, so it can transcribe your day. The audio stays on this Mac.",
+    "helperMinos": " minos 26.0"
+  },
+  "runs": [
+    {
+      "label": "run-1 (first use of the new signed identity)",
+      "rawFileKept": false,
+      "observed": {
+        "exitCode": 0,
+        "runMs": 35813,
+        "ocrMs": [
+          35314.46
+        ],
+        "events": {
+          "ready": 1,
+          "heartbeat": 7,
+          "shot": 1,
+          "segment": 13,
+          "audioUse": 4,
+          "tapRebuilt": 1,
+          "stopped": 1
+        },
+        "last": "stopped"
+      },
+      "note": "Values copied from the raw output before a later run overwrote it. The harness gave up waiting at 24 s; the helper itself succeeded."
+    },
+    {
+      "label": "run-2",
+      "result": {
+        "app": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app",
+        "helper": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app/Contents/Resources/gs-capture",
+        "exitCode": 0,
+        "spawnError": null,
+        "stderr": "",
+        "events": [
+          "ready",
+          "shot",
+          "audioUse",
+          "audioUse",
+          "segment",
+          "segment",
+          "tapRebuilt",
+          "audioUse",
+          "shot",
+          "heartbeat",
+          "audioUse",
+          "segment",
+          "segment",
+          "stopped"
+        ],
+        "shots": [
+          {
+            "path": "2026-10-19/shot-230143-897.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 3420
+          },
+          {
+            "path": "2026-10-19/shot-230147-918.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 3489
+          }
+        ],
+        "segments": [
+          {
+            "path": "2026-10-19/sys-230143-894.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-230146-902.m4a",
+            "wavBytes": 15054
+          },
+          {
+            "path": "2026-10-19/sys-230148-044.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-230151-052.m4a",
+            "wavBytes": 59428
+          }
+        ],
+        "audioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792465304924.16,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792465306559.616,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792465308047.679,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792465309718.192,
+            "v": 1
+          }
+        ],
+        "allowedNamed": true,
+        "deniedAnonymous": true,
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    },
+    {
+      "label": "run-3",
+      "result": {
+        "app": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app",
+        "helper": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app/Contents/Resources/gs-capture",
+        "exitCode": 0,
+        "spawnError": null,
+        "stderr": "",
+        "events": [
+          "ready",
+          "shot",
+          "audioUse",
+          "audioUse",
+          "segment",
+          "segment",
+          "tapRebuilt",
+          "audioUse",
+          "heartbeat",
+          "audioUse",
+          "segment",
+          "segment",
+          "stopped"
+        ],
+        "shots": [
+          {
+            "path": "2026-10-19/shot-230154-158.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 3487
+          }
+        ],
+        "segments": [
+          {
+            "path": "2026-10-19/sys-230154-155.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-230157-163.m4a",
+            "wavBytes": 14372
+          },
+          {
+            "path": "2026-10-19/sys-230158-272.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-230201-280.m4a",
+            "wavBytes": 61476
+          }
+        ],
+        "audioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792465315262.638,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792465316847.125,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792465318273.904,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792465319878.844,
+            "v": 1
+          }
+        ],
+        "allowedNamed": true,
+        "deniedAnonymous": true,
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    }
+  ]
+}
