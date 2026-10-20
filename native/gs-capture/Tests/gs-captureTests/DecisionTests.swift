@@ -362,3 +362,28 @@ final class AudioUseTests: XCTestCase {
         XCTAssertEqual(started.map(\.key), [.denylisted])
     }
 }
+
+/// Liveness from proc_pidinfo, not kill(pid, 0) (Codex review of PR #79, round 3): a zombie
+/// must read as gone, or an exited denylisted child could be judged another user's process,
+/// and an exited denylisted parent could make its orphan look allowed.
+final class ProcessLookupTests: XCTestCase {
+    func testAZombieIsGoneEvenThoughKillSucceeds() throws {
+        var child: pid_t = 0
+        var argv: [UnsafeMutablePointer<CChar>?] = [strdup("/usr/bin/true"), nil]
+        defer { argv.compactMap { $0 }.forEach { free($0) } }
+        XCTAssertEqual(posix_spawn(&child, "/usr/bin/true", nil, nil, &argv, nil), 0)
+        // Exited and not reaped yet: a zombie.
+        usleep(300_000)
+        XCTAssertEqual(kill(child, 0), 0, "the trap: kill(pid, 0) succeeds for a zombie")
+        XCTAssertEqual(Tap.lookup(child), .gone)
+        XCTAssertFalse(Tap.processAlive(child))
+        XCTAssertEqual(Tap.parentPid(child), -1)
+        var status: Int32 = 0
+        waitpid(child, &status, 0)
+    }
+
+    func testOurOwnProcessReadsItsParent() {
+        XCTAssertEqual(Tap.lookup(getpid()), .parent(getppid()))
+        XCTAssertTrue(Tap.processAlive(getpid()))
+    }
+}

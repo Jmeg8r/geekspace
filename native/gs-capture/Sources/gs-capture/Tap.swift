@@ -207,10 +207,28 @@ enum Tap {
         if status != noErr { fail("\(what) failed, OSStatus \(status)") }
     }
 
-    static func parentPid(_ pid: pid_t) -> pid_t {
+    /// What `proc_pidinfo` says about a process. Measured on macOS 27.0: another user's
+    /// daemon is refused with EPERM; an exited process, INCLUDING an unreaped zombie, fails
+    /// with ESRCH. `kill(pid, 0)` can't tell these apart, because it succeeds for a zombie (Codex
+    /// review of PR #79, round 3), so liveness and "another user's process" come from here.
+    enum Lookup: Equatable {
+        case parent(pid_t)
+        case otherUser
+        case gone
+    }
+
+    static func lookup(_ pid: pid_t) -> Lookup {
         var info = proc_bsdinfo()
+        errno = 0
         let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size))
-        return size == MemoryLayout<proc_bsdinfo>.size ? pid_t(info.pbi_ppid) : -1
+        if size == MemoryLayout<proc_bsdinfo>.size { return .parent(pid_t(info.pbi_ppid)) }
+        return errno == EPERM ? .otherUser : .gone
+    }
+
+    /// -1 when the parent can't be read (another user's process, or gone).
+    static func parentPid(_ pid: pid_t) -> pid_t {
+        if case .parent(let parent) = lookup(pid) { return parent }
+        return -1
     }
 
     /// A process belongs to a denylisted app if its bundle ID is the app's or starts with
@@ -225,10 +243,13 @@ enum Tap {
     static func identity(_ object: AudioObjectID) -> ProcessIdentity? {
         guard let pid = ProcWatch.checkedPid(object), pid > 0,
               let bundle = ProcWatch.checkedBundleID(object) else { return nil }
-        let parent = parentPid(pid)
-        // Unreadable because it is gone stays unreadable (fail closed). Unreadable while alive
-        // is another user's process: measured, 6 of 37 live objects are such daemons.
-        return ProcessIdentity(pid: pid, bundle: bundle, parent: parent, otherUser: parent <= 0 && processAlive(pid))
+        // Gone (a zombie included) stays unreadable: fail closed. Only a positive EPERM marks
+        // another user's process (measured: every such daemon here, 5-6 of 35-37 objects).
+        switch lookup(pid) {
+        case .parent(let parent): return ProcessIdentity(pid: pid, bundle: bundle, parent: parent)
+        case .otherUser: return ProcessIdentity(pid: pid, bundle: bundle, parent: -1, otherUser: true)
+        case .gone: return ProcessIdentity(pid: pid, bundle: bundle, parent: -1)
+        }
     }
 
     /// The arrivals listener's judgement, on its judge queue: the same rule as `denylisted`.
@@ -238,8 +259,8 @@ enum Tap {
         }, parentAlive: processAlive, denylist)
     }
 
-    /// kill(pid, 0) probes without signalling; EPERM still means the process exists.
-    static func processAlive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 || errno == EPERM }
+    /// Alive and not a zombie (see `lookup`).
+    static func processAlive(_ pid: pid_t) -> Bool { lookup(pid) != .gone }
 
     /// The pure half, testable: `parent` is -1 when the parent could not be read.
     static func classify(bundle: String, parent: pid_t, otherUser: Bool = false, parentBundle: (pid_t) -> String?,

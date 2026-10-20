@@ -1004,4 +1004,22 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Not re-run:** the signed package. The signed-build proof above was taken at `8e6c619`.
     This change is classification logic only, with no packaging or signing change, so it was
     proven on the dev build.
+- **2026-10-20, PR 3b-3, Codex round 3 (1 × P1), fixed across its class.**
+  - **The finding:** the round-2 `otherUser` test used `kill(pid, 0)`, which **succeeds for
+    a zombie** (exited, not yet reaped). A denylisted app's short-lived child that exited
+    mid-classification could therefore be judged another user's process, and `allowed`.
+  - **Measured before fixing:** `proc_pidinfo` fails with **EPERM** for every unreadable
+    live object here (5 daemons) and with **ESRCH** for a zombie, while `kill(pid, 0)`
+    succeeds on that zombie.
+  - **The same weakness had a second instance:** the orphan rule's `parentAlive` also used
+    `kill`, so a denylisted parent that had exited but was not yet reaped counted as alive,
+    and its orphan read as `allowed`.
+  - **Fix, for the whole class:** one `Tap.lookup` (`proc_pidinfo`) returns `parent`,
+    `otherUser` (EPERM only) or `gone` (ESRCH, zombies included). Liveness, `otherUser` and
+    `audioUse`'s skip all come from it. `kill(pid, 0)` is no longer used.
+  - Tests: 48. One test spawns a **real zombie** and asserts it reads as gone, while
+    `kill(pid, 0)` succeeds on it. Mutation check: with `kill`-based liveness, it fails.
+  - **Regression (dev build):** `run-audio-use` (0 violations), orphan arrival and baseline
+    (0 leaked, child excluded), b-during-a (0 leaked), `run-segments` (0 leaked),
+    `npm run verify` (40 files, 348 tests).
 
