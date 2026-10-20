@@ -47,6 +47,22 @@ enum AudioUse {
             || process.pid == supervisorPid || process.parent == supervisorPid
     }
 
+    /// Whether a process counts as denylisted: it is in the tap's exclusion or the arrivals
+    /// listener's denied set, or its own bundle, its owning app, or its PARENT's app matches
+    /// the denylist. The parent is checked even when the process is an app itself, as the
+    /// tap's rule does (Codex review of PR #79: a child with its own bundle ID under a
+    /// denylisted parent could otherwise be named before the tap's exclusion caught up).
+    ///
+    /// A parent that can't be read is NOT treated as denylisted. Measured on macOS 27.0: 6 of
+    /// 37 process objects (systemsoundserverd, mediaremoted, audiomxd...) are other users'
+    /// daemons whose parent is unreadable, and folding them in would pause the mic on every
+    /// alert sound. A daemon can't be a child of a user's denylisted app. A process whose own
+    /// info is unreadable because it exited is skipped in `poll`. A live child whose parent
+    /// exited reads its new parent (launchd), and is covered by `known`.
+    static func isDenylisted(bundle: String, app: String, parentApp: String?, known: Bool, denylist: [String]) -> Bool {
+        known || Run.denylisted(bundle, denylist) || Run.denylisted(app, denylist) || Run.denylisted(parentApp, denylist)
+    }
+
     /// Fold processes into one state per key. Apps with no name are dropped: they can be
     /// neither a call app nor denylisted (a denylisted orphan is caught by the tap's
     /// exclusion and folded into `.denylisted`).
@@ -103,17 +119,20 @@ enum AudioUse {
 
     /// Read every CoreAudio process object now. Objects that vanish mid-read are skipped:
     /// a process that is gone is not using audio.
-    static func poll(denylist: [String], excluded: Set<AudioObjectID>) -> [Process] {
+    /// `known` is every object the tap excludes or the arrivals listener has denied.
+    static func poll(denylist: [String], known: Set<AudioObjectID>) -> [Process] {
         ProcWatch.processList().compactMap { object in
             guard let pid = ProcWatch.checkedPid(object), pid > 0,
                   let bundle = ProcWatch.checkedBundleID(object) else { return nil }
             let input = ProcWatch.uint32(object, kAudioProcessPropertyIsRunningInput) == 1
             let output = ProcWatch.uint32(object, kAudioProcessPropertyIsRunningOutput) == 1
             let parent = Tap.parentPid(pid)
-            let app = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
-                ?? (parent > 0 ? NSRunningApplication(processIdentifier: parent)?.bundleIdentifier : nil)
-                ?? bundle
-            let denylisted = excluded.contains(object) || Run.denylisted(bundle, denylist) || Run.denylisted(app, denylist)
+            // Unreadable AND gone: it has exited, so it is not using audio.
+            if parent <= 0 && !Tap.processAlive(pid) { return nil }
+            let parentApp = parent > 0 ? NSRunningApplication(processIdentifier: parent)?.bundleIdentifier : nil
+            let app = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? parentApp ?? bundle
+            let denylisted = isDenylisted(bundle: bundle, app: app, parentApp: parentApp,
+                                          known: known.contains(object), denylist: denylist)
             return Process(pid: pid, parent: parent, bundle: bundle, app: app, input: input, output: output,
                            denylisted: denylisted)
         }
@@ -138,11 +157,11 @@ final class AudioUseWatcher {
     }
 
     /// Call often; polls at most every `pollMs`.
-    func tick(excluded: [AudioObjectID]) {
+    func tick(known: Set<AudioObjectID>) {
         let now = nowMs()
         guard now >= nextPoll else { return }
         nextPoll = now + AudioUseWatcher.pollMs
-        let processes = AudioUse.poll(denylist: denylist, excluded: Set(excluded))
+        let processes = AudioUse.poll(denylist: denylist, known: known)
             .filter { !AudioUse.ignored($0, ownPid: ownPid, supervisorPid: supervisorPid) }
         let current = AudioUse.aggregate(processes)
         for change in AudioUse.changes(from: last, to: current) {

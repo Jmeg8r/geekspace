@@ -236,6 +236,17 @@ const pidAlive = (pid) => {
     throw error;
   }
 };
+/**
+ * The audioUse anonymity rule, applied to EVERY line (Codex review of PR #79): no line may carry
+ * the denylisted ID (or "<id>." helper) as any whole value, and every denylisted line has a
+ * null app. Whole values, not substrings: the allowed app's ID starts with the denylisted one's.
+ * Returns the offending lines.
+ */
+function audioUseViolations(uses, deniedId) {
+  return uses.filter((line) => (line.denylisted && line.app !== null) || Object.values(line).some((value) =>
+    value === deniedId || (typeof value === "string" && value.startsWith(`${deniedId}.`))));
+}
+
 const readTone = (log) => (fs.existsSync(log) ? jsonLines(fs.readFileSync(log, "utf8")) : []);
 
 /**
@@ -438,6 +449,7 @@ const commands = {
       audioUse: uses,
       allowedNamed: uses.some((line) => line.app === ALLOWED_BUNDLE_ID && line.output),
       deniedAnonymous: uses.some((line) => line.denylisted && line.app === null && line.output),
+      anonymityViolations: audioUseViolations(uses, TONE_BUNDLE_ID),
       last: lines.at(-1),
     };
     save("pr3b3-signed-run", result);
@@ -445,6 +457,7 @@ const commands = {
     if (!shots.length) throw new Error("no frame was kept: is Geekspace granted Screen & System Audio Recording?");
     if (!segments.length) throw new Error("no audio segment was written");
     if (!result.allowedNamed || !result.deniedAnonymous) throw new Error("audioUse did not report both apps as required");
+    if (result.anonymityViolations.length) throw new Error(`${result.anonymityViolations.length} audioUse line(s) named the denylisted app`);
     if (result.last?.event !== "stopped") throw new Error("the run did not end with stopped");
   },
 
@@ -478,9 +491,7 @@ const commands = {
     const result = {
       allowed: { tone: allowed, events: named(ALLOWED_BUNDLE_ID), latency: latency(named(ALLOWED_BUNDLE_ID), allowed) },
       denylisted: { tone: denied, events: deniedUses, latency: latency(deniedUses, denied) },
-      // Whole values, not substrings: the allowed app's ID starts with the denylisted one's.
-      deniedBundleNamedInAudioUse: uses.some((line) => Object.values(line).some((value) =>
-        value === TONE_BUNDLE_ID || (typeof value === "string" && value.startsWith(`${TONE_BUNDLE_ID}.`)))),
+      anonymityViolations: audioUseViolations(uses, TONE_BUNDLE_ID),
       allAudioUse: uses,
       last: lines.at(-1),
     };
@@ -488,8 +499,7 @@ const commands = {
     const startsAndStops = (events) => events.some((line) => line.output) && events.some((line) => !line.output && !line.input);
     if (!startsAndStops(result.allowed.events)) throw new Error("the allowed app's audio use did not start and stop by name");
     if (!startsAndStops(result.denylisted.events)) throw new Error("the denylisted app's audio use did not start and stop");
-    if (result.deniedBundleNamedInAudioUse) throw new Error("an audioUse line named the denylisted app");
-    if (result.denylisted.events.some((line) => line.app !== null)) throw new Error("a denylisted audioUse line carries an app");
+    if (result.anonymityViolations.length) throw new Error(`${result.anonymityViolations.length} audioUse line(s) named the denylisted app`);
   },
 
   /**

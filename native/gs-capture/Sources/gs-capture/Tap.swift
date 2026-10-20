@@ -656,6 +656,12 @@ final class TapRunner {
         Array(Set(polled).union(denied).union(Set(previous).intersection(alive))).sorted()
     }
 
+    /// Every object this runner treats as denylisted right now: the session's exclusion and
+    /// the listener's denied set (which can be ahead of the next rebuild). Control queue only.
+    func knownDenied() -> Set<AudioObjectID> {
+        Set(session.excluded).union(arrivals?.deniedLive() ?? [])
+    }
+
     private func exclusionNow() -> [AudioObjectID] {
         TapRunner.exclusion(polled: objectsNow(), denied: arrivals?.deniedLive() ?? [],
                             previous: session.excluded, alive: Set(ProcWatch.processList()))

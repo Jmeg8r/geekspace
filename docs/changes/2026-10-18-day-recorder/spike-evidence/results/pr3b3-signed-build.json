@@ -26,28 +26,161 @@
     "NSAudioCaptureUsageDescription": "Geekspace's Day Recorder records your Mac's system audio, leaving out the apps on your denylist, so it can transcribe your day. The audio stays on this Mac.",
     "helperMinos": " minos 26.0"
   },
+  "firstUseOcr": {
+    "note": "First OCR after a fresh package, both times it was measured (cause unverified)",
+    "earlierPackageRun1": {
+      "ocrMs": 35314.46,
+      "runMs": 35813
+    },
+    "thisPackageRun1OcrMs": 35812.982
+  },
   "runs": [
     {
-      "label": "run-1 (first use of the new signed identity)",
-      "rawFileKept": false,
-      "observed": {
+      "label": "run-1 (first use of this package)",
+      "result": {
+        "app": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app",
+        "helper": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app/Contents/Resources/gs-capture",
         "exitCode": 0,
-        "runMs": 35813,
-        "ocrMs": [
-          35314.46
+        "spawnError": null,
+        "stderr": "",
+        "events": [
+          "ready",
+          "audioUse",
+          "audioUse",
+          "segment",
+          "tapRebuilt",
+          "audioUse",
+          "audioUse",
+          "heartbeat",
+          "segment",
+          "segment",
+          "heartbeat",
+          "segment",
+          "segment",
+          "heartbeat",
+          "segment",
+          "heartbeat",
+          "segment",
+          "segment",
+          "heartbeat",
+          "segment",
+          "segment",
+          "heartbeat",
+          "segment",
+          "heartbeat",
+          "segment",
+          "shot",
+          "segment",
+          "stopped"
         ],
-        "events": {
-          "ready": 1,
-          "heartbeat": 7,
-          "shot": 1,
-          "segment": 13,
-          "audioUse": 4,
-          "tapRebuilt": 1,
-          "stopped": 1
-        },
-        "last": "stopped"
-      },
-      "note": "Values copied from the raw output before a later run overwrote it. The harness gave up waiting at 24 s; the helper itself succeeded."
+        "shots": [
+          {
+            "path": "2026-10-19/shot-232201-542.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 3063
+          }
+        ],
+        "segments": [
+          {
+            "path": "2026-10-19/sys-232201-544.m4a",
+            "wavBytes": 51918
+          },
+          {
+            "path": "2026-10-19/sys-232203-855.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232206-863.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232209-871.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232212-879.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232215-887.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232218-895.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232221-903.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232224-911.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232227-919.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232230-927.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232233-935.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-19/sys-232236-943.m4a",
+            "wavBytes": 23246
+          }
+        ],
+        "audioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792466521545.877,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792466522326.651,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792466523963.41,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792466525522.687,
+            "v": 1
+          }
+        ],
+        "allowedNamed": true,
+        "deniedAnonymous": true,
+        "anonymityViolations": [],
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
     },
     {
       "label": "run-2",
@@ -61,46 +194,52 @@
           "ready",
           "shot",
           "audioUse",
+          "shot",
           "audioUse",
           "segment",
           "segment",
           "tapRebuilt",
           "audioUse",
-          "shot",
           "heartbeat",
           "audioUse",
+          "shot",
           "segment",
           "segment",
           "stopped"
         ],
         "shots": [
           {
-            "path": "2026-10-19/shot-230143-897.heic",
+            "path": "2026-10-19/shot-232239-213.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3420
+            "ocrChars": 3170
           },
           {
-            "path": "2026-10-19/shot-230147-918.heic",
+            "path": "2026-10-19/shot-232241-217.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3489
+            "ocrChars": 3136
+          },
+          {
+            "path": "2026-10-19/shot-232245-234.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 3160
           }
         ],
         "segments": [
           {
-            "path": "2026-10-19/sys-230143-894.m4a",
+            "path": "2026-10-19/sys-232239-211.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-230146-902.m4a",
+            "path": "2026-10-19/sys-232242-219.m4a",
             "wavBytes": 15054
           },
           {
-            "path": "2026-10-19/sys-230148-044.m4a",
+            "path": "2026-10-19/sys-232243-324.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-230151-052.m4a",
-            "wavBytes": 59428
+            "path": "2026-10-19/sys-232246-332.m4a",
+            "wavBytes": 60792
           }
         ],
         "audioUse": [
@@ -110,7 +249,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792465304924.16,
+            "t": 1792466560302.506,
             "v": 1
           },
           {
@@ -119,7 +258,7 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792465306559.616,
+            "t": 1792466561904.293,
             "v": 1
           },
           {
@@ -128,7 +267,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792465308047.679,
+            "t": 1792466563326.066,
             "v": 1
           },
           {
@@ -137,12 +276,13 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792465309718.192,
+            "t": 1792466564937.591,
             "v": 1
           }
         ],
         "allowedNamed": true,
         "deniedAnonymous": true,
+        "anonymityViolations": [],
         "last": {
           "event": "stopped",
           "reason": "duration",
@@ -175,27 +315,27 @@
         ],
         "shots": [
           {
-            "path": "2026-10-19/shot-230154-158.heic",
+            "path": "2026-10-19/shot-232249-312.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3487
+            "ocrChars": 3161
           }
         ],
         "segments": [
           {
-            "path": "2026-10-19/sys-230154-155.m4a",
+            "path": "2026-10-19/sys-232249-309.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-230157-163.m4a",
-            "wavBytes": 14372
+            "path": "2026-10-19/sys-232252-317.m4a",
+            "wavBytes": 13688
           },
           {
-            "path": "2026-10-19/sys-230158-272.m4a",
+            "path": "2026-10-19/sys-232253-427.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-230201-280.m4a",
-            "wavBytes": 61476
+            "path": "2026-10-19/sys-232256-435.m4a",
+            "wavBytes": 60792
           }
         ],
         "audioUse": [
@@ -205,7 +345,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792465315262.638,
+            "t": 1792466570315.936,
             "v": 1
           },
           {
@@ -214,7 +354,7 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792465316847.125,
+            "t": 1792466571965.136,
             "v": 1
           },
           {
@@ -223,7 +363,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792465318273.904,
+            "t": 1792466573533.853,
             "v": 1
           },
           {
@@ -232,12 +372,13 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792465319878.844,
+            "t": 1792466575156.21,
             "v": 1
           }
         ],
         "allowedNamed": true,
         "deniedAnonymous": true,
+        "anonymityViolations": [],
         "last": {
           "event": "stopped",
           "reason": "duration",

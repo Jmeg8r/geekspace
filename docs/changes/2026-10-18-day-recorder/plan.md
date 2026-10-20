@@ -951,9 +951,11 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       segments convert through the transcriber's ffmpeg call, and `audioUse` names the
       allowed app and keeps the denylisted one anonymous.
     - Evidence: `pr3b3-run-audio-use.json` and `pr3b3-signed-build.json`.
-  - **Observed, cause unverified: the first OCR under the newly signed app took 35.3 s**
-    (run 1). Runs 2 and 3 took 440–620 ms per frame. It looks like a one-time first-use
-    cost, but that is not proven.
+  - **Observed twice, cause unverified: the first OCR after every fresh package takes about
+    35 s** (35.3 s and 35.8 s, on two separately signed packages). Every later frame took
+    440–620 ms. It is tied to the first run of each new build, and the cause (a Vision model
+    load for the new code identity, perhaps) is not proven. **In practice, capture would
+    stall for about 35 s after every app update.**
     - OCR runs synchronously in the capture loop, so a slow OCR stalls screenshots, and
       `--duration` overran to 35.8 s.
     - **For PR 3c:** consider moving OCR off the capture loop, and watch first-launch OCR
@@ -962,4 +964,26 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     to settle whether the tap needs its own grant (spike Q7). This Mac already has
     Geekspace's grants from the spike. The proofs above show the packaged helper works
     under them, not on a fresh install.
+- **2026-10-20, PR 3b-3, Codex round 1 (1 × P1, 1 × P2), both fixed.**
+  - **P1: a child with its own bundle ID under a denylisted parent could be named.**
+    `audioUse` checked the parent only when the child was not an app itself.
+    - **Fix:** `AudioUse.isDenylisted` is now a pure, tested function: the tap's exclusion
+      plus the listener's denied set (`TapRunner.knownDenied`), or the process's bundle, its
+      app, or its **parent's app** matches the denylist.
+    - **Measured before choosing fail-closed:** 6 of 37 live process objects
+      (`systemsoundserverd`, `mediaremoted`, `audiomxd`, …) are other users' daemons whose
+      parent is unreadable. Treating an unreadable parent as denylisted would pause the mic
+      on every alert sound. So an unreadable parent is not denylisted, and a process that
+      is unreadable because it has exited is skipped. A daemon can't be a child of a user's
+      denylisted app. A live orphan reads launchd as its parent and is covered by the
+      tap's and the listener's denied sets.
+    - Tests: 44, including the child, orphan and daemon cases. Mutation check: without the
+      parent clause, the child test fails.
+  - **P2: `signed-run` checked only that an anonymous event existed.** Both proofs now share
+    `audioUse` violation checking over every line: no whole value is the denylisted ID
+    or `<id>.…`, and every denylisted line has a null app. Codex's mixed sequence is
+    rejected.
+  - **Re-proof:** `run-audio-use` 3 of 3, 0 violations. A fresh signed package passes
+    `codesign --verify --deep --strict`, and the helper's entitlements equal the app's.
+    `signed-run` 3 of 3, exit 0, 0 violations.
 

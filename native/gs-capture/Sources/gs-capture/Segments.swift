@@ -291,7 +291,7 @@ final class SystemAudioRecorder {
                 // tick returns the release limit, read before it checks arrivals and capped at
                 // the last completed classification pass (Codex review of PR 3b-2, rounds 4-5).
                 runner.sink.release(now: runner.tick(poll: true))
-                watcher.tick(excluded: runner.session.excluded)
+                watcher.tick(known: runner.knownDenied())
             }
             timer.resume()
             self.timer = timer

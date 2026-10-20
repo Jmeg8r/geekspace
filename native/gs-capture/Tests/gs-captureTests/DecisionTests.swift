@@ -302,6 +302,25 @@ final class AudioUseTests: XCTestCase {
         XCTAssertEqual(states, [.app("com.google.Chrome"): AudioUse.State(input: true, output: true)])
     }
 
+    func testAChildWithItsOwnBundleUnderADenylistedParentIsDenylisted() {
+        // Codex review of PR #79: the child is an app of its own, so its owning app is its own
+        // ID; the parent must still be checked.
+        XCTAssertTrue(AudioUse.isDenylisted(bundle: "com.other.player", app: "com.other.player",
+                                            parentApp: "com.example.work", known: false, denylist: ["com.example.work"]))
+    }
+
+    func testTheTapsKnowledgeCountsEvenWhenNothingElseMatches() {
+        // An orphaned helper: parent now launchd, no bundle match, but the tap/listener denied it.
+        XCTAssertTrue(AudioUse.isDenylisted(bundle: "", app: "", parentApp: nil, known: true, denylist: ["com.example.work"]))
+    }
+
+    func testASystemDaemonWithAnUnreadableParentIsNotDenylisted() {
+        // Measured: systemsoundserverd and friends have an unreadable parent. Folding them in
+        // would pause the mic on every alert sound.
+        XCTAssertFalse(AudioUse.isDenylisted(bundle: "systemsoundserverd", app: "systemsoundserverd",
+                                             parentApp: nil, known: false, denylist: ["com.example.work"]))
+    }
+
     func testOnlyChangesAreReportedAndAnAppThatStopsReadsAsOff() {
         let zoomOn: [AudioUse.Key: AudioUse.State] = [.app("us.zoom.xos"): .init(input: true, output: true)]
         XCTAssertTrue(AudioUse.changes(from: zoomOn, to: zoomOn).isEmpty)
