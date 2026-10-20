@@ -38,8 +38,8 @@ One JSON object per line on **stdout**, keys sorted. Every line has `"v": 1` and
 | `heartbeat` | `t` (epoch ms) | every 5 s, after a fresh Screen Recording check passes |
 | `shot` | `day`, `path`, `takenAt`, `appBundleId`, `menuBarBlanked`, `ocrText`, `ocrMs` | a changed frame was written |
 | `segment` | `kind`, `day`, `path`, `start`, `end`, `peak` | a finished system-audio segment was written |
-| `tapRebuilt` | `t`, `droppedWindows`, `droppedMaxRms`, `addedProcesses`, `addedBundles`, `excludedProcesses`, `rebuildMs` | a new denylisted process appeared; held audio was dropped and the tap rebuilt |
-| `tailDropped` | `t`, `droppedWindows`, `droppedMaxRms`, `addedProcesses`, `addedBundles` | at stop, a denylisted process appeared after the last poll; the held tail was dropped |
+| `tapRebuilt` | `t`, `trigger`, `arrivedBundles`, `droppedWindows`, `droppedMaxRms`, `addedProcesses`, `addedBundles`, `excludedProcesses`, `rebuildMs` | a new denylisted process appeared; held audio was dropped and the tap rebuilt |
+| `tailDropped` | `t`, `droppedWindows`, `droppedMaxRms`, `arrivedBundles`, `unjudged`, `addedProcesses`, `addedBundles` | at stop, a denylisted process appeared after the last poll; the held tail was dropped |
 | `sampleRateChanged` | `t`, `from`, `to` | a rebuilt tap runs at a new rate (output device changed); later segments use it |
 | `sessionUnverified` | `t`, `livedMs`, `endedBy` | a tap session ended before its first IO cycle could be expected (under 200 ms); informational |
 | `stopped` | `reason` | clean end: `duration` (proofs) or `signal`. Always the **last** line: nothing is written after it |
@@ -79,8 +79,11 @@ More detail on the fields:
   - `peak` (0–1) is the loudest sample. A silent segment is normal (nothing was playing);
     whether to skip transcribing it is PR 5's decision.
 - **`tapRebuilt` / `tailDropped`** carry only counts, levels and bundle IDs, never audio.
-  Detection is the 100 ms poll of live processes only. A denylisted process that starts and
-  exits between two polls is not seen: see plan.md, "open risk", and the follow-up PR.
+  `trigger` is `listener` when the HAL's process-list notification reported a denylisted
+  process being added (`arrivedBundles`; `unclassified` for one that was already exiting), and
+  `poll` when only the 100 ms poll of live processes found it. The listener catches a process
+  that starts and exits between polls. `tailDropped.unjudged: true` means arrivals were still
+  being judged when the stop's 5 s deadline ran out, so the tail was dropped unjudged.
   `droppedMaxRms` above 0 means the drop discarded audible audio.
 
 ## Failure
@@ -90,7 +93,8 @@ There is no error event. Failures include a missing permission, a ScreenCaptureK
 hangs past 10 s (a process-exiting watchdog), an unwritable file, and a menu bar that can't
 be found to blank while the denylist is non-empty. On the audio side they include a tap that
 delivers no samples within 1 s of being (re)built or stops delivering for 1 s at any point
-(an output device unplugged), a tap buffer whose channel layout is not
+(an output device unplugged), process classification that has not completed a pass for 5 s
+(held audio can't be judged, so it is never released unjudged), a tap buffer whose channel layout is not
 the tap's, and a segment that cannot be written, finalized or read back. The supervisor
 treats each of these as "Not recording" (spec R3):
 

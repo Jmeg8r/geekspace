@@ -704,6 +704,18 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       exit 0.
     - A signal *before* `ready` can still arrive during process startup (exit 143, no
       lines). `protocol.md` says so.
+- **2026-10-19, `feat/day-recorder-arrivals` (follow-up to PR 3b-2): the listener's redesign.**
+  This branch reverts the removal commit, so `ProcessArrivals` and the
+  `tap-transient-instance` proof are back as they stood at round 4. It closes the OPEN RISK
+  above. **Not ready to merge.** Codex round 5's two P1s are still open here:
+  - **Release can pass classification still in flight.** `tick` reads only published flags;
+    `changed()` publishes after classifying every added object. Planned fix: the arrivals
+    queue stamps when it last *finished* a pass, and release is capped at that stamp minus
+    the hold. A stalled classifier then holds audio back instead of letting it through.
+  - **A parent that exits mid-lookup reads as a non-app parent (allowed).** Planned fix:
+    re-check the parent pid after resolving it, and return `unreadable` if it is gone.
+  - Proof plan: the existing transient proof (control must leak, listener 0 in 3 of 3),
+    plus unit tests for the release cap and the parent re-check. Then a tagged Codex round.
 - **2026-10-19, PR 3b-2, Codex round 6 (tagged, 0 × P1, 1 × P2): gate passed; the P2 is fixed.**
   - The finding: the `run-segments` negative control (`GS_RUN_DENYLIST=""`) exited 1 on the
     "no rebuild" assertion *before* its leak check ran. Its exit code therefore did not prove
@@ -712,4 +724,194 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - Re-run: the negative control now fails on the leak check, **"89 window(s) carried the
     denylisted tone"**, exit 1. A normal run passes: 0 leaks, 21 control windows, 4
     segments, `stopped/signal`.
+- **2026-10-19, `feat/day-recorder-arrivals`: both round-5 P1s fixed by redesign, not by patch.**
+  - **Release is capped at the last *completed* classification pass.**
+    - `ProcessArrivals` stamps each pass with its start time (`checkedThrough`). The stamp
+      is published together with that pass's flags, under one lock.
+    - `TapRunner.tick` now *returns* the release limit. It reads the limit at entry, before
+      it takes flags, so every flag behind the limit has been acted on before the caller
+      releases. Both callers (`run`, `tap`) release against it. The ordering lives in one
+      place.
+    - Each tick also requests a pass, so the limit advances when nothing notifies. At most
+      one is queued.
+    - A classifier stalled for 5 s fails the run (spec R3), rather than holding without
+      bound.
+    - **Result:** a slow or stuck classifier now delays audio. It can no longer let audio
+      through.
+  - **A parent that has exited reads as `unreadable`.** After the app lookup returns no
+    bundle ID, the parent's liveness is checked with `kill(pid, 0)`. If it is alive now, it
+    was alive during the lookup, so "not an app" is real. If it is gone, it is unknown, and
+    unknown is dropped.
+  - **Unit tests (32):**
+    - a pass publishes its flags with its limit;
+    - a stalled pass holds the limit back and shows no flag;
+    - unreadable arrivals are flagged;
+    - an exited parent is `unreadable`.
+    - Mutation check: with the limit taken from the wall clock, both cap tests fail.
+  - **Live proof of the race** (`GS_TRANSIENT=slow-classifier`): polls every 700 ms, a
+    1.5 s hold, a 0.1 s second instance, and every classification slowed to 2.2 s with the
+    proof-only `--classify-delay-ms`.
+
+    | Run | Leaked | Rebuild dropped |
+    |---|---|---|
+    | Control, release by the clock (`--release-cap 0`) | **2** (115 and 221 ms after start) | silence |
+    | Capped, 3 of 3 | **0, 0, 0** | **loud audio** (0.15–0.17 RMS): the cap held instance 2's tone until its flag |
+
+    - Every capped run flagged instance 2 as `unclassified`. After 2.2 s it had exited, so
+      the fail-closed path was exercised too.
+    - Runs where instance 2 met a poll are rejected by the harness and re-run.
+  - **Regression:** the fast transient proof (control 5 leaked, listener 0), `run-segments`
+    (0 leaks, rebuild by `listener`, `stopped/signal`) and the PR 3a proof (0 leaked).
+  - The residual is unchanged: an object added and removed inside the ~1 ms handler read
+    latency leaves no trace.
+- **2026-10-19, `feat/day-recorder-arrivals`, Codex #78 round 1 (1 × P1, 1 × P2), both fixed.**
+  - **P1: a slow judgement blinded observation.** Snapshots and classification shared one
+    serial queue. While an allowed process A was being judged, a denylisted B could start
+    and exit unseen, and the next snapshot moved the limit past it.
+    - **Fix:** the two are split.
+      - The HAL handler's queue only *snapshots*: the list, and each new object's pid,
+        bundle and parent, read while it lives (`Tap.identity`).
+      - A second serial queue *judges* (`Tap.judge`: the parent's app lookup and liveness).
+      - Each observed arrival is a ticket bounded by the previous snapshot's start. Release
+        is capped at the oldest outstanding ticket, or the last snapshot's start.
+      - A ticket leaves under the lock that publishes its flag.
+  - **P2: shutdown could hang on a stuck judgement.** Stopping cancels the tick, and with it
+    the stall check, before `finish` waited on the listener.
+    - **Fix:** `settle(timeoutMs: 5000)` runs one more snapshot and waits for the judge
+      queue to drain, with its own deadline. Past it, the tail is dropped as `unjudged` and
+      never released. Shutdown then completes normally.
+  - **Unit tests (34):**
+    - B living entirely during A's stuck judgement is still flagged;
+    - a slow judgement holds the limit at its arrival's bound while snapshots keep going;
+    - `settle` gives up on a stuck judgement;
+    - an already-gone arrival is flagged without judgement.
+    - Mutation check: judging on the snapshot queue again (the old design) fails the B test.
+  - **Live proof** (`GS_TRANSIENT=b-during-a`): the slow-classifier timing, plus A, a silent
+    allowed process (SpikeTone at 0 Hz, so the RMS meter can't mistake it for a leak). B
+    starts about 300 ms after A, and the harness checks that B exits inside A's 2.2 s
+    judgement and before the next poll.
+
+    | Run | Leaked | Rebuild |
+    |---|---|---|
+    | Control: the previous binary `d00a65d` (one queue) | **2** | **none**: B was never observed |
+    | New, 3 of 3 | **0, 0, 0** | by the listener, on B's own bundle ID; dropped B's tone (0.18 RMS) |
+
+    - **Cost, visible in the proof:** B's judgement waited behind A's 2.2 s one, so its
+      drop landed while the control tone played and discarded it too. The control was heard
+      in 2 windows, not the usual 11. A drop discards everything held. With real
+      (sub-millisecond) judgements that window is tiny.
+  - **Shutdown deadline, live:** an allowed arrival 0.6 s before the end, with judgement
+    slowed to 7 s. The helper waited 5 s, reported `tailDropped` with `unjudged: true` (12
+    windows), wrote its summary and exited 0.
+  - **Regression:** slow-classifier capped (0 leaked), fast transient (control 5, listener
+    0), `run-segments` (0 leaks, `stopped/signal`), PR 3a proof (0 leaked), `npm run
+    verify` (39 files, 343 tests).
+  - Evidence: `pr78-b-during-a.json` and `pr78-shutdown-unjudged-tail.json` (see the
+    bundle index below).
+- **2026-10-19, `feat/day-recorder-arrivals`, Codex #78 round 2 (1 × P1, 1 × P2), both fixed.**
+  - **P1: an `unreadable` helper was dropped once and then captured.** Take a helper with no
+    bundle ID whose denylisted parent exits before its judgement. It is judged `unreadable`
+    and its held audio is dropped. But the rebuild's exclusion came only from a re-poll,
+    which can no longer tie the orphan to the denylist, and the snapshot already counts it
+    as known.
+    - **Fix (the class, not the instance):** verdicts carry their object
+      (`ProcessArrivals.Flag`). Every object judged denylisted or unreadable joins a
+      `denied` set, which is pruned when the object leaves the list. Every exclusion is now
+      `TapRunner.exclusion(polled:denied:)`, at build, at each rebuild check and at the
+      shutdown tail. Whatever produced the verdict, the object stays excluded while it lives.
+    - **Unit test:** a helper whose parent exits before judgement stays in `deniedLive`
+      across snapshots and leaves it only when it leaves the list. Mutation check: without
+      recording `unreadable` in `denied`, the test fails.
+    - **Live proof** (`tap-orphan-helper`, with SpikeTone's new `spawn-child` mode):
+      - SpikeTone (denylisted) starts a bare child tone. The child is playing before the
+        parent exits (checked from the log), then plays on as an orphan for about 4.6 s.
+      - Judgement is slowed to 2.2 s, so the child is judged after its parent is gone.
+      - A non-denylisted control plays after the child stops.
+
+      | Run | Leaked | Listener rebuild excluded |
+      |---|---|---|
+      | Control: the previous binary `b746be6` | **31** (from 1.7 s after the parent exits) | **0** processes |
+      | Fixed, 3 of 3 | **0, 0, 0** | **1** process (the orphan) |
+
+  - **P2: the transient proof judged "between polls" against a computed schedule.** Polls
+    are rescheduled from each tick, and a listener check resets them. Run `new-2` of the
+    b-during-a proof had a poll-triggered rebuild during B's life and was wrongly counted.
+    - **Fix:** a run is rejected when any `tapRebuilt` with `trigger: poll` names the tone's
+      bundle, meaning a real poll saw instance 2. The computed-schedule check is gone, and
+      the old b-during-a "new" evidence was deleted and re-run.
+    - **Re-run** under the gate: **3 valid of 3 tries, 0 rejected.** A poll saw B in none of
+      them. 0 leaks. The only rebuild in each is the listener's, which drops B's tone
+      (0.18 RMS). The `d00a65d` control passes the gate too: it has no rebuild at all.
+  - **Regression on this build:**
+    - slow-classifier capped: 0 leaked;
+    - fast transient: control 5, listener 0, no poll saw instance 2;
+    - `run-segments`: 0 leaks, `stopped/signal`;
+    - `npm run verify`: 39 files, 343 tests;
+    - `swift test`: 36 tests.
+    - **PR 3a proof: 3 runs, 0 / 0 / 1 leaked.** The one window ended 105 ms after the
+      control tone's logged stop (0.065 RMS), inside the 103–128 ms control-tail band
+      measured on this tap. The 3a counter deliberately has no tail allowance, so it can't
+      tell the two apart. It is the same pattern as PR 3a's unattributed run 2. Recorded as
+      **likely the control's output tail, not proven**. PR 3c's soak keeps the detail
+      logging.
+- **2026-10-20, `feat/day-recorder-arrivals`, Codex #78 round 3 (1 × P1, 2 × P2): the class is fixed.**
+  - **The P1 was the same class as round 2, and my round-2 fix covered only one instance of
+    it.** Exclusion was sticky only for what the *listener* had judged. A helper excluded by
+    the **initial poll** (playing under a live denylisted parent when the tap started) was
+    never judged. Once its parent exited, an unrelated rebuild re-polled it out of the
+    exclusion.
+    - **The class fix:** `TapRunner.exclusion = poll ∪ denied ∪ (previous exclusion ∩
+      alive)`. Once an object is excluded by **any** path, it stays excluded until it leaves
+      the process list. A rebuild can only add exclusions.
+    - **Unit test:** an object excluded before stays excluded while alive, and leaves the
+      exclusion when it leaves the list. 37 tests in all.
+    - **Live proof** (`GS_ORPHAN=baseline tap-orphan-helper`): the child is already playing
+      under a parent that lives 2 s when the tap starts. The parent exits. Then an unrelated
+      short denylisted instance forces a rebuild. Normal judgement speed.
+
+      | Run | Leaked | Decisive rebuild kept the child excluded |
+      |---|---|---|
+      | Control: previous binary `db5b2ff` | **20** (from 1.5 s after the parent exits) | no (it re-polled the orphan out) |
+      | Fixed, 3 valid | **0, 0, 0** | yes (the child's pid is in `excludedPids`) |
+
+      Two attempts were rejected by the scenario's own preconditions and re-run: one fixed
+      run where the tap started outside the parent's life, and one control run with missing
+      log events.
+  - **P2: the poll gate could be fooled by a mixed listener/poll rebuild.** `tapRebuilt` now
+    records `pollDue`, `addedBundles` read *before* the rebuild, and `excludedPids`. The
+    transient proof rejects any run where a due poll's additions name the tone.
+    - b-during-a re-run under that gate: **3 valid, 0 rejected, 0 leaks.** In each run the
+      only rebuild is the listener's (`pollDue: false`).
+  - **P2: the orphan proof did not require its decisive rebuild.** Both variants now require
+    a rebuild after the parent exits and before the child stops, and that it still excludes
+    the child's pid (arrival variant: the listener's `unclassified` rebuild).
+    - Arrival variant re-run: **3 of 3**, 0 leaks, decisive rebuild present and excluding
+      the child. The old arrival-variant evidence was replaced.
+  - **Regression on this build:**
+    - slow-classifier capped: 0 leaked;
+    - fast transient: control 5, listener 0;
+    - `run-segments`: 0 leaks, `stopped/signal`;
+    - PR 3a proof: **0 / 0 / 0**;
+    - shutdown deadline: `tailDropped` with `unjudged`, exit 0;
+    - `npm run verify`: 39 files, 343 tests.
+- **2026-10-20, `feat/day-recorder-arrivals`: the evidence is bundled, one file per proof.**
+  - **Why:** the forge's AI review read 8 of the PR's 33 changed files and failed closed. 25
+    of the 33 were per-run evidence JSON.
+  - **What changed:** each run is now stored verbatim inside one file per proof, labelled with
+    the commit it was recorded in (from `git log`) and, for a control, the helper binary that
+    produced it. All 25 runs were checked equal to their source files before the sources were
+    removed (a positive control showed the check reports a mismatch). PR 3b-2's own
+    `pr3a-second-instance-rebuild-3b2-*.json` and `pr3b2-run-segments-1.json` are restored to
+    their state on `main`, and this branch's re-runs of them live in the bundles.
+  - **Bundle index** (`spike-evidence/results/`):
+
+    | File | Runs |
+    |---|---|
+    | `pr78-b-during-a.json` | control from the previous binary `d00a65d`, 3 fixed |
+    | `pr78-orphan-helper.json` | arrival: control from `b746be6`, 3 fixed; baseline: control from `db5b2ff`, 3 fixed |
+    | `pr78-transient-instance.json` | listener-off control, 3 listener |
+    | `pr78-slow-classifier.json` | uncapped control, 3 capped |
+    | `pr78-run-segments.json` | 1 |
+    | `pr78-3a-second-instance.json` | 3 |
+    | `pr78-shutdown-unjudged-tail.json` | 1, the helper's output lines and exit code |
 
