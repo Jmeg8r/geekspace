@@ -951,8 +951,8 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       segments convert through the transcriber's ffmpeg call, and `audioUse` names the
       allowed app and keeps the denylisted one anonymous.
     - Evidence: `pr3b3-run-audio-use.json` and `pr3b3-signed-build.json`.
-  - **Observed twice, cause unverified: the first OCR after every fresh package takes about
-    35 s** (35.3 s and 35.8 s, on two separately signed packages). Every later frame took
+  - **Observed three times, cause unverified: the first OCR after every fresh package takes
+    about 35 s** (35.3 s, 35.8 s and 36.6 s, on three separately signed packages). Every later frame took
     440–620 ms. It is tied to the first run of each new build, and the cause (a Vision model
     load for the new code identity, perhaps) is not proven. **In practice, capture would
     stall for about 35 s after every app update.**
@@ -1033,4 +1033,13 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Rounds 1–4 each found a real race or rule gap in reading process state** (parent
     check, daemon exemption, zombie liveness, double lookup). Round 4 is the top of the
     3–4 round cap (L42), so the next step is James's decision, not a fifth round by default.
+- **2026-10-20, PR 3b-3, Codex round 5 (final): GATE PASS, `[P2] none`, on `6a8f9fb`.**
+  - The signed package was rebuilt from a clean tree at `6a8f9fb`. `codesign --verify --deep
+    --strict` passes. The helper is signed with the runtime flag, team `Z4CHD4858S`, and
+    entitlements equal to the app's, with minimum OS 26.0. No Swift source is newer than
+    the bundled build.
+  - `signed-run`: **3 of 3**, exit 0, 0 anonymity violations, ending `stopped`. The first
+    OCR took 36.6 s again.
+  - Evidence: `pr3b3-signed-build.json` (built from `6a8f9fb`).
+  - This commit changes only docs and evidence. The code is exactly what round 5 reviewed.
 

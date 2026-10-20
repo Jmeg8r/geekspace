@@ -1,5 +1,6 @@
 {
-  "proof": "Signed npm run package build: the bundled helper is signed, inherits the app entitlements, and runs from inside the app with Geekspace as the TCC-responsible process",
+  "proof": "Signed npm run package build of the final head 6a8f9fb: the bundled helper is signed, inherits the app entitlements, and runs from inside the app with Geekspace as the TCC-responsible process",
+  "builtFromCommit": "6a8f9fb",
   "command": "npm run package; node scripts/spike-day-recorder.mjs signed-run",
   "static": {
     "codesignVerifyDeepStrict": "OK",
@@ -27,12 +28,18 @@
     "helperMinos": " minos 26.0"
   },
   "firstUseOcr": {
-    "note": "First OCR after a fresh package, both times it was measured (cause unverified)",
-    "earlierPackageRun1": {
+    "note": "First OCR after a fresh package, all three times measured (cause unverified)",
+    "ee9b9e6Run1": {
       "ocrMs": 35314.46,
       "runMs": 35813
     },
-    "thisPackageRun1OcrMs": 35812.982
+    "8e6c619Run1": {
+      "ocrMs": 35812.982
+    },
+    "6a8f9fbRun1": {
+      "ocrMs": 36634.095,
+      "runMs": 37143
+    }
   },
   "runs": [
     {
@@ -61,9 +68,11 @@
           "segment",
           "heartbeat",
           "segment",
+          "audioUse",
           "segment",
           "heartbeat",
           "segment",
+          "audioUse",
           "segment",
           "heartbeat",
           "segment",
@@ -75,63 +84,63 @@
         ],
         "shots": [
           {
-            "path": "2026-10-19/shot-232201-542.heic",
+            "path": "2026-10-20/shot-000656-872.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3063
+            "ocrChars": 2545
           }
         ],
         "segments": [
           {
-            "path": "2026-10-19/sys-232201-544.m4a",
-            "wavBytes": 51918
+            "path": "2026-10-20/sys-000656-871.m4a",
+            "wavBytes": 42360
           },
           {
-            "path": "2026-10-19/sys-232203-855.m4a",
+            "path": "2026-10-20/sys-000658-861.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232206-863.m4a",
+            "path": "2026-10-20/sys-000701-869.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232209-871.m4a",
+            "path": "2026-10-20/sys-000704-877.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232212-879.m4a",
+            "path": "2026-10-20/sys-000707-885.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232215-887.m4a",
+            "path": "2026-10-20/sys-000710-893.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232218-895.m4a",
+            "path": "2026-10-20/sys-000713-901.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232221-903.m4a",
+            "path": "2026-10-20/sys-000716-909.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232224-911.m4a",
+            "path": "2026-10-20/sys-000719-917.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232227-919.m4a",
+            "path": "2026-10-20/sys-000722-925.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232230-927.m4a",
+            "path": "2026-10-20/sys-000725-933.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232233-935.m4a",
+            "path": "2026-10-20/sys-000728-941.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232236-943.m4a",
-            "wavBytes": 23246
+            "path": "2026-10-20/sys-000731-949.m4a",
+            "wavBytes": 59428
           }
         ],
         "audioUse": [
@@ -141,7 +150,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792466521545.877,
+            "t": 1792469216878.515,
             "v": 1
           },
           {
@@ -150,7 +159,7 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792466522326.651,
+            "t": 1792469217554.98,
             "v": 1
           },
           {
@@ -159,7 +168,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792466523963.41,
+            "t": 1792469218974.605,
             "v": 1
           },
           {
@@ -168,7 +177,25 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792466525522.687,
+            "t": 1792469220536.059,
+            "v": 1
+          },
+          {
+            "app": "com.openai.codex",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": true,
+            "output": false,
+            "t": 1792469239256.689,
+            "v": 1
+          },
+          {
+            "app": "com.openai.codex",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469245857.104,
             "v": 1
           }
         ],
@@ -200,45 +227,45 @@
           "segment",
           "tapRebuilt",
           "audioUse",
+          "shot",
           "heartbeat",
           "audioUse",
-          "shot",
           "segment",
           "segment",
           "stopped"
         ],
         "shots": [
           {
-            "path": "2026-10-19/shot-232239-213.heic",
+            "path": "2026-10-20/shot-000735-390.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3170
+            "ocrChars": 2889
           },
           {
-            "path": "2026-10-19/shot-232241-217.heic",
+            "path": "2026-10-20/shot-000737-392.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3136
+            "ocrChars": 2888
           },
           {
-            "path": "2026-10-19/shot-232245-234.heic",
+            "path": "2026-10-20/shot-000739-422.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3160
+            "ocrChars": 2893
           }
         ],
         "segments": [
           {
-            "path": "2026-10-19/sys-232239-211.m4a",
+            "path": "2026-10-20/sys-000735-387.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232242-219.m4a",
-            "wavBytes": 15054
+            "path": "2026-10-20/sys-000738-395.m4a",
+            "wavBytes": 13688
           },
           {
-            "path": "2026-10-19/sys-232243-324.m4a",
+            "path": "2026-10-20/sys-000739-497.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232246-332.m4a",
+            "path": "2026-10-20/sys-000742-505.m4a",
             "wavBytes": 60792
           }
         ],
@@ -249,7 +276,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792466560302.506,
+            "t": 1792469256492.643,
             "v": 1
           },
           {
@@ -258,7 +285,7 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792466561904.293,
+            "t": 1792469258013.887,
             "v": 1
           },
           {
@@ -267,7 +294,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792466563326.066,
+            "t": 1792469259610.516,
             "v": 1
           },
           {
@@ -276,7 +303,7 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792466564937.591,
+            "t": 1792469261252.911,
             "v": 1
           }
         ],
@@ -302,6 +329,7 @@
           "ready",
           "shot",
           "audioUse",
+          "shot",
           "audioUse",
           "segment",
           "segment",
@@ -309,32 +337,49 @@
           "audioUse",
           "heartbeat",
           "audioUse",
+          "shot",
           "segment",
+          "shot",
           "segment",
           "stopped"
         ],
         "shots": [
           {
-            "path": "2026-10-19/shot-232249-312.heic",
+            "path": "2026-10-20/shot-000745-474.heic",
             "menuBarBlanked": true,
-            "ocrChars": 3161
+            "ocrChars": 2888
+          },
+          {
+            "path": "2026-10-20/shot-000747-476.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 1657
+          },
+          {
+            "path": "2026-10-20/shot-000751-499.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 1680
+          },
+          {
+            "path": "2026-10-20/shot-000753-518.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 1812
           }
         ],
         "segments": [
           {
-            "path": "2026-10-19/sys-232249-309.m4a",
+            "path": "2026-10-20/sys-000745-470.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232252-317.m4a",
-            "wavBytes": 13688
+            "path": "2026-10-20/sys-000748-478.m4a",
+            "wavBytes": 15054
           },
           {
-            "path": "2026-10-19/sys-232253-427.m4a",
+            "path": "2026-10-20/sys-000749-584.m4a",
             "wavBytes": 96974
           },
           {
-            "path": "2026-10-19/sys-232256-435.m4a",
+            "path": "2026-10-20/sys-000752-592.m4a",
             "wavBytes": 60792
           }
         ],
@@ -345,7 +390,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792466570315.936,
+            "t": 1792469266521.321,
             "v": 1
           },
           {
@@ -354,7 +399,7 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792466571965.136,
+            "t": 1792469268064.671,
             "v": 1
           },
           {
@@ -363,7 +408,7 @@
             "event": "audioUse",
             "input": false,
             "output": true,
-            "t": 1792466573533.853,
+            "t": 1792469269696.872,
             "v": 1
           },
           {
@@ -372,7 +417,7 @@
             "event": "audioUse",
             "input": false,
             "output": false,
-            "t": 1792466575156.21,
+            "t": 1792469271277.494,
             "v": 1
           }
         ],
