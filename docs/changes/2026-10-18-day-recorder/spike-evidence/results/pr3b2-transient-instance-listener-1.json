@@ -5,23 +5,24 @@
   "holdMs": 5000,
   "tapExtra": [],
   "first": {
-    "startT": 1792449157968.676,
-    "stopT": 1792449168473.4768,
-    "pid": 60369
+    "startT": 1792454858351.9568,
+    "stopT": 1792454868857.089,
+    "pid": 49974
   },
   "second": {
-    "startT": 1792449159339.538,
-    "stopT": 1792449159770.2751,
-    "pid": 60430
+    "startT": 1792454859702.247,
+    "stopT": 1792454860122.165,
+    "pid": 50015
   },
   "controlTone": {
-    "startT": 1792449162085.325,
-    "stopT": 1792449163144.213,
-    "pid": 60459,
+    "startT": 1792454862443.902,
+    "stopT": 1792454863492.068,
+    "pid": 50039,
     "capturedWindows100ms": 11
   },
   "controlTail": [],
-  "exitedMsBeforeNextPoll": 1027,
+  "secondLivedMs": 420,
+  "pollRebuildsSeeingSecond": 0,
   "leakedWindows100ms": 0,
   "leakedDetail": [],
   "rebuilds": [
@@ -37,19 +38,19 @@
       "droppedWindows": 8,
       "event": "tapRebuilt",
       "excludedProcesses": 3,
-      "rebuildMs": 124.424,
-      "t": 1792449159296.833,
+      "rebuildMs": 104.721,
+      "t": 1792454859666.747,
       "trigger": "listener"
     }
   ],
   "tailDrops": [],
   "summary": {
-    "dbfs": -22.558,
+    "dbfs": -22.611,
     "droppedWindows": 8,
     "event": "summary",
     "excludedProcesses": 3,
-    "peak": 0.2501582205295563,
-    "rms": 0.07448827407031845,
-    "samples": 565248
+    "peak": 0.2506897747516632,
+    "rms": 0.07404069857861424,
+    "samples": 566272
   }
 }

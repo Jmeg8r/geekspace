@@ -8,67 +8,54 @@
     2200
   ],
   "first": {
-    "startT": 1792449084586.2852,
-    "stopT": 1792449095091.713,
-    "pid": 58862
+    "startT": 1792454798841.962,
+    "stopT": 1792454809347.0713,
+    "pid": 49362
   },
   "second": {
-    "startT": 1792449085748.1199,
-    "stopT": 1792449085854.614,
-    "pid": 58889
+    "startT": 1792454800076.492,
+    "stopT": 1792454800185.037,
+    "pid": 49391
   },
   "controlTone": {
-    "startT": 1792449088635.153,
-    "stopT": 1792449089684.684,
-    "pid": 58947,
+    "startT": 1792454802932.98,
+    "stopT": 1792454803994.692,
+    "pid": 49414,
     "capturedWindows100ms": 2
   },
   "controlTail": [],
-  "exitedMsBeforeNextPoll": 426,
+  "secondLivedMs": 109,
+  "pollRebuildsSeeingSecond": 0,
   "leakedWindows100ms": 0,
   "leakedDetail": [],
   "rebuilds": [
-    {
-      "addedBundles": [
-        "dev.geekspace.spike.tone"
-      ],
-      "addedProcesses": 1,
-      "arrivedBundles": [],
-      "droppedMaxRms": 0,
-      "droppedWindows": 7,
-      "event": "tapRebuilt",
-      "excludedProcesses": 2,
-      "rebuildMs": 115.847,
-      "t": 1792449085770.881,
-      "trigger": "poll"
-    },
     {
       "addedBundles": [],
       "addedProcesses": 0,
       "arrivedBundles": [
         "dev.geekspace.spike.tone"
       ],
-      "droppedMaxRms": 0.17677655062756048,
-      "droppedWindows": 36,
+      "droppedMaxRms": 0.17677658713939304,
+      "droppedWindows": 45,
       "event": "tapRebuilt",
       "excludedProcesses": 1,
-      "rebuildMs": 96.294,
-      "t": 1792449089545.563,
+      "rebuildMs": 84.727,
+      "t": 1792454803827.303,
       "trigger": "listener"
     }
   ],
   "tailDrops": [],
   "summary": {
-    "dbfs": -22.959,
-    "droppedWindows": 43,
+    "dbfs": -22.586,
+    "droppedWindows": 45,
     "event": "summary",
     "excludedProcesses": 1,
-    "peak": 0.2603929340839386,
-    "rms": 0.0711311011631382,
-    "samples": 556032
+    "peak": 0.272881418466568,
+    "rms": 0.07424822196029551,
+    "samples": 568320
   },
   "silentA": {
-    "startT": 1792449085090.0269,
-    "bExitedMsAfterAStart": 765
+    "startT": 1792454799405.6357,
+    "bExitedMsAfterAStart": 780
   }
 }

@@ -65,6 +65,8 @@ const TRANSIENT_TAP_SECONDS = 6;
 const TRANSIENT_START_MS = 600;
 const TRANSIENT_PLAY_SECONDS = 0.4;
 const SLOW_CLASSIFIER = { pollMs: 700, holdMs: 1_500, playSeconds: 0.1, classifyDelayMs: 2_200 };
+// The orphan child plays this long; the parent exits 0.8 s after spawning it (spike-tone).
+const ORPHAN = { tapSeconds: 9, startMs: 300, childSeconds: 5, controlMs: 7_000, minOrphanMs: 2_000 };
 // A plays (silently) through the whole run; B launches this long after A starts.
 const B_DURING_A = { aSeconds: 8, bAfterAMs: 300 };
 const TRANSIENT_CONTROL_MS = 3_500;
@@ -707,8 +709,13 @@ const commands = {
     }
     if (!exiting) throw new Error("instance 2 did not log its exit");
     if (pidAlive(second.pid)) throw new Error(`instance 2 (pid ${second.pid}) is still running`);
-    const nextPoll = window.startT + Math.ceil((second.startT - window.startT) / pollMs) * pollMs;
-    if (exiting.t >= nextPoll) throw new Error(`instance 2 exited ${Math.round(exiting.t - nextPoll)} ms after the next poll`);
+    // Judged on what the run LOGGED, not a computed poll schedule (Codex review of PR #78,
+    // round 2: polls are rescheduled from each tick, and a listener check resets them). A
+    // scheduled poll that saw instance 2 rebuilt with trigger "poll" naming its bundle; such
+    // a run proves nothing about the listener and is rejected.
+    const polledSecond = lines.filter((line) => line.event === "tapRebuilt" && line.trigger === "poll"
+      && (line.addedBundles ?? []).includes(TONE_BUNDLE_ID));
+    if (polledSecond.length) throw new Error(`a scheduled poll saw instance 2 (${polledSecond.length} poll rebuild(s)); run rejected`);
     const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
     const overlapsControl = (line) => line.t > heardTone.startT && line.t - WINDOW_MS < heardTone.stopT;
     const inControlTail = (line) => !overlapsControl(line) && line.t > heardTone.stopT && line.t <= heardTone.stopT + CONTROL_TAIL_MS;
@@ -716,7 +723,7 @@ const commands = {
     const result = {
       listen, capped, pollMs, holdMs, tapExtra: extra, first, second, controlTone: { ...heardTone, capturedWindows100ms: loud.filter(overlapsControl).length },
       controlTail: loud.filter(inControlTail).map((line) => ({ rms: line.windowRms, msAfterControlStop: Math.round(line.t - heardTone.stopT) })),
-      exitedMsBeforeNextPoll: Math.round(nextPoll - exiting.t),
+      secondLivedMs: Math.round(exiting.t - second.startT), pollRebuildsSeeingSecond: polledSecond.length,
       leakedWindows100ms: leaked.length,
       leakedDetail: leaked.map((line) => ({ rms: line.windowRms, msAfterSecondStart: Math.round(line.t - second.startT) })),
       rebuilds: lines.filter((line) => line.event === "tapRebuilt"), tailDrops: lines.filter((line) => line.event === "tailDropped"),
@@ -729,6 +736,60 @@ const commands = {
     const protectedRun = listen && capped;
     if (protectedRun && result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) of instance 2 leaked`);
     if (!protectedRun && !result.leakedWindows100ms) throw new Error("control: no leak without the protection, so the scenario proves nothing");
+  },
+
+  /**
+   * PR #78 proof (Codex round 2): a helper whose denylisted parent exits while it keeps
+   * playing. SpikeTone (denylisted) spawns a bare child tone (no bundle ID), waits until it
+   * plays, and exits. The child is observed while its parent lives and judged after the
+   * parent is gone (judgement slowed to 2.2 s), so it is `unreadable`. It must stay excluded
+   * for the rest of its life even though a re-poll can no longer tie it to the denylist.
+   * A non-denylisted control tone plays after the child stops. The control for the fix is
+   * the previous binary (GS_CAPTURE_BIN).
+   */
+  async "tap-orphan-helper"() {
+    const tap = background(["tap", "--seconds", ORPHAN.tapSeconds, "--exclude", TONE_BUNDLE_ID, "--by", "both",
+      "--rebuild-ms", SLOW_CLASSIFIER.pollMs, "--hold-ms", SLOW_CLASSIFIER.holdMs,
+      "--classify-delay-ms", SLOW_CLASSIFIER.classifyDelayMs]);
+    await captureLive(tap);
+    const liveAt = Date.now();
+    await sleep(ORPHAN.startMs);
+    const log = launchTone("spawn-child", ORPHAN.childSeconds, "orphan", [TONE_HZ, path.join(RELEASE_DIR, "spike-tone")]);
+    await sleep(ORPHAN.controlMs - (Date.now() - liveAt));
+    const controlLog = bareTone(CONTROL_SECONDS, "orphan-control", CONTROL_HZ);
+    const lines = await tap.done;
+    const window = captureWindow(lines);
+    const events = readTone(log);
+    const spawned = events.find((event) => event.event === "spawned");
+    if (!spawned) throw new Error("SpikeTone did not spawn its child");
+    const parentExit = events.find((event) => event.event === "exiting" && event.pid === spawned.pid);
+    const childStart = events.find((event) => event.event === "started" && event.pid === spawned.childPid);
+    // SpikeTone's "stopped" line carries no pid; the child is the only "play" process here.
+    const childStop = events.find((event) => event.event === "stopped" && event.mode === "play");
+    if (!parentExit || !childStart || !childStop) throw new Error("orphan scenario did not log parent exit and child start/stop");
+    // The scenario's preconditions, from what was logged: the child played while its parent
+    // lived, outlived it, and played inside the capture.
+    if (!(childStart.t < parentExit.t)) throw new Error("the child started playing only after its parent exited");
+    if (!(childStop.t > parentExit.t + ORPHAN.minOrphanMs)) throw new Error("the child barely outlived its parent");
+    if (!(childStart.t > window.startT && childStop.t < window.endT)) throw new Error("the child did not play inside the capture");
+    const heardTone = requireAudible("orphan-control", await spikeToneInterval(controlLog, CONTROL_SECONDS), window, "late");
+    if (heardTone.startT < childStop.t) throw new Error("the control overlapped the child");
+    const loud = lines.filter((line) => line.windowRms > LEAK_RMS);
+    const overlapsControl = (line) => line.t > heardTone.startT && line.t - WINDOW_MS < heardTone.stopT;
+    const inControlTail = (line) => !overlapsControl(line) && line.t > heardTone.stopT && line.t <= heardTone.stopT + CONTROL_TAIL_MS;
+    const leaked = loud.filter((line) => !overlapsControl(line) && !inControlTail(line));
+    const result = {
+      spawned, parentExit, childStart, childStop, orphanedMs: Math.round(childStop.t - parentExit.t),
+      controlTone: { ...heardTone, capturedWindows100ms: loud.filter(overlapsControl).length },
+      leakedWindows100ms: leaked.length,
+      leakedDetail: leaked.map((line) => ({ rms: line.windowRms, msAfterParentExit: Math.round(line.t - parentExit.t) })),
+      rebuilds: lines.filter((line) => line.event === "tapRebuilt"), tailDrops: lines.filter((line) => line.event === "tailDropped"),
+      helper: process.env.GS_CAPTURE_BIN ?? "this build",
+    };
+    save(`pr78-orphan-helper-${process.env.GS_CAPTURE_BIN ? "previous-binary" : "fixed"}`, result);
+    if (result.controlTone.capturedWindows100ms === 0) throw new Error("the tap captured nothing of the control: it stopped capturing");
+    if (!process.env.GS_CAPTURE_BIN && result.leakedWindows100ms) throw new Error(`${result.leakedWindows100ms} window(s) of the orphaned helper leaked`);
+    if (process.env.GS_CAPTURE_BIN && !result.leakedWindows100ms) throw new Error("control: the previous binary did not leak, so the scenario proves nothing");
   },
 
   /**

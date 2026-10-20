@@ -19,7 +19,7 @@ func now() -> Double { Date().timeIntervalSince1970 * 1000 }
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 3, let seconds = Double(arguments[2]), seconds > 0 else {
-    FileHandle.standardError.write("usage: spike-tone play|listen[-windowless] <seconds> [hz] [linger-s] | backdrop <seconds> x y w h\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: spike-tone play|listen[-windowless] <seconds> [hz] [linger-s] | backdrop <seconds> x y w h | spawn-child <child-seconds> <hz> <child-path>\n".data(using: .utf8)!)
     exit(2)
 }
 NSApplication.shared.setActivationPolicy(.accessory)
@@ -54,6 +54,33 @@ if arguments[1] == "backdrop" {
     window.orderFrontRegardless()
     say(["event": "started", "mode": "backdrop", "t": now(), "pid": ProcessInfo.processInfo.processIdentifier])
     DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { exit(0) }
+    NSApplication.shared.run()
+}
+// `spawn-child`: the (denylisted) app starts a bare child tone, which has no bundle ID, waits
+// until the child is playing, then exits. The child plays on as an orphan whose parent is now
+// launchd, so nothing ties it to the denylist any more (PR #78, Codex round 2).
+if arguments[1] == "spawn-child" {
+    guard arguments.count >= 5, Double(arguments[3]) != nil else {
+        FileHandle.standardError.write("spawn-child needs <child-seconds> <hz> <child-path>\n".data(using: .utf8)!)
+        exit(2)
+    }
+    // Long enough for the child's audio engine to start, measured at about 100-300 ms.
+    let childStartWait = 0.8
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: arguments[4])
+    // Linger 0; the child's lines go to the same stdout as ours.
+    child.arguments = ["play", arguments[2], arguments[3], "0"]
+    do {
+        try child.run()
+    } catch {
+        say(["event": "error", "t": now(), "message": error.localizedDescription])
+        exit(1)
+    }
+    say(["event": "spawned", "t": now(), "pid": ProcessInfo.processInfo.processIdentifier, "childPid": child.processIdentifier])
+    DispatchQueue.main.asyncAfter(deadline: .now() + childStartWait) {
+        say(["event": "exiting", "t": now(), "pid": ProcessInfo.processInfo.processIdentifier])
+        exit(0)
+    }
     NSApplication.shared.run()
 }
 // ScreenCaptureKit lists only apps that own a window, so by default the stand-in shows one,

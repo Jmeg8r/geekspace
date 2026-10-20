@@ -807,4 +807,50 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     0), `run-segments` (0 leaks, `stopped/signal`), PR 3a proof (0 leaked), `npm run
     verify` (39 files, 343 tests).
   - Evidence: `pr3b2-transient-b-during-a-*.json` and `pr3b2-shutdown-unjudged-tail.jsonl`.
+- **2026-10-19, `feat/day-recorder-arrivals`, Codex #78 round 2 (1 × P1, 1 × P2), both fixed.**
+  - **P1: an `unreadable` helper was dropped once and then captured.** Take a helper with no
+    bundle ID whose denylisted parent exits before its judgement. It is judged `unreadable`
+    and its held audio is dropped. But the rebuild's exclusion came only from a re-poll,
+    which can no longer tie the orphan to the denylist, and the snapshot already counts it
+    as known.
+    - **Fix (the class, not the instance):** verdicts carry their object
+      (`ProcessArrivals.Flag`). Every object judged denylisted or unreadable joins a
+      `denied` set, which is pruned when the object leaves the list. Every exclusion is now
+      `TapRunner.exclusion(polled:denied:)`, at build, at each rebuild check and at the
+      shutdown tail. Whatever produced the verdict, the object stays excluded while it lives.
+    - **Unit test:** a helper whose parent exits before judgement stays in `deniedLive`
+      across snapshots and leaves it only when it leaves the list. Mutation check: without
+      recording `unreadable` in `denied`, the test fails.
+    - **Live proof** (`tap-orphan-helper`, with SpikeTone's new `spawn-child` mode):
+      - SpikeTone (denylisted) starts a bare child tone. The child is playing before the
+        parent exits (checked from the log), then plays on as an orphan for about 4.6 s.
+      - Judgement is slowed to 2.2 s, so the child is judged after its parent is gone.
+      - A non-denylisted control plays after the child stops.
+
+      | Run | Leaked | Listener rebuild excluded |
+      |---|---|---|
+      | Control: the previous binary `b746be6` | **31** (from 1.7 s after the parent exits) | **0** processes |
+      | Fixed, 3 of 3 | **0, 0, 0** | **1** process (the orphan) |
+
+  - **P2: the transient proof judged "between polls" against a computed schedule.** Polls
+    are rescheduled from each tick, and a listener check resets them. Run `new-2` of the
+    b-during-a proof had a poll-triggered rebuild during B's life and was wrongly counted.
+    - **Fix:** a run is rejected when any `tapRebuilt` with `trigger: poll` names the tone's
+      bundle, meaning a real poll saw instance 2. The computed-schedule check is gone, and
+      the old b-during-a "new" evidence was deleted and re-run.
+    - **Re-run** under the gate: **3 valid of 3 tries, 0 rejected.** A poll saw B in none of
+      them. 0 leaks. The only rebuild in each is the listener's, which drops B's tone
+      (0.18 RMS). The `d00a65d` control passes the gate too: it has no rebuild at all.
+  - **Regression on this build:**
+    - slow-classifier capped: 0 leaked;
+    - fast transient: control 5, listener 0, no poll saw instance 2;
+    - `run-segments`: 0 leaks, `stopped/signal`;
+    - `npm run verify`: 39 files, 343 tests;
+    - `swift test`: 36 tests.
+    - **PR 3a proof: 3 runs, 0 / 0 / 1 leaked.** The one window ended 105 ms after the
+      control tone's logged stop (0.065 RMS), inside the 103–128 ms control-tail band
+      measured on this tap. The 3a counter deliberately has no tail allowance, so it can't
+      tell the two apart. It is the same pattern as PR 3a's unattributed run 2. Recorded as
+      **likely the control's output tail, not proven**. PR 3c's soak keeps the detail
+      logging.
 

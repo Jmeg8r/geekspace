@@ -436,6 +436,12 @@ struct ProcessIdentity: Equatable {
 final class ProcessArrivals: @unchecked Sendable {
     static let unclassified = "unclassified"
 
+    /// A verdict that forces a drop: the object it is about, and a bundle ID or `unclassified`.
+    struct Flag: Equatable {
+        let object: AudioObjectID
+        let label: String
+    }
+
     private let snapshotQueue = DispatchQueue(label: "gs-capture.arrivals.snapshot")
     private let judgeQueue = DispatchQueue(label: "gs-capture.arrivals.judge")
     private let identify: (AudioObjectID) -> ProcessIdentity?
@@ -446,7 +452,12 @@ final class ProcessArrivals: @unchecked Sendable {
     private var lastSnapshotStart: Double = 0
     // Guarded by `lock`.
     private let lock = NSLock()
-    private var flagged: [String] = []
+    private var flagged: [Flag] = []
+    // Objects judged denylisted or unreadable, while they are still in the list. A rebuild
+    // must keep excluding them: a re-poll may no longer tie them to the denylist (a helper
+    // whose denylisted parent exited), and the snapshot already counts them as known, so
+    // nothing else would ever exclude them again (Codex review of PR #78, round 2).
+    private var denied: Set<AudioObjectID> = []
     private var snapshotThrough: Double
     private var outstanding: [Int: Double] = [:]
     private var nextTicket = 0
@@ -498,8 +509,11 @@ final class ProcessArrivals: @unchecked Sendable {
         lock.withLock { min(snapshotThrough, outstanding.values.min() ?? .infinity) }
     }
 
-    /// What was flagged since the last call: bundle IDs, or `unclassified`.
-    func take() -> [String] {
+    /// Denied objects still alive at the last snapshot: always part of a rebuild's exclusion.
+    func deniedLive() -> [AudioObjectID] { lock.withLock { Array(denied) } }
+
+    /// What was flagged since the last call.
+    func take() -> [Flag] {
         lock.withLock {
             defer { flagged = [] }
             return flagged
@@ -535,18 +549,21 @@ final class ProcessArrivals: @unchecked Sendable {
         known = current
         lastSnapshotStart = started
         // Read while the process is (probably) still alive. nil: it is already gone.
-        let identities = added.map(identify)
-        var work: [(ticket: Int, identity: ProcessIdentity)] = []
+        let identities = added.map { (object: $0, identity: identify($0)) }
+        var work: [(ticket: Int, object: AudioObjectID, identity: ProcessIdentity)] = []
         // Tickets are registered in the same critical section that advances the snapshot
         // limit, so the limit never passes an observed arrival that has no ticket yet.
         lock.withLock {
-            for identity in identities {
+            // A denied object that left the list can't produce audio any more.
+            denied.formIntersection(current)
+            for (object, identity) in identities {
                 guard let identity else {
-                    flagged.append(ProcessArrivals.unclassified)
+                    flagged.append(Flag(object: object, label: ProcessArrivals.unclassified))
+                    denied.insert(object)
                     continue
                 }
                 outstanding[nextTicket] = notBefore
-                work.append((nextTicket, identity))
+                work.append((nextTicket, object, identity))
                 nextTicket += 1
             }
             snapshotThrough = max(snapshotThrough, started)
@@ -556,8 +573,12 @@ final class ProcessArrivals: @unchecked Sendable {
                 let verdict = judge(item.identity)
                 lock.withLock {
                     switch verdict {
-                    case .denylisted(let bundle): flagged.append(bundle)
-                    case .unreadable: flagged.append(ProcessArrivals.unclassified)
+                    case .denylisted(let bundle):
+                        flagged.append(Flag(object: item.object, label: bundle))
+                        denied.insert(item.object)
+                    case .unreadable:
+                        flagged.append(Flag(object: item.object, label: ProcessArrivals.unclassified))
+                        denied.insert(item.object)
                     case .allowed: break
                     }
                     outstanding[item.ticket] = nil
@@ -579,7 +600,7 @@ final class TapRunner {
     private let arrivals: ProcessArrivals?
     private let capRelease: Bool
     // Arrivals taken while polling was suppressed; they still force a drop at finish.
-    private var pendingArrivals: [String] = []
+    private var pendingArrivals: [ProcessArrivals.Flag] = []
     let sink: TapSink
     /// Settable only for the spike's --follow-ms path, which updates the tap in place.
     var session: TapSession
@@ -613,7 +634,7 @@ final class TapRunner {
                 return sink
             }
         }
-        session = makeSession(objectsNow())
+        session = makeSession(TapRunner.exclusion(polled: objectsNow(), denied: arrivals?.deniedLive() ?? []))
         guard let first else { fail("the tap sink was not created") }
         sink = first
         session.start()
@@ -626,6 +647,16 @@ final class TapRunner {
 
     /// Rebuild around any new denylisted process (when `poll` and a poll is due), then fail
     /// if delivery has not advanced for `Tap.sessionDeliveryDeadlineMs`.
+    /// What a (re)built tap must exclude: the polled denylisted processes plus every object
+    /// the arrivals listener denied that is still alive.
+    static func exclusion(polled: [AudioObjectID], denied: [AudioObjectID]) -> [AudioObjectID] {
+        Array(Set(polled).union(denied)).sorted()
+    }
+
+    private func exclusionNow() -> [AudioObjectID] {
+        TapRunner.exclusion(polled: objectsNow(), denied: arrivals?.deniedLive() ?? [])
+    }
+
     /// Returns the time the caller may release held audio up to. It is read at ENTRY, before
     /// any flag is taken: a flag published by a pass at or before this limit is then always
     /// taken (and dropped on) here, before the caller releases. Without arrivals it is simply
@@ -647,7 +678,7 @@ final class TapRunner {
         // the hold and must be dropped before the caller's next release.
         if poll, let rebuildMs, nowMs() >= nextCheck || !pendingArrivals.isEmpty {
             nextCheck = nowMs() + rebuildMs
-            let fresh = objectsNow()
+            let fresh = exclusionNow()
             let added = Set(fresh).subtracting(session.excluded)
             let arrived = pendingArrivals
             pendingArrivals = []
@@ -667,7 +698,7 @@ final class TapRunner {
                 lastAdvance = sessionStart
                 report("tapRebuilt", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
                                       "droppedMaxRms": dropped.maxRms, "trigger": arrived.isEmpty ? "poll" : "listener",
-                                      "arrivedBundles": arrived,
+                                      "arrivedBundles": arrived.map(\.label),
                                       "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
                                       "excludedProcesses": fresh.count, "rebuildMs": round3(nowMs() - begun)])
             }
@@ -705,13 +736,13 @@ final class TapRunner {
             arrivals.stop()
         }
         if tailCheck {
-            let added = Set(objectsNow()).subtracting(session.excluded)
+            let added = Set(exclusionNow()).subtracting(session.excluded)
             if added.isEmpty && arrived.isEmpty && !unjudged {
                 sink.releaseAll()
             } else {
                 let dropped = sink.drop()
                 report("tailDropped", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
-                                       "droppedMaxRms": dropped.maxRms, "arrivedBundles": arrived, "unjudged": unjudged,
+                                       "droppedMaxRms": dropped.maxRms, "arrivedBundles": arrived.map(\.label), "unjudged": unjudged,
                                        "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID)])
             }
         } else {

@@ -150,7 +150,7 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         let arrivals = ProcessArrivals(identify: identify, judge: verdict, list: { objects }, listen: false)
         objects = [1, 2]
         XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
-        XCTAssertEqual(arrivals.take(), ["com.example.work"])
+        XCTAssertEqual(arrivals.take().map(\.label), ["com.example.work"])
         let limit = arrivals.checked()
         arrivals.requestPass()
         waitFor { arrivals.checked() > limit }
@@ -192,10 +192,10 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         objects = [1, 3]
         arrivals.requestPass()
         usleep(30_000)
-        XCTAssertEqual(arrivals.take(), [], "nothing is judged while A is stuck")
+        XCTAssertEqual(arrivals.take().map(\.label), [], "nothing is judged while A is stuck")
         gate.signal()
         XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
-        XCTAssertEqual(arrivals.take(), ["com.example.work"])
+        XCTAssertEqual(arrivals.take().map(\.label), ["com.example.work"])
     }
 
     func testSettleGivesUpOnAStuckJudgement() {
@@ -208,6 +208,36 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         gate.signal()
     }
 
+    func testAHelperWhoseDenylistedParentExitedStaysExcludedWhileItLives() {
+        // Codex review of PR #78, round 2: helper 5 (no bundle ID) is observed while its
+        // denylisted parent 99 lives, and judged after the parent exited: unreadable. A
+        // re-poll can no longer tie it to the denylist, so the arrivals listener must keep it
+        // in every rebuild's exclusion for as long as it stays in the list.
+        var objects: [AudioObjectID] = [1]
+        let arrivals = ProcessArrivals(
+            identify: { ProcessIdentity(pid: pid_t($0), bundle: "", parent: $0 == 5 ? 99 : 1) },
+            judge: { identity in
+                Tap.classify(bundle: identity.bundle, parent: identity.parent, parentBundle: { _ in nil },
+                             parentAlive: { $0 != 99 }, ["com.example.work"])
+            }, list: { objects }, listen: false)
+        objects = [1, 5]
+        XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
+        XCTAssertEqual(arrivals.take(), [ProcessArrivals.Flag(object: 5, label: ProcessArrivals.unclassified)])
+        // The poll sees nothing denylisted any more; the rebuild still excludes the helper.
+        XCTAssertEqual(TapRunner.exclusion(polled: [], denied: arrivals.deniedLive()), [5])
+        // Several snapshots later, still alive: still excluded.
+        for _ in 0..<3 { XCTAssertTrue(arrivals.settle(timeoutMs: 1000)) }
+        XCTAssertEqual(arrivals.deniedLive(), [5])
+        // Gone from the list: no longer excluded (it can't produce audio).
+        objects = [1]
+        XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
+        XCTAssertEqual(arrivals.deniedLive(), [])
+    }
+
+    func testExclusionIsThePollPlusDeniedObjects() {
+        XCTAssertEqual(TapRunner.exclusion(polled: [3, 1], denied: [5, 3]), [1, 3, 5])
+    }
+
     func testAnArrivalAlreadyGoneIsFlaggedWithoutJudgement() {
         var objects: [AudioObjectID] = []
         let arrivals = ProcessArrivals(identify: { _ in nil }, judge: { _ in
@@ -216,6 +246,6 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         }, list: { objects }, listen: false)
         objects = [7]
         XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
-        XCTAssertEqual(arrivals.take(), [ProcessArrivals.unclassified])
+        XCTAssertEqual(arrivals.take().map(\.label), [ProcessArrivals.unclassified])
     }
 }

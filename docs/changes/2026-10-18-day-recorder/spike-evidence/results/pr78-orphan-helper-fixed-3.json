@@ -1,0 +1,66 @@
+{
+  "spawned": {
+    "childPid": 49048,
+    "event": "spawned",
+    "pid": 49046,
+    "t": 1792454765199.563
+  },
+  "parentExit": {
+    "event": "exiting",
+    "pid": 49046,
+    "t": 1792454766036.5
+  },
+  "childStart": {
+    "event": "started",
+    "mode": "play",
+    "pid": 49048,
+    "t": 1792454765413.2349,
+    "windowless": false
+  },
+  "childStop": {
+    "event": "stopped",
+    "mode": "play",
+    "t": 1792454770675.116
+  },
+  "orphanedMs": 4639,
+  "controlTone": {
+    "startT": 1792454771981.1821,
+    "stopT": 1792454773031.173,
+    "pid": 49089,
+    "capturedWindows100ms": 11
+  },
+  "leakedWindows100ms": 0,
+  "leakedDetail": [],
+  "rebuilds": [
+    {
+      "addedBundles": [
+        ""
+      ],
+      "addedProcesses": 1,
+      "arrivedBundles": [],
+      "droppedMaxRms": 0,
+      "droppedWindows": 7,
+      "event": "tapRebuilt",
+      "excludedProcesses": 1,
+      "rebuildMs": 78.813,
+      "t": 1792454765530.785,
+      "trigger": "poll"
+    },
+    {
+      "addedBundles": [],
+      "addedProcesses": 0,
+      "arrivedBundles": [
+        "unclassified"
+      ],
+      "droppedMaxRms": 0,
+      "droppedWindows": 20,
+      "event": "tapRebuilt",
+      "excludedProcesses": 1,
+      "rebuildMs": 85.737,
+      "t": 1792454767631.615,
+      "trigger": "listener"
+    }
+  ],
+  "tailDrops": [],
+  "helper": "this build"
+}

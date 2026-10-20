@@ -1,18 +1,18 @@
 {
   "firstInstance": {
-    "startT": 1792440454828.775,
-    "stopT": 1792440467423.677,
-    "pid": 98621
+    "startT": 1792454937169.99,
+    "stopT": 1792454949776.982,
+    "pid": 50961
   },
   "tone": {
-    "startT": 1792440457797.3262,
-    "stopT": 1792440462007.921,
-    "pid": 98688
+    "startT": 1792454939972.2239,
+    "stopT": 1792454944178.684,
+    "pid": 51001
   },
   "controlTone": {
-    "startT": 1792440459270.608,
-    "stopT": 1792440460321.06,
-    "pid": 98704,
+    "startT": 1792454941438.658,
+    "stopT": 1792454942494.693,
+    "pid": 51011,
     "capturedWindows100ms": 11
   },
   "tapArgs": [
@@ -26,30 +26,34 @@
   "leakedBeforeSecondStart": 0,
   "leakedWindows100ms": 0,
   "leakedDetail": [],
-  "windows100ms": 32,
+  "windows100ms": 33,
   "rebuilds": [
     {
       "addedBundles": [
         "dev.geekspace.spike.tone"
       ],
       "addedProcesses": 1,
+      "arrivedBundles": [
+        "dev.geekspace.spike.tone"
+      ],
       "droppedMaxRms": 0,
-      "droppedWindows": 6,
+      "droppedWindows": 5,
       "event": "tapRebuilt",
       "excludedProcesses": 2,
-      "rebuildMs": 118.9,
-      "t": 1792440457820.765
+      "rebuildMs": 85.536,
+      "t": 1792454939921.256,
+      "trigger": "listener"
     }
   ],
   "tailDrops": [],
   "droppedLoud": false,
   "summary": {
-    "dbfs": -20.806,
-    "droppedWindows": 6,
+    "dbfs": -20.83,
+    "droppedWindows": 5,
     "event": "summary",
     "excludedProcesses": 2,
-    "peak": 0.25168824195861816,
-    "rms": 0.09113527127428327,
-    "samples": 373760
+    "peak": 0.2522820830345154,
+    "rms": 0.0908866634911552,
+    "samples": 375808
   }
 }
