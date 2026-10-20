@@ -1022,4 +1022,15 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Regression (dev build):** `run-audio-use` (0 violations), orphan arrival and baseline
     (0 leaked, child excluded), b-during-a (0 leaked), `run-segments` (0 leaked),
     `npm run verify` (40 files, 348 tests).
+- **2026-10-20, PR 3b-3, Codex round 4 (1 × P1), fixed; the review loop pauses at the cap.**
+  - **The finding:** `audioUse.poll` called `Tap.lookup` and then `Tap.parentPid`, a second
+    lookup. If the child exited in between, a readable denylisted parent was thrown away
+    (TOCTOU).
+  - **Fix:** one lookup per process, with the parent derived from it. No other site reads
+    process state twice: `Tap.identity` and the poll's rule read once, and `parentAlive` is a
+    deliberate later re-check.
+  - 48 tests, `run-audio-use` (0 violations), `npm run verify` (40 files, 348 tests).
+  - **Rounds 1–4 each found a real race or rule gap in reading process state** (parent
+    check, daemon exemption, zombie liveness, double lookup). Round 4 is the top of the
+    3–4 round cap (L42), so the next step is James's decision, not a fifth round by default.
 

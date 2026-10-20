@@ -126,10 +126,15 @@ enum AudioUse {
                   let bundle = ProcWatch.checkedBundleID(object) else { return nil }
             let input = ProcWatch.uint32(object, kAudioProcessPropertyIsRunningInput) == 1
             let output = ProcWatch.uint32(object, kAudioProcessPropertyIsRunningOutput) == 1
-            let lookup = Tap.lookup(pid)
-            // Gone (an unreaped zombie included): it has exited, so it is not using audio.
-            if lookup == .gone { return nil }
-            let parent = Tap.parentPid(pid)
+            // ONE lookup per process, and the parent comes from it: a second lookup could see
+            // the process gone and throw away a readable denylisted parent (Codex review of
+            // PR #79, round 4). Gone (a zombie included) has exited, so it is not using audio.
+            let parent: pid_t
+            switch Tap.lookup(pid) {
+            case .parent(let readable): parent = readable
+            case .otherUser: parent = -1
+            case .gone: return nil
+            }
             let parentApp = parent > 0 ? NSRunningApplication(processIdentifier: parent)?.bundleIdentifier : nil
             let app = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? parentApp ?? bundle
             let denylisted = isDenylisted(bundle: bundle, app: app, parentApp: parentApp,
