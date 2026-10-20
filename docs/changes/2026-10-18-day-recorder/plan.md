@@ -806,7 +806,8 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Regression:** slow-classifier capped (0 leaked), fast transient (control 5, listener
     0), `run-segments` (0 leaks, `stopped/signal`), PR 3a proof (0 leaked), `npm run
     verify` (39 files, 343 tests).
-  - Evidence: `pr3b2-transient-b-during-a-*.json` and `pr3b2-shutdown-unjudged-tail.jsonl`.
+  - Evidence: `pr78-b-during-a.json` and `pr78-shutdown-unjudged-tail.json` (see the
+    bundle index below).
 - **2026-10-19, `feat/day-recorder-arrivals`, Codex #78 round 2 (1 × P1, 1 × P2), both fixed.**
   - **P1: an `unreadable` helper was dropped once and then captured.** Take a helper with no
     bundle ID whose denylisted parent exits before its judgement. It is judged `unreadable`
@@ -893,4 +894,24 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - PR 3a proof: **0 / 0 / 0**;
     - shutdown deadline: `tailDropped` with `unjudged`, exit 0;
     - `npm run verify`: 39 files, 343 tests.
+- **2026-10-20, `feat/day-recorder-arrivals`: the evidence is bundled, one file per proof.**
+  - **Why:** the forge's AI review read 8 of the PR's 33 changed files and failed closed. 25
+    of the 33 were per-run evidence JSON.
+  - **What changed:** each run is now stored verbatim inside one file per proof, labelled with
+    the commit it was recorded in (from `git log`) and, for a control, the helper binary that
+    produced it. All 25 runs were checked equal to their source files before the sources were
+    removed (a positive control showed the check reports a mismatch). PR 3b-2's own
+    `pr3a-second-instance-rebuild-3b2-*.json` and `pr3b2-run-segments-1.json` are restored to
+    their state on `main`, and this branch's re-runs of them live in the bundles.
+  - **Bundle index** (`spike-evidence/results/`):
+
+    | File | Runs |
+    |---|---|
+    | `pr78-b-during-a.json` | control from the previous binary `d00a65d`, 3 fixed |
+    | `pr78-orphan-helper.json` | arrival: control from `b746be6`, 3 fixed; baseline: control from `db5b2ff`, 3 fixed |
+    | `pr78-transient-instance.json` | listener-off control, 3 listener |
+    | `pr78-slow-classifier.json` | uncapped control, 3 capped |
+    | `pr78-run-segments.json` | 1 |
+    | `pr78-3a-second-instance.json` | 3 |
+    | `pr78-shutdown-unjudged-tail.json` | 1, the helper's output lines and exit code |
 

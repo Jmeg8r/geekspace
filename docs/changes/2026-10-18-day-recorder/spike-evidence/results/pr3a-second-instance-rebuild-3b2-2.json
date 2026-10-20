@@ -1,18 +1,18 @@
 {
   "firstInstance": {
-    "startT": 1792461686061.898,
-    "stopT": 1792461698668.159,
-    "pid": 11063
+    "startT": 1792440454828.775,
+    "stopT": 1792440467423.677,
+    "pid": 98621
   },
   "tone": {
-    "startT": 1792461688979.7292,
-    "stopT": 1792461693186.9312,
-    "pid": 11107
+    "startT": 1792440457797.3262,
+    "stopT": 1792440462007.921,
+    "pid": 98688
   },
   "controlTone": {
-    "startT": 1792461690374.542,
-    "stopT": 1792461691427.666,
-    "pid": 11124,
+    "startT": 1792440459270.608,
+    "stopT": 1792440460321.06,
+    "pid": 98704,
     "capturedWindows100ms": 11
   },
   "tapArgs": [
@@ -26,56 +26,30 @@
   "leakedBeforeSecondStart": 0,
   "leakedWindows100ms": 0,
   "leakedDetail": [],
-  "windows100ms": 31,
+  "windows100ms": 32,
   "rebuilds": [
     {
       "addedBundles": [
         "dev.geekspace.spike.tone"
       ],
       "addedProcesses": 1,
-      "arrivedBundles": [],
       "droppedMaxRms": 0,
       "droppedWindows": 6,
       "event": "tapRebuilt",
-      "excludedPids": [
-        11063,
-        11107
-      ],
       "excludedProcesses": 2,
-      "pollDue": true,
-      "rebuildMs": 93.712,
-      "t": 1792461688884.239,
-      "trigger": "poll"
-    },
-    {
-      "addedBundles": [],
-      "addedProcesses": 0,
-      "arrivedBundles": [
-        "dev.geekspace.spike.tone"
-      ],
-      "droppedMaxRms": 0,
-      "droppedWindows": 0,
-      "event": "tapRebuilt",
-      "excludedPids": [
-        11063,
-        11107
-      ],
-      "excludedProcesses": 2,
-      "pollDue": true,
-      "rebuildMs": 88.153,
-      "t": 1792461689002.577,
-      "trigger": "listener"
+      "rebuildMs": 118.9,
+      "t": 1792440457820.765
     }
   ],
   "tailDrops": [],
   "droppedLoud": false,
   "summary": {
-    "dbfs": -20.734,
+    "dbfs": -20.806,
     "droppedWindows": 6,
     "event": "summary",
     "excludedProcesses": 2,
-    "peak": 0.25249040126800537,
-    "rms": 0.09189377468777962,
-    "samples": 367616
+    "peak": 0.25168824195861816,
+    "rms": 0.09113527127428327,
+    "samples": 373760
   }
 }
