@@ -647,14 +647,19 @@ final class TapRunner {
 
     /// Rebuild around any new denylisted process (when `poll` and a poll is due), then fail
     /// if delivery has not advanced for `Tap.sessionDeliveryDeadlineMs`.
-    /// What a (re)built tap must exclude: the polled denylisted processes plus every object
-    /// the arrivals listener denied that is still alive.
-    static func exclusion(polled: [AudioObjectID], denied: [AudioObjectID]) -> [AudioObjectID] {
-        Array(Set(polled).union(denied)).sorted()
+    /// What a (re)built tap must exclude: the polled denylisted processes, every object the
+    /// arrivals listener denied, and everything the previous session excluded that is still
+    /// alive. Once excluded by ANY path, an object stays excluded until it leaves the process
+    /// list: a re-poll may no longer tie it to the denylist (a helper whose denylisted parent
+    /// exited), and nothing else would exclude it again (Codex review of PR #78, rounds 2-3).
+    static func exclusion(polled: [AudioObjectID], denied: [AudioObjectID],
+                          previous: [AudioObjectID] = [], alive: Set<AudioObjectID> = []) -> [AudioObjectID] {
+        Array(Set(polled).union(denied).union(Set(previous).intersection(alive))).sorted()
     }
 
     private func exclusionNow() -> [AudioObjectID] {
-        TapRunner.exclusion(polled: objectsNow(), denied: arrivals?.deniedLive() ?? [])
+        TapRunner.exclusion(polled: objectsNow(), denied: arrivals?.deniedLive() ?? [],
+                            previous: session.excluded, alive: Set(ProcWatch.processList()))
     }
 
     /// Returns the time the caller may release held audio up to. It is read at ENTRY, before
@@ -676,13 +681,17 @@ final class TapRunner {
         pendingArrivals += arrivals?.take() ?? []
         // An arrival forces the check now, not at the next due poll: its audio is already in
         // the hold and must be dropped before the caller's next release.
-        if poll, let rebuildMs, nowMs() >= nextCheck || !pendingArrivals.isEmpty {
+        // Recorded for the proofs: whether the scheduled poll was due at this check.
+        let pollDue = poll && rebuildMs != nil && nowMs() >= nextCheck
+        if poll, let rebuildMs, pollDue || !pendingArrivals.isEmpty {
             nextCheck = nowMs() + rebuildMs
             let fresh = exclusionNow()
             let added = Set(fresh).subtracting(session.excluded)
             let arrived = pendingArrivals
             pendingArrivals = []
             if !added.isEmpty || !arrived.isEmpty {
+                // Read now, before the rebuild, while the new processes most likely live.
+                let addedBundles = added.map(ProcWatch.bundleID)
                 // Order matters: stop IO first, so nothing reaches the sink after the drop;
                 // then drop what is held; then rebuild around the new processes.
                 let begun = nowMs()
@@ -698,9 +707,10 @@ final class TapRunner {
                 lastAdvance = sessionStart
                 report("tapRebuilt", ["t": round3(nowMs()), "droppedWindows": dropped.windows,
                                       "droppedMaxRms": dropped.maxRms, "trigger": arrived.isEmpty ? "poll" : "listener",
-                                      "arrivedBundles": arrived.map(\.label),
-                                      "addedProcesses": added.count, "addedBundles": added.map(ProcWatch.bundleID),
-                                      "excludedProcesses": fresh.count, "rebuildMs": round3(nowMs() - begun)])
+                                      "pollDue": pollDue, "arrivedBundles": arrived.map(\.label),
+                                      "addedProcesses": added.count, "addedBundles": addedBundles,
+                                      "excludedProcesses": fresh.count, "excludedPids": fresh.map { Int(ProcWatch.pid($0)) },
+                                      "rebuildMs": round3(nowMs() - begun)])
             }
         }
         // AudioDeviceStart returning noErr is not evidence of delivery (see TapAutoStart), and

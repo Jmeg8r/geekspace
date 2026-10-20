@@ -8,23 +8,23 @@
     2200
   ],
   "first": {
-    "startT": 1792454810352.676,
-    "stopT": 1792454820858.248,
-    "pid": 49484
+    "startT": 1792461596869.519,
+    "stopT": 1792461607374.4001,
+    "pid": 8463
   },
   "second": {
-    "startT": 1792454811515.0562,
-    "stopT": 1792454811621.818,
-    "pid": 49519
+    "startT": 1792461598102.525,
+    "stopT": 1792461598212.933,
+    "pid": 8492
   },
   "controlTone": {
-    "startT": 1792454814443.416,
-    "stopT": 1792454815495.199,
-    "pid": 49543,
+    "startT": 1792461600959.4421,
+    "stopT": 1792461602008.607,
+    "pid": 8541,
     "capturedWindows100ms": 2
   },
   "controlTail": [],
-  "secondLivedMs": 107,
+  "secondLivedMs": 111,
   "pollRebuildsSeeingSecond": 0,
   "leakedWindows100ms": 0,
   "leakedDetail": [],
@@ -35,12 +35,16 @@
       "arrivedBundles": [
         "dev.geekspace.spike.tone"
       ],
-      "droppedMaxRms": 0.1767767645037125,
+      "droppedMaxRms": 0.17677657977996414,
       "droppedWindows": 45,
       "event": "tapRebuilt",
+      "excludedPids": [
+        8463
+      ],
       "excludedProcesses": 1,
-      "rebuildMs": 88.479,
-      "t": 1792454815305.429,
+      "pollDue": false,
+      "rebuildMs": 86.583,
+      "t": 1792461601866.657,
       "trigger": "listener"
     }
   ],
@@ -50,12 +54,12 @@
     "droppedWindows": 45,
     "event": "summary",
     "excludedProcesses": 1,
-    "peak": 0.2719268798828125,
-    "rms": 0.07393717195982226,
+    "peak": 0.26947689056396484,
+    "rms": 0.07393395495918646,
     "samples": 567296
   },
   "silentA": {
-    "startT": 1792454810875.022,
-    "bExitedMsAfterAStart": 747
+    "startT": 1792461597446.7002,
+    "bExitedMsAfterAStart": 766
   }
 }

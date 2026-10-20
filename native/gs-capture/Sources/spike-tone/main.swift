@@ -19,7 +19,7 @@ func now() -> Double { Date().timeIntervalSince1970 * 1000 }
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 3, let seconds = Double(arguments[2]), seconds > 0 else {
-    FileHandle.standardError.write("usage: spike-tone play|listen[-windowless] <seconds> [hz] [linger-s] | backdrop <seconds> x y w h | spawn-child <child-seconds> <hz> <child-path>\n".data(using: .utf8)!)
+    FileHandle.standardError.write("usage: spike-tone play|listen[-windowless] <seconds> [hz] [linger-s] | backdrop <seconds> x y w h | spawn-child <child-seconds> <hz> <child-path> [parent-seconds]\n".data(using: .utf8)!)
     exit(2)
 }
 NSApplication.shared.setActivationPolicy(.accessory)
@@ -64,8 +64,10 @@ if arguments[1] == "spawn-child" {
         FileHandle.standardError.write("spawn-child needs <child-seconds> <hz> <child-path>\n".data(using: .utf8)!)
         exit(2)
     }
-    // Long enough for the child's audio engine to start, measured at about 100-300 ms.
-    let childStartWait = 0.8
+    // How long the parent outlives the spawn. The default is long enough for the child's
+    // audio engine to start (about 100-300 ms); the baseline proof passes more, so the tap
+    // can start while the parent still lives.
+    let childStartWait = arguments.count > 5 ? Double(arguments[5]) ?? 0.8 : 0.8
     let child = Process()
     child.executableURL = URL(fileURLWithPath: arguments[4])
     // Linger 0; the child's lines go to the same stdout as ours.

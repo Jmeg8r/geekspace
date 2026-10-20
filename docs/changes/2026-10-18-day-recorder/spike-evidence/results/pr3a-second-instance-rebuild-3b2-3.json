@@ -1,18 +1,18 @@
 {
   "firstInstance": {
-    "startT": 1792454950268.836,
-    "stopT": 1792454962875.897,
-    "pid": 51097
+    "startT": 1792461699178.2122,
+    "stopT": 1792461711785.9612,
+    "pid": 11212
   },
   "tone": {
-    "startT": 1792454953098.292,
-    "stopT": 1792454957308.48,
-    "pid": 51145
+    "startT": 1792461702201.6602,
+    "stopT": 1792461706410.699,
+    "pid": 11260
   },
   "controlTone": {
-    "startT": 1792454954545.244,
-    "stopT": 1792454955588.97,
-    "pid": 51155,
+    "startT": 1792461703583.0989,
+    "stopT": 1792461704639.3928,
+    "pid": 11273,
     "capturedWindows100ms": 12
   },
   "tapArgs": [
@@ -26,34 +26,56 @@
   "leakedBeforeSecondStart": 0,
   "leakedWindows100ms": 0,
   "leakedDetail": [],
-  "windows100ms": 33,
+  "windows100ms": 32,
   "rebuilds": [
     {
       "addedBundles": [
         "dev.geekspace.spike.tone"
       ],
       "addedProcesses": 1,
+      "arrivedBundles": [],
+      "droppedMaxRms": 0,
+      "droppedWindows": 5,
+      "event": "tapRebuilt",
+      "excludedPids": [
+        11212,
+        11260
+      ],
+      "excludedProcesses": 2,
+      "pollDue": true,
+      "rebuildMs": 107.4,
+      "t": 1792461702106.717,
+      "trigger": "poll"
+    },
+    {
+      "addedBundles": [],
+      "addedProcesses": 0,
       "arrivedBundles": [
         "dev.geekspace.spike.tone"
       ],
       "droppedMaxRms": 0,
-      "droppedWindows": 5,
+      "droppedWindows": 0,
       "event": "tapRebuilt",
+      "excludedPids": [
+        11212,
+        11260
+      ],
       "excludedProcesses": 2,
-      "rebuildMs": 90.304,
-      "t": 1792454953066.88,
+      "pollDue": true,
+      "rebuildMs": 89.848,
+      "t": 1792461702223.521,
       "trigger": "listener"
     }
   ],
   "tailDrops": [],
   "droppedLoud": false,
   "summary": {
-    "dbfs": -20.818,
+    "dbfs": -20.641,
     "droppedWindows": 5,
     "event": "summary",
     "excludedProcesses": 2,
-    "peak": 0.2522360682487488,
-    "rms": 0.09101071500522344,
-    "samples": 374784
+    "peak": 0.2500399947166443,
+    "rms": 0.09288452193432087,
+    "samples": 363520
   }
 }

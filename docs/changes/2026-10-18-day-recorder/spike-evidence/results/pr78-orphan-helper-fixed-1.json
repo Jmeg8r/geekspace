@@ -1,32 +1,36 @@
 {
+  "variant": "arrival",
   "spawned": {
-    "childPid": 48588,
+    "childPid": 7513,
     "event": "spawned",
-    "pid": 48586,
-    "t": 1792454743918.2
+    "pid": 7510,
+    "t": 1792461542134.653
   },
   "parentExit": {
     "event": "exiting",
-    "pid": 48586,
-    "t": 1792454744755.964
+    "pid": 7510,
+    "t": 1792461542966.976
   },
   "childStart": {
     "event": "started",
     "mode": "play",
-    "pid": 48588,
-    "t": 1792454744114.0088,
+    "pid": 7513,
+    "t": 1792461542344.8591,
     "windowless": false
   },
   "childStop": {
     "event": "stopped",
     "mode": "play",
-    "t": 1792454749374.3801
+    "t": 1792461547596.3499
   },
-  "orphanedMs": 4618,
+  "orphanedMs": 4629,
+  "decisiveRebuilds": 1,
+  "childExcludedThrough": true,
+  "trigger": null,
   "controlTone": {
-    "startT": 1792454750663.682,
-    "stopT": 1792454751719.399,
-    "pid": 48892,
+    "startT": 1792461548948.842,
+    "stopT": 1792461549997.0688,
+    "pid": 7566,
     "capturedWindows100ms": 11
   },
   "leakedWindows100ms": 0,
@@ -41,9 +45,13 @@
       "droppedMaxRms": 0,
       "droppedWindows": 7,
       "event": "tapRebuilt",
+      "excludedPids": [
+        7513
+      ],
       "excludedProcesses": 1,
-      "rebuildMs": 82.581,
-      "t": 1792454744228.269,
+      "pollDue": true,
+      "rebuildMs": 81.349,
+      "t": 1792461542496.444,
       "trigger": "poll"
     },
     {
@@ -53,11 +61,15 @@
         "unclassified"
       ],
       "droppedMaxRms": 0,
-      "droppedWindows": 20,
+      "droppedWindows": 19,
       "event": "tapRebuilt",
+      "excludedPids": [
+        7513
+      ],
       "excludedProcesses": 1,
-      "rebuildMs": 80.827,
-      "t": 1792454746339.413,
+      "pollDue": false,
+      "rebuildMs": 81.552,
+      "t": 1792461544564.29,
       "trigger": "listener"
     }
   ],

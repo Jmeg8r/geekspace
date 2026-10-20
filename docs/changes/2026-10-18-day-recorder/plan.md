@@ -853,4 +853,44 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       tell the two apart. It is the same pattern as PR 3a's unattributed run 2. Recorded as
       **likely the control's output tail, not proven**. PR 3c's soak keeps the detail
       logging.
+- **2026-10-20, `feat/day-recorder-arrivals`, Codex #78 round 3 (1 × P1, 2 × P2): the class is fixed.**
+  - **The P1 was the same class as round 2, and my round-2 fix covered only one instance of
+    it.** Exclusion was sticky only for what the *listener* had judged. A helper excluded by
+    the **initial poll** (playing under a live denylisted parent when the tap started) was
+    never judged. Once its parent exited, an unrelated rebuild re-polled it out of the
+    exclusion.
+    - **The class fix:** `TapRunner.exclusion = poll ∪ denied ∪ (previous exclusion ∩
+      alive)`. Once an object is excluded by **any** path, it stays excluded until it leaves
+      the process list. A rebuild can only add exclusions.
+    - **Unit test:** an object excluded before stays excluded while alive, and leaves the
+      exclusion when it leaves the list. 37 tests in all.
+    - **Live proof** (`GS_ORPHAN=baseline tap-orphan-helper`): the child is already playing
+      under a parent that lives 2 s when the tap starts. The parent exits. Then an unrelated
+      short denylisted instance forces a rebuild. Normal judgement speed.
+
+      | Run | Leaked | Decisive rebuild kept the child excluded |
+      |---|---|---|
+      | Control: previous binary `db5b2ff` | **20** (from 1.5 s after the parent exits) | no (it re-polled the orphan out) |
+      | Fixed, 3 valid | **0, 0, 0** | yes (the child's pid is in `excludedPids`) |
+
+      Two attempts were rejected by the scenario's own preconditions and re-run: one fixed
+      run where the tap started outside the parent's life, and one control run with missing
+      log events.
+  - **P2: the poll gate could be fooled by a mixed listener/poll rebuild.** `tapRebuilt` now
+    records `pollDue`, `addedBundles` read *before* the rebuild, and `excludedPids`. The
+    transient proof rejects any run where a due poll's additions name the tone.
+    - b-during-a re-run under that gate: **3 valid, 0 rejected, 0 leaks.** In each run the
+      only rebuild is the listener's (`pollDue: false`).
+  - **P2: the orphan proof did not require its decisive rebuild.** Both variants now require
+    a rebuild after the parent exits and before the child stops, and that it still excludes
+    the child's pid (arrival variant: the listener's `unclassified` rebuild).
+    - Arrival variant re-run: **3 of 3**, 0 leaks, decisive rebuild present and excluding
+      the child. The old arrival-variant evidence was replaced.
+  - **Regression on this build:**
+    - slow-classifier capped: 0 leaked;
+    - fast transient: control 5, listener 0;
+    - `run-segments`: 0 leaks, `stopped/signal`;
+    - PR 3a proof: **0 / 0 / 0**;
+    - shutdown deadline: `tailDropped` with `unjudged`, exit 0;
+    - `npm run verify`: 39 files, 343 tests.
 

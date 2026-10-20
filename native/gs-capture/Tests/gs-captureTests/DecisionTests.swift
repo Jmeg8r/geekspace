@@ -238,6 +238,15 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         XCTAssertEqual(TapRunner.exclusion(polled: [3, 1], denied: [5, 3]), [1, 3, 5])
     }
 
+    func testAnythingExcludedBeforeStaysExcludedWhileAlive() {
+        // Codex review of PR #78, round 3: helper 5 was excluded by the initial poll (its
+        // denylisted parent lived), never judged by the listener, and orphaned since. A
+        // rebuild for an unrelated arrival re-polls without it; it must stay excluded.
+        XCTAssertEqual(TapRunner.exclusion(polled: [7], denied: [7], previous: [5], alive: [1, 5, 7]), [5, 7])
+        // Gone from the process list: dropped from the exclusion.
+        XCTAssertEqual(TapRunner.exclusion(polled: [7], denied: [7], previous: [5], alive: [1, 7]), [7])
+    }
+
     func testAnArrivalAlreadyGoneIsFlaggedWithoutJudgement() {
         var objects: [AudioObjectID] = []
         let arrivals = ProcessArrivals(identify: { _ in nil }, judge: { _ in

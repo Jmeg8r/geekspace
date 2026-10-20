@@ -5,56 +5,56 @@
   "holdMs": 5000,
   "tapExtra": [],
   "first": {
-    "startT": 1792454847365.1208,
-    "stopT": 1792454857871.529,
-    "pid": 49853
+    "startT": 1792461636039.243,
+    "stopT": 1792461646545.19,
+    "pid": 10222
   },
   "second": {
-    "startT": 1792454848672.043,
-    "stopT": 1792454849094.523,
-    "pid": 49880
+    "startT": 1792461637320.182,
+    "stopT": 1792461637744.529,
+    "pid": 10249
   },
   "controlTone": {
-    "startT": 1792454851492.875,
-    "stopT": 1792454852551.029,
-    "pid": 49899,
+    "startT": 1792461640164.824,
+    "stopT": 1792461641224.3398,
+    "pid": 10313,
     "capturedWindows100ms": 11
   },
   "controlTail": [],
-  "secondLivedMs": 423,
+  "secondLivedMs": 426,
   "pollRebuildsSeeingSecond": 0,
   "leakedWindows100ms": 5,
   "leakedDetail": [
     {
-      "rms": 0.07051181388771699,
-      "msAfterSecondStart": 46
+      "rms": 0.07051183177972416,
+      "msAfterSecondStart": 50
     },
     {
-      "rms": 0.17677617471644325,
-      "msAfterSecondStart": 152
+      "rms": 0.17677638017272695,
+      "msAfterSecondStart": 157
     },
     {
-      "rms": 0.17677616709960955,
-      "msAfterSecondStart": 248
+      "rms": 0.17677637974947372,
+      "msAfterSecondStart": 253
     },
     {
-      "rms": 0.1767761614600635,
-      "msAfterSecondStart": 345
+      "rms": 0.1767763773203018,
+      "msAfterSecondStart": 349
     },
     {
-      "rms": 0.16731039312935173,
-      "msAfterSecondStart": 451
+      "rms": 0.1673103115211239,
+      "msAfterSecondStart": 456
     }
   ],
   "rebuilds": [],
   "tailDrops": [],
   "summary": {
-    "dbfs": -21.22,
+    "dbfs": -21.228,
     "droppedWindows": 0,
     "event": "summary",
     "excludedProcesses": 2,
-    "peak": 0.2521442174911499,
-    "rms": 0.08689139832790817,
-    "samples": 576512
+    "peak": 0.2520740330219269,
+    "rms": 0.08681439341662898,
+    "samples": 577536
   }
 }
