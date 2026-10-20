@@ -258,3 +258,58 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         XCTAssertEqual(arrivals.take().map(\.label), [ProcessArrivals.unclassified])
     }
 }
+
+/// audioUse decisions (plan PR 3b-3): what counts, what is named, and what is a change.
+final class AudioUseTests: XCTestCase {
+    func process(_ app: String, bundle: String? = nil, pid: pid_t = 50, parent: pid_t = 1,
+                 input: Bool = false, output: Bool = false, denylisted: Bool = false) -> AudioUse.Process {
+        AudioUse.Process(pid: pid, parent: parent, bundle: bundle ?? app, app: app, input: input, output: output,
+                         denylisted: denylisted)
+    }
+
+    func testOurOwnCaptureAndProcessesAreIgnored() {
+        // replayd and avconferenced report input for our own SCK capture (spike Q3, Q4).
+        XCTAssertTrue(AudioUse.ignored(process("com.apple.replayd", input: true), ownPid: 9, supervisorPid: 8))
+        XCTAssertTrue(AudioUse.ignored(process("com.apple.avconferenced", input: true), ownPid: 9, supervisorPid: 8))
+        XCTAssertTrue(AudioUse.ignored(process("x.helper", pid: 9), ownPid: 9, supervisorPid: 8))
+        // The supervisor and everything it started (Electron's renderer records the mic).
+        XCTAssertTrue(AudioUse.ignored(process("com.astgl.geekspace", pid: 8), ownPid: 9, supervisorPid: 8))
+        XCTAssertTrue(AudioUse.ignored(process("com.github.Electron.helper", parent: 8), ownPid: 9, supervisorPid: 8))
+        XCTAssertFalse(AudioUse.ignored(process("us.zoom.xos", input: true), ownPid: 9, supervisorPid: 8))
+    }
+
+    func testDenylistedAppsAreFoldedIntoOneUnnamedEntry() {
+        let states = AudioUse.aggregate([
+            process("com.example.work", input: true, denylisted: true),
+            process("com.example.other", output: true, denylisted: true),
+            process("us.zoom.xos", input: true, output: true),
+        ])
+        XCTAssertEqual(states[.denylisted], AudioUse.State(input: true, output: true))
+        XCTAssertEqual(states[.app("us.zoom.xos")], AudioUse.State(input: true, output: true))
+        XCTAssertNil(states[.app("com.example.work")], "a denylisted app is never named")
+        let fields = AudioUse.fields(.denylisted, states[.denylisted]!, t: 1)
+        XCTAssertTrue(fields["app"] is NSNull)
+        XCTAssertEqual(fields["denylisted"] as? Bool, true)
+    }
+
+    func testHelpersMergeIntoTheirAppAndIdleOrUnnamedProcessesDrop() {
+        let states = AudioUse.aggregate([
+            process("com.google.Chrome", bundle: "com.google.Chrome.helper", input: true),
+            process("com.google.Chrome", bundle: "com.google.Chrome.helper.renderer", output: true),
+            process("com.apple.Music"),
+            process("", bundle: "", output: true),
+        ])
+        XCTAssertEqual(states, [.app("com.google.Chrome"): AudioUse.State(input: true, output: true)])
+    }
+
+    func testOnlyChangesAreReportedAndAnAppThatStopsReadsAsOff() {
+        let zoomOn: [AudioUse.Key: AudioUse.State] = [.app("us.zoom.xos"): .init(input: true, output: true)]
+        XCTAssertTrue(AudioUse.changes(from: zoomOn, to: zoomOn).isEmpty)
+        let stopped = AudioUse.changes(from: zoomOn, to: [:])
+        XCTAssertEqual(stopped.count, 1)
+        XCTAssertEqual(stopped[0].key, .app("us.zoom.xos"))
+        XCTAssertEqual(stopped[0].state, AudioUse.State())
+        let started = AudioUse.changes(from: [:], to: [.denylisted: .init(input: false, output: true)])
+        XCTAssertEqual(started.map(\.key), [.denylisted])
+    }
+}
