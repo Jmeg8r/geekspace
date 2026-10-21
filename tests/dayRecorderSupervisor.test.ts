@@ -91,10 +91,33 @@ describe("parseLine", () => {
     ["an unknown event", '{"event":"mystery","v":1}'],
     ["a non-object", "[1,2]"],
     ["a shot without its fields", '{"event":"shot","v":1,"ocrText":"SYNTHETIC-OCR-SECRET"}'],
+    // Codex #80 r2: diagnostic fields are logged, so they are validated like the rest.
+    [
+      "a tapRebuilt with a string count",
+      '{"event":"tapRebuilt","v":1,"trigger":"poll","droppedWindows":"SYNTHETIC-OCR-SECRET","addedProcesses":1,"rebuildMs":80}',
+    ],
+    [
+      "a tapRebuilt with an unknown trigger",
+      '{"event":"tapRebuilt","v":1,"trigger":"SYNTHETIC-OCR-SECRET","droppedWindows":1,"addedProcesses":1,"rebuildMs":80}',
+    ],
+    ["a tailDropped without counts", '{"event":"tailDropped","v":1,"unjudged":"SYNTHETIC-OCR-SECRET"}'],
+    ["a sampleRateChanged with text rates", '{"event":"sampleRateChanged","v":1,"from":"SYNTHETIC-OCR-SECRET","to":48000}'],
+    ["a sessionUnverified without livedMs", '{"event":"sessionUnverified","v":1}'],
   ])("rejects %s, with a reason that never quotes the line", (_name, text) => {
     const result = parseLine(text);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).not.toMatch(SECRETS);
+  });
+});
+
+describe("parseLine, valid diagnostics", () => {
+  it.each([
+    '{"event":"tapRebuilt","v":1,"t":1,"trigger":"listener","droppedWindows":5,"addedProcesses":1,"rebuildMs":80,"arrivedBundles":["x.y"],"addedBundles":["x.y"],"droppedMaxRms":0.2,"excludedProcesses":2}',
+    '{"event":"tailDropped","v":1,"t":1,"droppedWindows":3,"unjudged":false,"droppedMaxRms":0,"arrivedBundles":[],"addedProcesses":0,"addedBundles":[]}',
+    '{"event":"sampleRateChanged","v":1,"t":1,"from":44100,"to":48000}',
+    '{"event":"sessionUnverified","v":1,"t":1,"livedMs":120,"endedBy":"rebuild"}',
+  ])("accepts %s", (text) => {
+    expect(parseLine(text).ok).toBe(true);
   });
 });
 

@@ -1156,3 +1156,18 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     in `applyNow` is now followed by a check for shutdown or a newer apply.
   - `npm run verify`: 44 files, 418 tests. The live probe still ends `stopped`, and "Not
     recording" now comes 68 ms after a SIGKILL. No real helper line was rejected.
+- **2026-10-21, PR 3c, Codex #80 round 2 (1 × P1, 1 × P2): both fixed, test first.** Round 2
+  confirmed that all seven round-1 fixes close their failures.
+  - **P1, retention stopped when Convex failed or stalled.** The folder sweep ran only after
+    every database call succeeded, and a query left pending while the client reconnected
+    kept `purging` set forever.
+    - **Fix:** each Convex call in the purge is bounded by `PURGE_DB_TIMEOUT_MS` (60 s).
+    - A failed or timed-out database phase is logged as `dbFailed`, and the database-free
+      day-folder sweep runs anyway.
+  - **P2, diagnostic events skipped validation, but their fields are logged.**
+    - `tapRebuilt` now needs a `trigger` of `listener` or `poll` and numeric counts.
+      `tailDropped` needs a count and the `unjudged` flag. `sampleRateChanged` needs numeric
+      rates, and `sessionUnverified` a numeric `livedMs`.
+    - A line that breaks these shapes counts as a protocol violation.
+    - Checked against the Swift emitter (`Tap.swift`, `Segments.swift`): it always sends
+      these fields.

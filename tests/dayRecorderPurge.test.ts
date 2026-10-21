@@ -181,6 +181,40 @@ describe("purgeExpired", () => {
     expect(result.sweptDays).toBe(1);
   });
 
+  it("still sweeps expired day folders when Convex rejects", async () => {
+    // Codex #80 r2: the folder sweep needs no database, so a backend failure must not stop it.
+    write(`${d31}/shot-orphan.heic`);
+    const result = await purgeExpired({
+      root,
+      now: NOW,
+      listExpired: async () => {
+        throw new Error("backend down");
+      },
+      markPurged: async () => {},
+      log: (m) => logs.push(m),
+    });
+    expect(exists(d31)).toBe(false);
+    expect(result.sweptDays).toBe(1);
+    expect(logs.join("\n")).toMatch(/database phase failed.*backend down/);
+  });
+
+  it("bounds a stalled Convex call, then sweeps and returns", async () => {
+    write(`${d31}/shot-orphan.heic`);
+    const t0 = Date.now();
+    const result = await purgeExpired({
+      root,
+      now: NOW,
+      listExpired: () => new Promise(() => {}),
+      markPurged: async () => {},
+      log: (m) => logs.push(m),
+      dbTimeoutMs: 100,
+    });
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(exists(d31)).toBe(false);
+    expect(result.sweptDays).toBe(1);
+    expect(logs.join("\n")).toMatch(/database phase failed.*timed out/);
+  });
+
   it("keeps the folder of the day that is only partly past retention", async () => {
     const d30 = localDay(NOW - 30 * DAY);
     write(`${d30}/shot-late.heic`);

@@ -13,6 +13,9 @@ export const RETENTION_DAYS = 30;
 const DAY_MS = 86_400_000;
 // Pages of PURGE_BATCH rows each (convex/lib/dayRecorder.ts); a cap so one run can't spin.
 const MAX_PAGES = 100;
+// Each Convex call gets this long. A backend that went away can leave a query pending while
+// the client reconnects, and the folder sweep must not wait on it.
+export const PURGE_DB_TIMEOUT_MS = 60_000;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 // The shape convex/lib/dayRecorder.ts assertMediaPath accepts: no separators, no leading dot.
 const FILE_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
@@ -107,11 +110,36 @@ function sweepExpiredDays(root, now, log) {
  * Purge media past retention. `listExpired` and `markPurged` are the Convex handlers.
  * Logs counts only, never paths (spec, Logging).
  */
-export async function purgeExpired({ root, now, listExpired, markPurged, log }) {
-  const totals = { deleted: 0, missing: 0, refused: 0, failed: 0, sweptDays: 0 };
+function bounded(promise, ms, what) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+export async function purgeExpired({ root, now, listExpired, markPurged, log, dbTimeoutMs = PURGE_DB_TIMEOUT_MS }) {
+  const totals = { deleted: 0, missing: 0, refused: 0, failed: 0, sweptDays: 0, dbFailed: false };
+  try {
+    await purgeRows({ root, now, listExpired, markPurged, log, dbTimeoutMs, totals });
+  } catch (err) {
+    // The sweep below needs no database, so retention still makes progress.
+    totals.dbFailed = true;
+    log(`purge: database phase failed (${err?.message ?? err}); sweeping expired day folders anyway`);
+  }
+  totals.sweptDays = sweepExpiredDays(root, now, log);
+  log(
+    `purge: deleted ${totals.deleted}, already gone ${totals.missing}, refused ${totals.refused}, failed ${totals.failed}, swept ${totals.sweptDays} day folders`
+  );
+  return totals;
+}
+
+async function purgeRows({ root, now, listExpired, markPurged, log, dbTimeoutMs, totals }) {
   const newestExpired = localDay(now - RETENTION_DAYS * DAY_MS);
   for (let page = 0; page < MAX_PAGES; page++) {
-    const { segments, screenshots } = await listExpired(now);
+    const { segments, screenshots } = await bounded(listExpired(now), dbTimeoutMs, "expiredMedia");
     if (segments.length === 0 && screenshots.length === 0) break;
     const marks = { segmentIds: [], screenshotIds: [], at: now };
     const take = (rows, ids) => {
@@ -130,11 +158,6 @@ export async function purgeExpired({ root, now, listExpired, markPurged, log }) 
     take(screenshots, marks.screenshotIds);
     // Rows that can't be deleted are served again first; stop rather than spin on them.
     if (marks.segmentIds.length === 0 && marks.screenshotIds.length === 0) break;
-    await markPurged(marks);
+    await bounded(markPurged(marks), dbTimeoutMs, "markPurged");
   }
-  totals.sweptDays = sweepExpiredDays(root, now, log);
-  log(
-    `purge: deleted ${totals.deleted}, already gone ${totals.missing}, refused ${totals.refused}, failed ${totals.failed}, swept ${totals.sweptDays} day folders`
-  );
-  return totals;
 }

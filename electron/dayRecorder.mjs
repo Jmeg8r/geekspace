@@ -31,10 +31,13 @@ const SHAPES = {
   shot: (m) =>
     isStr(m.day) && isStr(m.path) && isNum(m.takenAt) && isStr(m.ocrText) && (m.appBundleId === null || isStr(m.appBundleId)),
   segment: (m) => m.kind === "system" && isStr(m.day) && isStr(m.path) && isNum(m.start) && isNum(m.end),
-  tapRebuilt: () => true,
-  tailDropped: () => true,
-  sampleRateChanged: () => true,
-  sessionUnverified: () => true,
+  // These are only logged, but what is logged is validated too (Codex #80 r2): counts must
+  // be numbers and `trigger` one of its two values, so no line can smuggle text into a log.
+  tapRebuilt: (m) =>
+    (m.trigger === "listener" || m.trigger === "poll") && isNum(m.droppedWindows) && isNum(m.addedProcesses) && isNum(m.rebuildMs),
+  tailDropped: (m) => isNum(m.droppedWindows) && isBool(m.unjudged),
+  sampleRateChanged: (m) => isNum(m.from) && isNum(m.to),
+  sessionUnverified: (m) => isNum(m.livedMs),
   audioUse: (m) => (m.app === null || isStr(m.app)) && isBool(m.denylisted) && isBool(m.input) && isBool(m.output),
   stopped: (m) => isStr(m.reason),
 };

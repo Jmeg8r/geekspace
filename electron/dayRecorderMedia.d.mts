@@ -1,6 +1,7 @@
 // WHAT: types for the Day Recorder media root and purge, so tests/ can import it.
 
 export const RETENTION_DAYS: number;
+export const PURGE_DB_TIMEOUT_MS: number;
 
 export function localDay(ms: number): string;
 export function ensureMediaRoot(root: string): string;
@@ -20,6 +21,8 @@ export type PurgeTotals = {
   refused: number;
   failed: number;
   sweptDays: number;
+  /** The Convex half failed or timed out; the folder sweep still ran. */
+  dbFailed: boolean;
 };
 
 export function purgeExpired(options: {
@@ -28,4 +31,5 @@ export function purgeExpired(options: {
   listExpired: (now: number) => Promise<ExpiredMedia>;
   markPurged: (marks: PurgeMarks) => Promise<void>;
   log: (message: string) => void;
+  dbTimeoutMs?: number;
 }): Promise<PurgeTotals>;
