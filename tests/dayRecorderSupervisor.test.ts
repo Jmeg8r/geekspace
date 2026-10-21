@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import {
   contentFreeLogger,
+  createFileLog,
   createSupervisor,
   parseLine,
   type ScreenshotRow,
@@ -59,6 +60,22 @@ function started(h: ReturnType<typeof harness>, denylist: string[] = []) {
   h.supervisor.start({ denylist, shotSec: 30, segmentSec: 300 });
   return h;
 }
+
+describe("createFileLog", () => {
+  // Codex #80 r4 [P2]: a write stream with no error listener throws in the main process when
+  // the log can't be opened or the disk is full.
+  it("falls back instead of throwing when the log file can't be written", async () => {
+    const fallback: string[] = [];
+    const file = path.join("/nonexistent-dir-for-gs-test", "day-recorder.log");
+    const log = createFileLog(file, (m) => fallback.push(m));
+    log.log("first");
+    await until(() => fallback.length > 0);
+    log.log("after the failure");
+    log.end();
+    expect(fallback[0]).toMatch(/Day Recorder log .* failed \(ENOENT\)/);
+    expect(fallback.at(-1)).toMatch(/after the failure$/);
+  });
+});
 
 describe("contentFreeLogger", () => {
   it("forwards that the Convex client logged, never what it logged", () => {

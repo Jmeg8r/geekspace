@@ -5,6 +5,7 @@
 // show "Not recording" within 10 s. Every way the helper can end is a state change here,
 // never a silent stall. Captured content (OCR text, denylisted bundle ids) never reaches a log.
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import readline from "node:readline";
 
 export const PROTOCOL_VERSION = 1;
@@ -78,6 +79,31 @@ function diagnostic(m) {
     default:
       return null;
   }
+}
+
+/**
+ * The recorder's append-only log file. A stream error (the file can't be opened, the disk is
+ * full) would otherwise be an uncaught exception in the main process; instead it is reported
+ * once through `fallback`, which then takes every later line.
+ */
+export function createFileLog(file, fallback = (message) => console.error(message)) {
+  let broken = false;
+  const stream = fs.createWriteStream(file, { flags: "a" });
+  stream.on("error", (err) => {
+    if (broken) return;
+    broken = true;
+    fallback(`Day Recorder log ${file} failed (${err?.code ?? err}); logging to the console instead`);
+  });
+  return {
+    log(message) {
+      const line = `${new Date().toISOString()} ${message}`;
+      if (broken) fallback(line);
+      else stream.write(`${line}\n`);
+    },
+    end() {
+      if (!broken) stream.end();
+    },
+  };
 }
 
 /**

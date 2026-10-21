@@ -13,6 +13,10 @@ export type ClientLogger = {
   warn: (...args: unknown[]) => void;
   error: (...args: unknown[]) => void;
 };
+export function createFileLog(
+  file: string,
+  fallback?: (message: string) => void
+): { log: (message: string) => void; end: () => void };
 export function contentFreeLogger(log: (message: string) => void): ClientLogger;
 
 /** One protocol v1 line. Only the fields the supervisor reads are typed. */

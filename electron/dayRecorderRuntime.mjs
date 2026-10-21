@@ -12,7 +12,7 @@ import { ConvexClient } from "convex/browser";
 // The generated `api` is exactly `anyApi` (convex/_generated/api.js), and convex/ is not
 // packaged into the app, so the main process uses anyApi directly.
 import { anyApi as api } from "convex/server";
-import { contentFreeLogger, createSupervisor } from "./dayRecorder.mjs";
+import { contentFreeLogger, createFileLog, createSupervisor } from "./dayRecorder.mjs";
 import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired } from "./dayRecorderMedia.mjs";
 import { createDayRecorderService } from "./dayRecorderService.mjs";
@@ -31,8 +31,8 @@ function helperPath() {
 export function startDayRecorder({ convexUrl }) {
   const logDir = path.join(GEEKSPACE_DIR, "logs");
   fs.mkdirSync(logDir, { recursive: true });
-  const logStream = fs.createWriteStream(path.join(logDir, "day-recorder.log"), { flags: "a" });
-  const log = (message) => logStream.write(`${new Date().toISOString()} ${message}\n`);
+  const logFile = createFileLog(path.join(logDir, "day-recorder.log"));
+  const log = logFile.log;
 
   const client = new ConvexClient(convexUrl, { logger: contentFreeLogger(log) });
   const mediaDir = path.join(GEEKSPACE_DIR, "day-recorder");
@@ -80,7 +80,7 @@ export function startDayRecorder({ convexUrl }) {
       await service.shutdown();
       await client.close();
       log("stopped");
-      logStream.end();
+      logFile.end();
     },
     killSync: () => service.killSync(),
   };

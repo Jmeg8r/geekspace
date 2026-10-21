@@ -1178,3 +1178,14 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Fix:** retention starts when the service is created (macOS only) and runs on its
     interval from then on. Settings now govern capture only.
   - The interval timer is `unref`'d, so it never keeps the process alive on its own.
+- **2026-10-21, PR 3c, Codex #80 round 4: GATE PASS (`[P1] none`, 1 × P2), and the loop stops
+  here (L42 cap).** Round 4 confirmed the round-3 retention fix.
+  - **P2, fixed after the pass, test first:** the recorder's log stream had no `error`
+    listener. A log file it can't open, or a full disk, would have thrown an uncaught
+    exception in the main process, even with recording off.
+  - `createFileLog` now reports a stream error once through a console fallback and sends
+    later lines there too.
+  - **This commit has had no Codex round.** Whether to run a final check on it is James's call.
+  - Codex reported that the vitest suites can't run in its read-only sandbox (it can't
+    create temp dirs). It checked with direct Node probes instead; `npm run verify` here
+    covers the suites.
