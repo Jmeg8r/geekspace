@@ -1110,3 +1110,19 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - the R3 screenshots for a revoked permission and a killed helper;
     - the stalled-delivery check with an output device unplugged mid-run;
     - the clean-TCC-state proof (spike Q7).
+- **2026-10-20, PR 3c, F5 security gates on #80.**
+  - **`security-review`:** no high-confidence findings. It considered and rejected
+    candidates for command injection, argv injection, traversal, symlinks, TOCTOU, logging
+    and IPC.
+  - **`gstack-cso`** (run `1792555010920-c54230bb614ca230`, diff scope, `--code`): finished
+    as **partial**. It was static only, because the doctor found no qualified scanner images,
+    and the Swift sources outside the diff were not assessed.
+  - **The CSO's one finding, `4016f9d6` (low, high confidence, fixed):**
+    - Convex checks a row's `day`/`path` and its `takenAt`/`start` separately, and the local
+      backend accepts unauthenticated calls. So a forged row with an old time and a
+      current-day path made the purge delete a live recording, inside a 0700 folder that
+      caller can't otherwise touch.
+    - **Fix:** the purge now refuses any row whose path day is newer than the local day of
+      the retention cutoff. Test first: it failed before the guard and passes with it.
+    - The Convex handlers still don't tie `day` to the capture time. That would be a schema
+      boundary change, so it's left for James's call, not made here.

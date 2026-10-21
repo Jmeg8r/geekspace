@@ -66,8 +66,14 @@ export function resolveMediaPath(root, rel) {
   return resolved;
 }
 
-function removeFile(root, rel) {
+function removeFile(root, rel, newestExpired) {
   const file = resolveMediaPath(root, rel);
+  // WHY: Convex checks a row's day and its capture time separately, and the local backend
+  // takes unauthenticated calls, so a row's old time is not trusted to vouch for its file.
+  // Only a file in a day folder that is at least partly past retention can be deleted.
+  if (rel.slice(0, rel.indexOf("/")) > newestExpired) {
+    throw refuse(`Refusing media path ${JSON.stringify(rel)}: its day is still inside retention`);
+  }
   try {
     fs.unlinkSync(file);
     return "deleted";
@@ -103,6 +109,7 @@ function sweepExpiredDays(root, now, log) {
  */
 export async function purgeExpired({ root, now, listExpired, markPurged, log }) {
   const totals = { deleted: 0, missing: 0, refused: 0, failed: 0, sweptDays: 0 };
+  const newestExpired = localDay(now - RETENTION_DAYS * DAY_MS);
   for (let page = 0; page < MAX_PAGES; page++) {
     const { segments, screenshots } = await listExpired(now);
     if (segments.length === 0 && screenshots.length === 0) break;
@@ -110,7 +117,7 @@ export async function purgeExpired({ root, now, listExpired, markPurged, log }) 
     const take = (rows, ids) => {
       for (const row of rows) {
         try {
-          totals[removeFile(root, row.path)]++;
+          totals[removeFile(root, row.path, newestExpired)]++;
           ids.push(row._id);
         } catch (err) {
           const refused = err?.code === REFUSED;

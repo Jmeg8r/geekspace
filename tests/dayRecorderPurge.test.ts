@@ -143,6 +143,18 @@ describe("purgeExpired", () => {
     expect(logs.join("\n")).toMatch(/evil1/);
   });
 
+  it("refuses a row whose old capture time names a current day's file", async () => {
+    // CSO finding 4016f9d6: Convex checks a row's day/path shape and its time separately,
+    // and the backend is unauthenticated on 127.0.0.1, so a forged old takenAt must not
+    // reach a file from a day that is still inside retention.
+    write(`${d29}/shot-live.heic`);
+    const side = convexSide([{ screenshots: [{ _id: "forged", path: `${d29}/shot-live.heic` }], segments: [] }]);
+    const result = await run(side);
+    expect(exists(`${d29}/shot-live.heic`)).toBe(true);
+    expect(side.marked).toEqual([]);
+    expect(result).toMatchObject({ deleted: 0, refused: 1 });
+  });
+
   it("pages until Convex has nothing left", async () => {
     write(`${d31}/shot-1.heic`);
     write(`${d31}/shot-2.heic`);
