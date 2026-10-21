@@ -2,8 +2,9 @@
 // Before every start it runs the FileVault and Time Machine gates (spec F7, F8). A denylist
 // or interval change restarts the helper, because the helper reads its arguments once
 // (protocol.md). Capture failures are recorded as capError events. The retention purge runs
-// on the first settings and then every PURGE_INTERVAL_MS for the service's whole life,
-// whether or not capture is on: media recorded once still has to go after 30 days (R14).
+// when the service is created and then every PURGE_INTERVAL_MS for its whole life, whether
+// or not capture is on or settings ever arrive: media recorded once still has to go after
+// 30 days (R14). Settings govern capture only.
 // WHY one queue: settings can change while a start is still running its gates; applying
 // them one at a time means two helpers never run at once.
 
@@ -64,6 +65,8 @@ export function createDayRecorderService({
     if (purgeTimer || closed || platform !== "darwin") return;
     runPurge();
     purgeTimer = setInterval(runPurge, purgeIntervalMs);
+    // Retention never keeps the process alive on its own; the app's lifetime decides.
+    purgeTimer.unref?.();
   }
 
   async function stopCurrent() {
@@ -92,7 +95,6 @@ export function createDayRecorderService({
   async function applyNow() {
     const s = latest;
     if (closed || !s) return;
-    scheduleRetention();
     // After every await below: a newer apply is already queued and takes over, or shutdown
     // has begun. Either way this one must not go on to start a helper.
     const superseded = () => closed || latest !== s;
@@ -160,6 +162,8 @@ export function createDayRecorderService({
     await stopCurrent();
     setStatus({ status: "off" });
   }
+
+  scheduleRetention();
 
   return {
     apply,

@@ -1171,3 +1171,10 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - A line that breaks these shapes counts as a protocol violation.
     - Checked against the Swift emitter (`Tap.swift`, `Segments.swift`): it always sends
       these fields.
+- **2026-10-21, PR 3c, Codex #80 round 3 (1 × P1, `[P2] none`): fixed, test first.** Round 3
+  confirmed that both round-2 fixes close their failures and match the Swift emitter.
+  - **P1, retention still waited for the first settings response.** A settings subscription
+    that errors, or never connects, held back the purge for the whole session.
+  - **Fix:** retention starts when the service is created (macOS only) and runs on its
+    interval from then on. Settings now govern capture only.
+  - The interval timer is `unref`'d, so it never keeps the process alive on its own.

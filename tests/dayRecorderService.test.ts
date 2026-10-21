@@ -193,6 +193,16 @@ describe("Day Recorder service", () => {
     expect(h.sup.calls.map((c) => c.op)).toEqual(["start", "stop", "start"]);
   });
 
+  it("starts retention when the service is created, before any settings arrive", async () => {
+    // Codex #80 r3: a settings subscription that errors or never connects must not hold
+    // retention back for the whole session (R14).
+    const h = harness({ purgeIntervalMs: 20 });
+    expect(h.purges).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 70));
+    expect(h.purges.length).toBeGreaterThanOrEqual(3);
+    await h.service.shutdown();
+  });
+
   it("runs the purge on the first settings even when recording is off", async () => {
     // Codex #80 r1: retention must not depend on capture being on (spec R14). Media recorded
     // once and then switched off still has to go after 30 days.
