@@ -51,4 +51,17 @@ final class OCRQueue {
     func drain(timeout: Double) -> Bool {
         group.wait(timeout: .now() + timeout) == .success
     }
+
+    // How often a drain re-reads a deadline that can move.
+    static let drainSliceSec = 0.1
+
+    /// Wait for every submitted job until `deadline()`, re-read every `drainSliceSec`, so a
+    /// later signal can shorten a drain that is already waiting. True when all finished.
+    func drain(until deadline: () -> Date) -> Bool {
+        while true {
+            let remaining = deadline().timeIntervalSinceNow
+            if remaining <= 0 { return group.wait(timeout: .now()) == .success }
+            if group.wait(timeout: .now() + min(remaining, Self.drainSliceSec)) == .success { return true }
+        }
+    }
 }

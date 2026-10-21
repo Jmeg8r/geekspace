@@ -135,7 +135,12 @@ enum Run {
         let signals = [SIGTERM, SIGINT].map { number -> DispatchSourceSignal in
             signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
-            source.setEventHandler { shutdown(reason: "signal") }
+            source.setEventHandler {
+                // Noted before taking shutdownLock: a --duration stop may already hold it while
+                // draining OCR, and this shortens that drain to the signal allowance.
+                noteSignal()
+                shutdown(reason: "signal")
+            }
             source.resume()
             return source
         }
@@ -160,12 +165,21 @@ enum Run {
         }
 
         let started = nowMs()
+        let expired = { duration.map { nowMs() - started >= $0 * 1000 } ?? false }
         var lastKept: [Bool]?
-        while duration.map({ nowMs() - started < $0 * 1000 }) ?? true {
+        capture: while !expired() {
             let tickStart = nowMs()
             // A slot first, so a frame is never taken without room to read it. Normally free;
-            // while the backlog is full the loop waits rather than dropping a frame.
-            while !ocr.tryReserve() { try? await Task.sleep(nanoseconds: 50_000_000) }
+            // while the backlog is full the loop waits rather than dropping a frame, but never
+            // past a proof's --duration (Codex #82 r1).
+            while !ocr.tryReserve() {
+                if expired() { break capture }
+                try? await Task.sleep(nanoseconds: 50_000_000)
+            }
+            if expired() {
+                ocr.release()
+                break
+            }
             let takenAt = Date()
             let ownerBefore = NSWorkspace.shared.menuBarOwningApplication?.bundleIdentifier
             var (image, _, _) = await Screen.capture(excluding: denylist, scale: captureScale)
@@ -219,6 +233,11 @@ enum Run {
     /// here until the first one exits the process. Guards `recorder` too.
     private static let shutdownLock = NSLock()
     private static var recorder: SystemAudioRecorder?
+    // When a stop signal arrived; its own lock, never shutdownLock.
+    private static let signalLock = NSLock()
+    private static var signalledAt: Date?
+
+    static func noteSignal() { signalLock.withLock { signalledAt = signalledAt ?? Date() } }
 
     /// Hand the started recorder to shutdown. If a stop is already in progress, this blocks
     /// until that stop exits the process.
@@ -230,8 +249,11 @@ enum Run {
         shutdownLock.lock()
         recorder?.stop()
         // After the audio, which matters more: shots still in OCR get a bounded wait.
-        let drainSec = reason == "signal" ? ocrDrainOnSignalSec : ocrDrainOnDurationSec
-        if !ocr.drain(timeout: drainSec) {
+        let base = Date().addingTimeInterval(reason == "signal" ? ocrDrainOnSignalSec : ocrDrainOnDurationSec)
+        let deadline = {
+            signalLock.withLock { signalledAt.map { min(base, $0.addingTimeInterval(ocrDrainOnSignalSec)) } ?? base }
+        }
+        if !ocr.drain(until: deadline) {
             FileHandle.standardError.write("gs-capture: OCR still running at stop; its shots stay unannounced\n".data(using: .utf8)!)
         }
         line("stopped", ["reason": reason], terminal: true)

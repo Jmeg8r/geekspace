@@ -75,4 +75,23 @@ final class OCRQueueTests: XCTestCase {
         release.signal()
         XCTAssertTrue(queue.drain(timeout: 5))
     }
+
+    func testDrainHonoursADeadlineThatShrinksWhileItWaits() {
+        // Codex #82 r1: a SIGTERM during a 60 s --duration drain must cut it to the 2 s
+        // signal allowance, without taking the lock the draining caller holds.
+        let queue = OCRQueue(capacity: 1)
+        let release = DispatchSemaphore(value: 0)
+        XCTAssertTrue(queue.tryReserve())
+        queue.submit { release.wait() }
+        let started = Date()
+        let lock = NSLock()
+        var deadline = started.addingTimeInterval(60)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) {
+            lock.withLock { deadline = Date().addingTimeInterval(0.2) }
+        }
+        XCTAssertFalse(queue.drain(until: { lock.withLock { deadline } }))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        release.signal()
+        XCTAssertTrue(queue.drain(timeout: 5))
+    }
 }

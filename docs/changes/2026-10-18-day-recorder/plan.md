@@ -1069,3 +1069,14 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       The run had 11 heartbeats and exited 0 ending `stopped`.
   - **Not covered:** a signed `npm run package` run and the 2-hour soak. Both are 3c
     part 2, with James at the Mac.
+  - **Codex #82 round 1: GATE PASS (`[P1] none`, 2 × P2), both fixed.** Both affect only
+    `--duration` proof runs; the supervisor never passes `--duration`.
+    - **A full backlog could run past `--duration`.** The slot wait now checks the
+      deadline, and a slot taken after it expires is given back.
+    - **SIGTERM couldn't shorten a duration drain.** The duration stop holds `shutdownLock`
+      while it drains. The signal handler now notes the signal under its own lock first, and
+      `OCRQueue.drain(until:)` re-reads its deadline every 100 ms. So the drain drops to the
+      2 s signal allowance.
+    - `swift test`: 54 tests, one new for the shrinking deadline.
+    - Live, on a re-signed copy with `--duration 10` and SIGTERM at 15 s: it exited at
+      17.0 s, and the last frame was captured at 5.7 s.
