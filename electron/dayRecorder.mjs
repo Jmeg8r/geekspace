@@ -13,6 +13,9 @@ export const SILENT_LIMIT_MS = 10_000;
 // The helper settles its held tail within a 5 s deadline on SIGTERM, then finalizes the
 // open segment; past this it is wedged and gets SIGKILL.
 export const STOP_GRACE_MS = 8_000;
+// How long a stop waits for row writes still in flight (the final segment's, mostly) before
+// the caller closes the Convex client and the backend.
+export const DRAIN_MS = 5_000;
 const MAX_STDERR_CHARS = 500;
 const BUNDLE_ID_RE = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 
@@ -74,6 +77,16 @@ function diagnostic(m) {
   }
 }
 
+/**
+ * A logger for the main-process Convex client. The client logs a failed mutation's server
+ * error before the promise rejects, and an argument-validation error echoes the arguments,
+ * OCR text included. So only the fact and the level are kept.
+ */
+export function contentFreeLogger(log) {
+  const withheld = (level) => () => log(`convex client ${level} (details withheld: they can include captured content)`);
+  return { log: () => {}, logVerbose: () => {}, warn: withheld("warn"), error: withheld("error") };
+}
+
 export function createSupervisor({
   command,
   prefixArgs = [],
@@ -85,6 +98,7 @@ export function createSupervisor({
   spawnImpl = spawn,
   silentLimitMs = SILENT_LIMIT_MS,
   stopGraceMs = STOP_GRACE_MS,
+  drainMs = DRAIN_MS,
 }) {
   let state = { status: "off" };
   let child = null;
@@ -93,6 +107,7 @@ export function createSupervisor({
   let sawStopped = false;
   let lastStderr = "";
   let silenceTimer = null;
+  const pending = new Set();
 
   function setState(next) {
     state = next;
@@ -123,16 +138,51 @@ export function createSupervisor({
   function store(kind, write, args) {
     // WHY not the error's message: a Convex argument-validation error echoes the arguments,
     // and a screenshot's include its OCR text. The path is enough to find the file.
-    write(args).catch((err) =>
-      log(`could not store a ${kind} row for ${args.path} (${err?.name ?? "Error"}); the file stays until the retention sweep`)
-    );
+    const p = write(args)
+      .catch((err) =>
+        log(`could not store a ${kind} row for ${args.path} (${err?.name ?? "Error"}); the file stays until the retention sweep`)
+      )
+      .finally(() => pending.delete(p));
+    pending.add(p);
+  }
+
+  async function drain() {
+    if (pending.size === 0) return;
+    let timer;
+    const done = await Promise.race([
+      Promise.allSettled([...pending]).then(() => true),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), drainMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!done) {
+      const n = pending.size;
+      log(`${n} row write${n === 1 ? "" : "s"} still pending after ${drainMs} ms; their files stay until the retention sweep`);
+    }
+  }
+
+  /** Stop a helper that broke the protocol: SIGTERM finalizes its segment, SIGKILL if it won't. */
+  function terminate(proc) {
+    proc.kill("SIGTERM");
+    const timer = setTimeout(() => {
+      if (child === proc) proc.kill("SIGKILL");
+    }, stopGraceMs);
+    proc.once("close", () => clearTimeout(timer));
   }
 
   function onLine(proc, text) {
-    armSilence(proc);
+    // After a failure the watchdog has done its job; lines still arriving (a final segment)
+    // are stored, but they don't make the helper healthy again.
+    if (state.status !== "notRecording") armSilence(proc);
     const parsed = parseLine(text);
     if (!parsed.ok) {
       log(`dropped a helper line: ${parsed.reason}`);
+      // protocol.md "Failure": such a line means Not recording, not just a dropped line.
+      if (state.status !== "notRecording" && !stopRequested) {
+        fail({ reason: "protocol", message: `gs-capture broke protocol v1 (${parsed.reason})` });
+        terminate(proc);
+      }
       return;
     }
     const m = parsed.message;
@@ -235,6 +285,7 @@ export function createSupervisor({
     const proc = child;
     if (!proc) {
       clearSilence();
+      await drain();
       if (state.status !== "off") setState({ status: "off" });
       return;
     }
@@ -256,6 +307,7 @@ export function createSupervisor({
       await exited;
     }
     if (!sawStopped && !gaveUp) log("gs-capture exited on SIGTERM before it reported stopped");
+    await drain();
     setState({ status: "off" });
   }
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import {
+  contentFreeLogger,
   createSupervisor,
   parseLine,
   type ScreenshotRow,
@@ -58,6 +59,23 @@ function started(h: ReturnType<typeof harness>, denylist: string[] = []) {
   h.supervisor.start({ denylist, shotSec: 30, segmentSec: 300 });
   return h;
 }
+
+describe("contentFreeLogger", () => {
+  it("forwards that the Convex client logged, never what it logged", () => {
+    // Codex #80 r1: the Convex client logs a failed mutation's server error, which can echo
+    // the arguments (OCR text), before the promise rejects.
+    const logs: string[] = [];
+    const logger = contentFreeLogger((m) => logs.push(m));
+    logger.error("[CONVEX M(dayRecorder:addScreenshot)] ArgumentValidationError: SYNTHETIC-OCR-SECRET");
+    logger.warn("reconnecting", { detail: "SYNTHETIC-OCR-SECRET" });
+    logger.log("SYNTHETIC-OCR-SECRET");
+    logger.logVerbose("SYNTHETIC-OCR-SECRET");
+    expect(logs).toEqual([
+      "convex client error (details withheld: they can include captured content)",
+      "convex client warn (details withheld: they can include captured content)",
+    ]);
+  });
+});
 
 describe("parseLine", () => {
   it("accepts a v1 line with a known event", () => {
@@ -174,11 +192,46 @@ describe("Day Recorder supervisor", () => {
     await until(() => !h.supervisor.running());
   });
 
-  it("drops malformed, wrong-version and unknown lines, logging none of their contents", async () => {
+  it("treats a malformed line as Not recording, stops the helper, and logs none of its contents", async () => {
+    // protocol.md "Failure": a line that is not valid JSON, or whose v is not 1, means Not
+    // recording. A helper that keeps talking garbage must not keep the watchdog happy (Codex #80 r1).
     const h = started(harness("malformed"));
-    await until(() => h.logs.filter((l) => l.includes("dropped")).length >= 3);
-    expect(h.supervisor.state().status).toBe("recording");
+    await until(() => h.supervisor.state().status === "notRecording");
+    const s = h.supervisor.state();
+    expect(s.status === "notRecording" && s.error.reason).toBe("protocol");
+    await until(() => !h.supervisor.running());
     expect(h.logs.join("\n")).not.toMatch(SECRETS);
+  });
+
+  it("waits for the final segment's row before a clean stop returns", async () => {
+    // Codex #80 r1: the helper announces its last segment during SIGTERM; the backend stops
+    // right after this returns, so an unfinished write would leave that file unindexed.
+    let finished = false;
+    const h = started(
+      harness("finalSegment", {
+        sink: {
+          addScreenshot: async () => {},
+          addSegment: () => new Promise((r) => setTimeout(() => ((finished = true), r()), 200)),
+        },
+      })
+    );
+    await until(() => h.supervisor.state().status === "recording");
+    await h.supervisor.stop();
+    expect(finished).toBe(true);
+  });
+
+  it("gives up waiting on a row write after the drain limit, and says so", async () => {
+    const h = started(
+      harness("finalSegment", {
+        drainMs: 150,
+        sink: { addScreenshot: async () => {}, addSegment: () => new Promise(() => {}) },
+      })
+    );
+    await until(() => h.supervisor.state().status === "recording");
+    const t0 = Date.now();
+    await h.supervisor.stop();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(h.logs.some((l) => l.includes("1 row write still pending"))).toBe(true);
   });
 
   it("stores shots and segments, omitting a null appBundleId, and never logs captured text", async () => {

@@ -12,7 +12,7 @@ import { ConvexClient } from "convex/browser";
 // The generated `api` is exactly `anyApi` (convex/_generated/api.js), and convex/ is not
 // packaged into the app, so the main process uses anyApi directly.
 import { anyApi as api } from "convex/server";
-import { createSupervisor } from "./dayRecorder.mjs";
+import { contentFreeLogger, createSupervisor } from "./dayRecorder.mjs";
 import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired } from "./dayRecorderMedia.mjs";
 import { createDayRecorderService } from "./dayRecorderService.mjs";
@@ -34,7 +34,7 @@ export function startDayRecorder({ convexUrl }) {
   const logStream = fs.createWriteStream(path.join(logDir, "day-recorder.log"), { flags: "a" });
   const log = (message) => logStream.write(`${new Date().toISOString()} ${message}\n`);
 
-  const client = new ConvexClient(convexUrl);
+  const client = new ConvexClient(convexUrl, { logger: contentFreeLogger(log) });
   const mediaDir = path.join(GEEKSPACE_DIR, "day-recorder");
   // Off macOS the service never starts a helper, so it never needs the folder either.
   const mediaRoot = process.platform === "darwin" ? ensureMediaRoot(mediaDir) : mediaDir;

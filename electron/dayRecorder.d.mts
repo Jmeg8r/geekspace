@@ -4,6 +4,16 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 export const PROTOCOL_VERSION: 1;
 export const SILENT_LIMIT_MS: number;
 export const STOP_GRACE_MS: number;
+export const DRAIN_MS: number;
+
+/** The Convex client's logger shape. */
+export type ClientLogger = {
+  log: (...args: unknown[]) => void;
+  logVerbose: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
+export function contentFreeLogger(log: (message: string) => void): ClientLogger;
 
 /** One protocol v1 line. Only the fields the supervisor reads are typed. */
 export type HelperMessage =
@@ -28,7 +38,7 @@ export type CaptureSink = {
 };
 
 export type CaptureError = {
-  reason: "spawnFailed" | "exited" | "silent";
+  reason: "spawnFailed" | "exited" | "silent" | "protocol";
   message: string;
   code?: number | null;
 };
@@ -48,6 +58,7 @@ export type SupervisorOptions = {
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   silentLimitMs?: number;
   stopGraceMs?: number;
+  drainMs?: number;
 };
 
 export type StartOptions = { denylist: string[]; shotSec: number; segmentSec: number };

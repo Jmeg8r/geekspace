@@ -39,3 +39,9 @@ export type DayRecorderService = {
 };
 
 export function createDayRecorderService(options: ServiceOptions): DayRecorderService;
+
+export function createQuitHold(options: {
+  stop: () => Promise<void>;
+  quit: () => void;
+  log: (message: string) => void;
+}): (event: { preventDefault: () => void }) => boolean;

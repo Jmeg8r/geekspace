@@ -1,8 +1,9 @@
 // WHAT: turns the Day Recorder settings into a running gs-capture helper (plan PR 3c).
 // Before every start it runs the FileVault and Time Machine gates (spec F7, F8). A denylist
 // or interval change restarts the helper, because the helper reads its arguments once
-// (protocol.md). Capture failures are recorded as capError events, and the retention purge
-// runs when recording starts and then every PURGE_INTERVAL_MS.
+// (protocol.md). Capture failures are recorded as capError events. The retention purge runs
+// on the first settings and then every PURGE_INTERVAL_MS for the service's whole life,
+// whether or not capture is on: media recorded once still has to go after 30 days (R14).
 // WHY one queue: settings can change while a start is still running its gates; applying
 // them one at a time means two helpers never run at once.
 
@@ -27,6 +28,8 @@ export function createDayRecorderService({
 }) {
   let status = { status: "off" };
   let supervisor = null;
+  // The supervisor being stopped: its state changes still count, and killSync still reaches it.
+  let stopping = null;
   let runningKey = null;
   let latest = null;
   let queue = Promise.resolve();
@@ -47,7 +50,7 @@ export function createDayRecorderService({
   }
 
   function runPurge() {
-    if (purging) return;
+    if (purging || closed) return;
     purging = true;
     purge()
       .catch((err) => log(`purge failed: ${err?.message ?? err}`))
@@ -56,16 +59,28 @@ export function createDayRecorderService({
       });
   }
 
+  function scheduleRetention() {
+    // There is no media root off macOS, so nothing to purge either.
+    if (purgeTimer || closed || platform !== "darwin") return;
+    runPurge();
+    purgeTimer = setInterval(runPurge, purgeIntervalMs);
+  }
+
   async function stopCurrent() {
     if (!supervisor) return;
     const old = supervisor;
     supervisor = null;
     runningKey = null;
-    await old.stop();
+    stopping = old;
+    try {
+      await old.stop();
+    } finally {
+      if (stopping === old) stopping = null;
+    }
   }
 
   function onSupervisorState(owner, s) {
-    if (owner !== supervisor) return;
+    if (owner !== supervisor && owner !== stopping) return;
     if (s.status === "notRecording") {
       setStatus({ status: "notRecording", error: s.error.message });
       recordError(`${s.error.reason}: ${s.error.message}`);
@@ -77,11 +92,13 @@ export function createDayRecorderService({
   async function applyNow() {
     const s = latest;
     if (closed || !s) return;
+    scheduleRetention();
+    // After every await below: a newer apply is already queued and takes over, or shutdown
+    // has begun. Either way this one must not go on to start a helper.
+    const superseded = () => closed || latest !== s;
     if (!s.enabled) {
-      clearInterval(purgeTimer);
-      purgeTimer = null;
       await stopCurrent();
-      setStatus({ status: "off" });
+      if (!closed) setStatus({ status: "off" });
       return;
     }
     if (platform !== "darwin") {
@@ -96,8 +113,11 @@ export function createDayRecorderService({
     if (key === runningKey && (live === "starting" || live === "recording")) return;
 
     await stopCurrent();
+    if (superseded()) return;
+    setStatus({ status: "starting" });
     for (const gate of [gates.fileVault, () => gates.backupExclusion(mediaRoot)]) {
       const result = await gate();
+      if (superseded()) return;
       if (!result.ok) {
         log(`Day Recorder blocked: ${result.error}`);
         setStatus({ status: "blocked", error: result.error });
@@ -122,10 +142,7 @@ export function createDayRecorderService({
       const message = err?.message ?? String(err);
       setStatus({ status: "notRecording", error: message });
       recordError(`start: ${message}`);
-      return;
     }
-    runPurge();
-    purgeTimer ??= setInterval(runPurge, purgeIntervalMs);
   }
 
   /** Apply settings; overlapping calls queue, and each applies the newest settings. */
@@ -137,10 +154,11 @@ export function createDayRecorderService({
 
   async function shutdown() {
     closed = true;
+    await queue;
     clearInterval(purgeTimer);
     purgeTimer = null;
-    await queue;
     await stopCurrent();
+    setStatus({ status: "off" });
   }
 
   return {
@@ -152,6 +170,31 @@ export function createDayRecorderService({
       return () => listeners.delete(cb);
     },
     running: () => supervisor?.running() ?? false,
-    killSync: () => supervisor?.killSync(),
+    killSync() {
+      supervisor?.killSync();
+      stopping?.killSync();
+    },
+  };
+}
+
+/**
+ * The before-quit hold for the Day Recorder. The first quit starts the stop; every quit
+ * until it finishes is held (so the backend stays up for the final segment's row), and one
+ * quit follows. Returns whether this quit was held.
+ */
+export function createQuitHold({ stop, quit, log }) {
+  let stopped = null;
+  let done = false;
+  return (event) => {
+    if (done) return false;
+    event.preventDefault();
+    // An async wrapper calls stop now and turns a synchronous throw into a rejection.
+    stopped ??= (async () => stop())()
+      .catch((err) => log(`Day Recorder did not stop cleanly: ${err?.message ?? err}`))
+      .finally(() => {
+        done = true;
+        quit();
+      });
+    return true;
   };
 }

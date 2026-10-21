@@ -1092,15 +1092,20 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     the media was deleted afterwards):
     - A clean stop took 63–77 ms and ended `stopped`.
     - After `SIGKILL` on the helper, "Not recording" came 61–65 ms later (R3 asks for 10 s).
-  - **The probe found the first-OCR stall again, and it is now tied to the code identity.**
+  - **The probe found the first-OCR stall again. A new code identity triggers it, but so
+    does something else.**
     - The first two 15 s runs after a fresh build stored 0 shots. Heartbeats continued, so the
       status correctly stayed Recording: system audio was capturing.
     - A copy re-signed with a new ad-hoc identifier had a first OCR of **38.9 s**. The next
       run of the same copy took 0.5 s.
-    - So the ~35 s first OCR after every package (PR 3b-3) follows the new code identity, not
-      the machine.
-    - **Open (James):** move OCR off the helper's capture loop (Swift; not in this JS part),
-      or accept about 40 s with no screenshots after each update.
+    - **But it isn't identity alone.** About 25 minutes later the same, already-warm binary
+      took **36.3 s** on its first OCR again (direct run, 2026-10-21). So the stall also
+      comes back after time or idleness, perhaps a Vision model cache being evicted. The
+      trigger is **unverified**.
+    - **In practice:** capture can go about 40 s without screenshots on an ordinary launch,
+      not just after an update.
+    - **Open (James):** move OCR off the helper's capture loop (Swift; not in this JS part).
+      That now looks necessary rather than optional.
   - **Verify:** `npm run verify` (44 files, 406 tests) and `npm run build` both pass. The
     shared `node_modules` lacked `jsdom` (added on `main` earlier), so `npm install` was run
     in the root checkout; the lockfile is unchanged.
@@ -1126,3 +1131,28 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       the retention cutoff. Test first: it failed before the guard and passes with it.
     - The Convex handlers still don't tie `day` to the capture time. That would be a schema
       boundary change, so it's left for James's call, not made here.
+- **2026-10-21, PR 3c, Codex #80 round 1 (6 × P1, 1 × P2): all fixed, each test first.**
+  - **P1, OCR could reach the console through the Convex client.** It logs a failed
+    mutation's server error, which echoes the arguments, before the promise rejects. Its
+    logger is now `contentFreeLogger`: warnings and errors keep only their level, and `log`
+    and `logVerbose` are dropped.
+  - **P1, a second quit skipped the recorder stop.** It also lost the process-exit kill.
+    `createQuitHold` now holds every quit until the stop finishes and then quits once.
+    `main.mjs` keeps the recorder handle for the exit kill, and the service's `killSync`
+    reaches a supervisor that is still stopping.
+  - **P1, a clean stop didn't wait for the final segment's row.** Row writes are now tracked,
+    and `stop()` waits up to `DRAIN_MS` (5 s) for them, logging any still pending. Tested
+    with the fake helper announcing a segment during SIGTERM.
+  - **P1, turning the recorder off stopped retention.** The purge now runs on the first
+    settings and on its interval for the service's whole life: off, blocked or recording
+    (R14). Off macOS there is no media root, so there is no purge either.
+  - **P1, a restart reported Recording with no helper.** The old supervisor's
+    stopping/off states now count, and the gates run under `starting`.
+  - **P1, malformed or wrong-version lines kept Recording alive.** protocol.md's Failure
+    section is now followed: such a line means Not recording (`protocol`). The helper gets
+    SIGTERM, then SIGKILL after the grace period. Lines after a failure are still stored,
+    but they no longer re-arm the watchdog.
+  - **P2, an apply waiting on a gate could start after shutdown or after Off.** Each await
+    in `applyNow` is now followed by a check for shutdown or a newer apply.
+  - `npm run verify`: 44 files, 418 tests. The live probe still ends `stopped`, and "Not
+    recording" now comes 68 ms after a SIGKILL. No real helper line was rejected.

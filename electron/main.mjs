@@ -40,6 +40,7 @@ import { oneTurnAtATime } from "./agentShared.mjs";
 import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import { startDayRecorder } from "./dayRecorderRuntime.mjs";
+import { createQuitHold } from "./dayRecorderService.mjs";
 import {
   getFunctionSyncResult,
   getLogPath as convexLogPath,
@@ -500,7 +501,13 @@ app.whenReady().then(async () => {
   createWindow();
   // Follows the Day Recorder settings; it starts nothing until the recorder is turned on.
   try {
-    dayRecorder = startDayRecorder({ convexUrl: convexUrl() });
+    const recorder = startDayRecorder({ convexUrl: convexUrl() });
+    dayRecorder = recorder;
+    holdQuitForDayRecorder = createQuitHold({
+      stop: () => recorder.stop(),
+      quit: () => app.quit(),
+      log: (message) => console.error(message),
+    });
   } catch (err) {
     console.error("Day Recorder could not start", err);
   }
@@ -521,7 +528,9 @@ app.on("window-all-closed", () => {
 // `convex dev` we merely attached to). before-quit can fire before async work
 // settles, so defer the real quit until SIGTERM completes.
 let shuttingDown = false;
+// Kept for the process-exit kill, even while (and after) the recorder is stopping.
 let dayRecorder = null;
+let holdQuitForDayRecorder = null;
 app.on("before-quit", (event) => {
   // The recording guard runs first: saving needs the backend still up. While the save
   // handshake runs, a second quit is held back too (the recorder is idle by then).
@@ -536,16 +545,8 @@ app.on("before-quit", (event) => {
     return;
   }
   // Before the backend: SIGTERM finalizes the open segment, and its row needs the backend.
-  if (dayRecorder) {
-    event.preventDefault();
-    const recorder = dayRecorder;
-    dayRecorder = null;
-    recorder
-      .stop()
-      .catch((err) => console.error("Day Recorder did not stop cleanly", err))
-      .finally(() => app.quit());
-    return;
-  }
+  // Every quit is held until that stop finishes, then one quit goes through.
+  if (holdQuitForDayRecorder?.(event)) return;
   if (shuttingDown || !convexManaged()) return;
   event.preventDefault();
   shuttingDown = true;

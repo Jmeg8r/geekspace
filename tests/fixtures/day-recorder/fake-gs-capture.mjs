@@ -94,6 +94,24 @@ switch (scenario) {
     process.stdout.write(`${JSON.stringify({ event: "mystery", v: 1, note: "SYNTHETIC-UNKNOWN-SECRET" })}\n`);
     beat = setInterval(() => line("heartbeat", { t: Date.now() }), 50);
     break;
+  case "finalSegment":
+    // protocol.md "Stopping": SIGTERM finalizes the open segment, announces it, then `stopped`.
+    ready();
+    beat = setInterval(() => line("heartbeat", { t: Date.now() }), 50);
+    process.on("SIGTERM", () => {
+      clearInterval(beat);
+      line("segment", {
+        day: "2026-10-20",
+        end: 1_760_970_300_000,
+        kind: "system",
+        path: "2026-10-20/sys-102000-000.m4a",
+        peak: 0.1,
+        start: 1_760_970_000_000,
+      });
+      line("stopped", { reason: "signal" });
+      process.exit(0);
+    });
+    break;
   case "fail":
     // Protocol "Failure": a message on stderr and a non-zero exit, no error event.
     ready();
