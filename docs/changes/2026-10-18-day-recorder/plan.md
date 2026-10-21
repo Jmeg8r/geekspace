@@ -1213,3 +1213,13 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - The match is now `/permission|declined TCC/i`.
   - A stable failure marker or exit code from the helper would be sturdier than matching
     message text. That is a helper change, left for the OCR PR or later.
+- **2026-10-21, PR 3c, CI's "Typecheck & tests" was red on #80 from `2fa4d33` on.** All
+  three heads failed, while every local and Node 22 container run passed.
+  - The runner's log, read from the forge's `actions_log` store, named two service tests
+    that waited on the wall clock: a purge-interval count (2 where at least 3 was expected
+    in 70 ms) and the retry-budget reset (4 starts, expected 5). The shared runner was too
+    slow for 20–30 ms windows.
+  - **Fix:** `tests/dayRecorderService.test.ts` now runs on vitest fake timers throughout,
+    and the fake supervisor's stop is a microtask. The two purge counts are now exact (4).
+  - **Proof:** 20 runs of the Day Recorder suites in a `node:22` container limited to one
+    CPU had 0 failures.

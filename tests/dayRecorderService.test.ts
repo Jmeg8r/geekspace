@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDayRecorderService,
   createQuitHold,
@@ -12,6 +12,16 @@ import type { StartOptions, SupervisorOptions, SupervisorState } from "../electr
 // the helper when the denylist changes (protocol.md: the helper reads its arguments once),
 // and records capture errors. The supervisor is faked here; its process plumbing has its own
 // suite (dayRecorderSupervisor.test.ts).
+
+// WHY fake timers for the whole file: these tests are about retry delays, purge intervals
+// and ordering, and wall-clock waits of tens of ms failed on the shared CI runner (#80,
+// runs on 2fa4d33..008a852). Advancing a fake clock makes every count exact.
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 type Call = { op: "start"; opts: StartOptions } | { op: "stop" } | { op: "kill" };
 
@@ -46,7 +56,7 @@ function fakeSupervisors() {
         calls.push({ op: "stop" });
         const wasAlive = state.status === "recording";
         set({ status: "stopping" });
-        await (holdStop ?? new Promise((r) => setTimeout(r, 5)));
+        await (holdStop ?? Promise.resolve());
         if (wasAlive) alive--;
         set({ status: "off" });
       },
@@ -180,7 +190,7 @@ describe("Day Recorder service", () => {
     const h = harness();
     await h.service.apply(on());
     h.sup.fail("Screen Recording permission was revoked");
-    await new Promise((r) => setTimeout(r, 0));
+    await vi.advanceTimersByTimeAsync(0);
     expect(h.service.status().status).toBe("notRecording");
     expect(h.events).toEqual([{ kind: "capError", detail: "exited: Screen Recording permission was revoked" }]);
   });
@@ -198,8 +208,9 @@ describe("Day Recorder service", () => {
     // retention back for the whole session (R14).
     const h = harness({ purgeIntervalMs: 20 });
     expect(h.purges).toHaveLength(1);
-    await new Promise((r) => setTimeout(r, 70));
-    expect(h.purges.length).toBeGreaterThanOrEqual(3);
+    await vi.advanceTimersByTimeAsync(70);
+    // One at creation, then at 20, 40 and 60 ms.
+    expect(h.purges.length).toBe(4);
     await h.service.shutdown();
   });
 
@@ -218,11 +229,12 @@ describe("Day Recorder service", () => {
       gates: { fileVault: async () => ({ ok: false, error: "FileVault is off." }), backupExclusion: async () => ({ ok: true }) },
     });
     await h.service.apply(on());
-    await new Promise((r) => setTimeout(r, 70));
-    expect(h.purges.length).toBeGreaterThanOrEqual(3);
+    await vi.advanceTimersByTimeAsync(70);
+    // One at creation, then at 20, 40 and 60 ms.
+    expect(h.purges.length).toBe(4);
     await h.service.shutdown();
     const after = h.purges.length;
-    await new Promise((r) => setTimeout(r, 60));
+    await vi.advanceTimersByTimeAsync(60);
     expect(h.purges.length).toBe(after);
   });
 
@@ -245,7 +257,7 @@ describe("Day Recorder service", () => {
     });
     await h.service.apply(on(["com.example.a"]));
     const restart = h.service.apply(on(["com.example.b"]));
-    await new Promise((r) => setTimeout(r, 20));
+    await vi.advanceTimersByTimeAsync(20);
     expect(h.service.status()).toEqual({ status: "starting" });
     gate.resolve({ ok: true });
     await restart;
@@ -259,7 +271,7 @@ describe("Day Recorder service", () => {
     const hold = deferred();
     h.sup.holdStops(hold.promise);
     const stopping = h.service.apply(OFF);
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.advanceTimersByTimeAsync(5);
     h.service.killSync();
     expect(h.sup.calls.map((c) => c.op)).toEqual(["start", "stop", "kill"]);
     hold.resolve();
@@ -271,13 +283,13 @@ describe("Day Recorder service", () => {
     const gate = deferred<{ ok: true }>();
     const h = harness({ purgeIntervalMs: 20, gates: { fileVault: () => gate.promise, backupExclusion: async () => ({ ok: true }) } });
     const applying = h.service.apply(on());
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.advanceTimersByTimeAsync(5);
     const down = h.service.shutdown();
     gate.resolve({ ok: true });
     await Promise.all([applying, down]);
     expect(h.sup.calls).toEqual([]);
     const after = h.purges.length;
-    await new Promise((r) => setTimeout(r, 60));
+    await vi.advanceTimersByTimeAsync(60);
     expect(h.purges.length).toBe(after);
   });
 
@@ -285,7 +297,7 @@ describe("Day Recorder service", () => {
     const gate = deferred<{ ok: true }>();
     const h = harness({ gates: { fileVault: () => gate.promise, backupExclusion: async () => ({ ok: true }) } });
     const applying = h.service.apply(on());
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.advanceTimersByTimeAsync(5);
     const off = h.service.apply(OFF);
     gate.resolve({ ok: true });
     await Promise.all([applying, off]);
@@ -325,7 +337,7 @@ describe("createQuitHold", () => {
     expect(first.prevented() && second.prevented()).toBe(true);
     expect(stops).toBe(1);
     stop.resolve();
-    await new Promise((r) => setTimeout(r, 0));
+    await vi.advanceTimersByTimeAsync(0);
     expect(quits).toBe(1);
     const later = event();
     expect(hold(later)).toBe(false);
@@ -341,7 +353,7 @@ describe("createQuitHold", () => {
       log: (m) => logs.push(m),
     });
     hold(event());
-    await new Promise((r) => setTimeout(r, 0));
+    await vi.advanceTimersByTimeAsync(0);
     expect(quits).toBe(1);
     expect(logs.join("\n")).toMatch(/helper wedged/);
   });
@@ -352,7 +364,7 @@ describe("Day Recorder service, retry after a failure", () => {
   // permission, spawn or protocol failure. Each retry is a capError event.
   const quick = { retryDelaysMs: [10, 10, 10], retryResetMs: 1000 };
   const starts = (h: ReturnType<typeof harness>) => h.sup.calls.filter((c) => c.op === "start").length;
-  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+  const tick = (ms = 30) => vi.advanceTimersByTimeAsync(ms);
 
   it("retries an exited helper up to three times, then stays Not recording", async () => {
     const h = harness(quick);
