@@ -1043,3 +1043,70 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - Evidence: `pr3b3-signed-build.json` (built from `6a8f9fb`).
   - This commit changes only docs and evidence. The code is exactly what round 5 reviewed.
 
+- **2026-10-20, PR 3c (part 1), the supervisor, service, gates and purge.** This part covers
+  the JS side of 3c. The proofs that need James at the Mac come in the next part (below).
+  - **Files:**
+    - `electron/dayRecorder.mjs`: the supervisor, built against `protocol.md`.
+    - `electron/dayRecorderService.mjs`: settings become a running helper.
+    - `electron/dayRecorderGates.mjs`: the FileVault and Time Machine checks.
+    - `electron/dayRecorderMedia.mjs`: the media root, the path guard and the purge.
+    - `electron/dayRecorderRuntime.mjs`: assembles the real parts.
+    - Wiring in `electron/main.mjs`.
+  - **Main has its own Convex client.** The spec says "the existing client", but the main
+    process had none, and capture can't depend on a window being open.
+    - `ConvexClient` uses `anyApi`, because `convex/` isn't packaged and the generated `api`
+      is `anyApi` anyway.
+    - Settings arrive by subscription to `dayRecorder.getSettings`, so turning the recorder on
+      reaches the helper with no IPC yet (PR 3d).
+  - **The tray indicator moves to 3e** with the rest of the UI. 3c reports status through
+    `service.onStatus`.
+  - **Every start runs both gates.**
+    - FileVault must report exactly `FileVault is On.`.
+    - The media root needs `tmutil addexclusion` (sticky form), confirmed by `isexcluded`
+      reporting `[Excluded]`.
+    - A check that can't run counts as failed. A failed gate gives the state `blocked`, with
+      copy saying how to fix it, plus a `capError` event.
+  - **A denylist or `shotSec` change restarts the helper** (protocol.md). Changes are applied
+    one at a time, so two helpers never run at once (tested with three overlapping changes).
+  - **No automatic restart after a failure.** The state stays "Not recording" with a
+    `capError` event until the settings change or the app relaunches. Retrying could loop on
+    a revoked permission. **This is James's call;** a bounded retry is easy to add.
+  - **Nothing captured is logged.**
+    - A failed screenshot write logs the path and the error *name* only, because a Convex
+      argument-validation error echoes its arguments, OCR text included.
+    - `tapRebuilt` and `tailDropped` are logged as counts. Their bundle fields are never
+      stored.
+    - Tests check every log for synthetic secret strings.
+  - **The purge works from rows, then sweeps folders.**
+    - Expired rows from `expiredMedia` are deleted through `resolveMediaPath`. It accepts only
+      `<day>/<file>`, resolves symlinks, and refuses anything outside the root. A file that
+      is already gone is still marked purged.
+    - Then day folders whose *whole* day is past retention are removed: orphans,
+      `.partial-*` files and all. The day that straddles the cutoff waits a day.
+    - Only real directories named `YYYY-MM-DD` are touched, never a symlink or the key blob.
+    - A refused row is never marked purged, and the loop stops instead of re-serving it.
+      Such a row can't be created through `assertMediaPath`, so this is defence in depth.
+    - The purge runs at each start and every 6 h. R14 asks for daily; 6 h covers a Mac that
+      slept through a run.
+  - **Live probe** (real helper under the real supervisor, unsigned dev build, counts only;
+    the media was deleted afterwards):
+    - A clean stop took 63–77 ms and ended `stopped`.
+    - After `SIGKILL` on the helper, "Not recording" came 61–65 ms later (R3 asks for 10 s).
+  - **The probe found the first-OCR stall again, and it is now tied to the code identity.**
+    - The first two 15 s runs after a fresh build stored 0 shots. Heartbeats continued, so the
+      status correctly stayed Recording: system audio was capturing.
+    - A copy re-signed with a new ad-hoc identifier had a first OCR of **38.9 s**. The next
+      run of the same copy took 0.5 s.
+    - So the ~35 s first OCR after every package (PR 3b-3) follows the new code identity, not
+      the machine.
+    - **Open (James):** move OCR off the helper's capture loop (Swift; not in this JS part),
+      or accept about 40 s with no screenshots after each update.
+  - **Verify:** `npm run verify` (44 files, 406 tests) and `npm run build` both pass. The
+    shared `node_modules` lacked `jsdom` (added on `main` earlier), so `npm install` was run
+    in the root checkout; the lockfile is unchanged.
+  - **Still to do in 3c, with James at the Mac, on a signed `npm run package`:**
+    - the 2-hour soak RSS log, keeping the PR 3a leak detail logging so any recurrence of the
+      one unattributed window is attributed;
+    - the R3 screenshots for a revoked permission and a killed helper;
+    - the stalled-delivery check with an output device unplugged mid-run;
+    - the clean-TCC-state proof (spike Q7).

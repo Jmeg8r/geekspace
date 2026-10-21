@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { RETENTION_DAYS as CONVEX_RETENTION_DAYS } from "../convex/lib/dayRecorder";
 import {
+  RETENTION_DAYS,
   ensureMediaRoot,
   localDay,
   purgeExpired,
@@ -61,6 +63,10 @@ afterEach(() => {
 
 const run = (side: ReturnType<typeof convexSide>) =>
   purgeExpired({ root, now: NOW, ...side, log: (m) => logs.push(m) });
+
+it("keeps the same retention as the Convex side that picks the rows", () => {
+  expect(RETENTION_DAYS).toBe(CONVEX_RETENTION_DAYS);
+});
 
 describe("ensureMediaRoot", () => {
   it("creates the root private to the user and returns its real path", () => {

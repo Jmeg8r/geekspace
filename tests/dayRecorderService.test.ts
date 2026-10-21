@@ -18,14 +18,14 @@ function fakeSupervisors() {
   const calls: Call[] = [];
   let alive = 0;
   let maxAlive = 0;
-  let current: SupervisorOptions | null = null;
+  let setCurrent: ((s: SupervisorState) => void) | null = null;
   const make = (opts: SupervisorOptions) => {
-    current = opts;
     let state: SupervisorState = { status: "off" };
     const set = (s: SupervisorState) => {
       state = s;
       opts.onState(s);
     };
+    setCurrent = set;
     return {
       start(o: StartOptions) {
         calls.push({ op: "start", opts: o });
@@ -36,18 +36,23 @@ function fakeSupervisors() {
       async stop() {
         calls.push({ op: "stop" });
         await new Promise((r) => setTimeout(r, 5));
-        if (state.status !== "off") alive--;
+        if (state.status === "recording") alive--;
         set({ status: "off" });
       },
       state: () => state,
       running: () => state.status === "recording",
+      killSync: () => {},
     };
   };
   return {
     calls,
     make,
     maxAlive: () => maxAlive,
-    fail: (message: string) => current?.onState({ status: "notRecording", error: { reason: "exited", message, code: 1 } }),
+    // Like the real one: the failed helper has exited, and its own state says so too.
+    fail: (message: string) => {
+      alive--;
+      setCurrent?.({ status: "notRecording", error: { reason: "exited", message, code: 1 } });
+    },
   };
 }
 
@@ -59,7 +64,6 @@ function harness(overrides: Partial<ServiceOptions> = {}) {
     platform: "darwin",
     mediaRoot: "/tmp/gs-service-root",
     helperPath: "/Applications/Geekspace.app/Contents/Resources/gs-capture",
-    now: () => 1_760_969_700_000,
     log: () => {},
     gates: {
       fileVault: async () => ({ ok: true }),

@@ -171,7 +171,7 @@ describe("Day Recorder supervisor", () => {
     await until(() => h.supervisor.state().status === "notRecording");
     const s = h.supervisor.state();
     expect(s.status === "notRecording" && s.error.reason).toBe("silent");
-    expect(h.supervisor.running()).toBe(false);
+    await until(() => !h.supervisor.running());
   });
 
   it("drops malformed, wrong-version and unknown lines, logging none of their contents", async () => {
