@@ -16,7 +16,8 @@ gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segm
 - `--segment-sec` is `SEGMENT_SEC` (spec R2), at least 2. Values below 300 are for proofs.
 - `--duration` is for proofs only. The supervisor runs the helper until it stops it.
 - **Stopping:** the supervisor sends `SIGTERM` (or `SIGINT`). The helper stops the tap,
-  settles the held tail, finalizes the open segment, writes `stopped` with
+  settles the held tail, finalizes the open segment, waits up to 2 s for OCR still in
+  flight (60 s at the end of a `--duration` run), writes `stopped` with
   `"reason": "signal"` and exits 0. Audio still held back at that moment is released only
   if no new denylisted process appeared since the last poll; otherwise it is dropped
   (`tailDropped`).
@@ -63,6 +64,12 @@ More detail on the fields:
   carries captured content.
 - Unchanged frames (dHash within 8 bits on a 32-wide grid) produce no line. The heartbeat
   still does.
+- **OCR runs off the capture loop** (`OCRQueue.swift`). A `shot` line is written when its
+  OCR finishes, so it can arrive well after `takenAt`: the first OCR in a process can take
+  ~36–52 s. Lines still arrive in capture order. At most 4 frames wait for OCR; while all 4
+  slots are taken, the next capture waits rather than being dropped. A shot whose OCR hasn't
+  finished by the stop deadline is never announced. Its file is an orphan, which the
+  retention sweep removes.
 - **`segment`** is system audio from the CoreAudio tap, with the denylist excluded by bundle
   ID (each entry plus `<id>.helper`) and by live process object.
   - `kind` is always `"system"` from the helper. Mic segments come from the renderer (PR 3d).
