@@ -61,9 +61,9 @@ function fakeSupervisors() {
     maxAlive: () => maxAlive,
     holdStops: (p: Promise<void> | null) => (holdStop = p),
     // Like the real one: the failed helper has exited, and its own state says so too.
-    fail: (message: string) => {
+    fail: (message: string, reason: "exited" | "silent" | "spawnFailed" | "protocol" = "exited") => {
       alive--;
-      setCurrent?.({ status: "notRecording", error: { reason: "exited", message, code: 1 } });
+      setCurrent?.({ status: "notRecording", error: { reason, message, code: 1 } });
     },
   };
 }
@@ -344,5 +344,92 @@ describe("createQuitHold", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(quits).toBe(1);
     expect(logs.join("\n")).toMatch(/helper wedged/);
+  });
+});
+
+describe("Day Recorder service, retry after a failure", () => {
+  // Decision 2026-10-21: a bounded retry for a helper that exited or went silent, never for a
+  // permission, spawn or protocol failure. Each retry is a capError event.
+  const quick = { retryDelaysMs: [10, 10, 10], retryResetMs: 1000 };
+  const starts = (h: ReturnType<typeof harness>) => h.sup.calls.filter((c) => c.op === "start").length;
+  const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+
+  it("retries an exited helper up to three times, then stays Not recording", async () => {
+    const h = harness(quick);
+    await h.service.apply(on());
+    for (let i = 0; i < 4; i++) {
+      h.sup.fail("helper crashed");
+      await tick();
+    }
+    expect(starts(h)).toBe(4);
+    expect(h.service.status().status).toBe("notRecording");
+    expect(h.events.filter((e) => e.detail?.startsWith("retry"))).toHaveLength(3);
+    expect(h.events.at(-1)?.detail).toMatch(/^no more retries/);
+    await h.service.shutdown();
+  });
+
+  it("retries a helper that went silent", async () => {
+    const h = harness(quick);
+    await h.service.apply(on());
+    h.sup.fail("gs-capture said nothing for 10 s", "silent");
+    await tick();
+    expect(starts(h)).toBe(2);
+    await h.service.shutdown();
+  });
+
+  it.each([
+    ["a revoked permission", "SCShareableContent failed (Screen Recording permission?): denied", "exited"],
+    ["a spawn failure", "couldn't start gs-capture: ENOENT", "spawnFailed"],
+    ["a protocol violation", "gs-capture broke protocol v1 (not JSON)", "protocol"],
+  ] as const)("does not retry %s", async (_name, message, reason) => {
+    const h = harness(quick);
+    await h.service.apply(on());
+    h.sup.fail(message, reason);
+    await tick();
+    expect(starts(h)).toBe(1);
+    expect(h.service.status().status).toBe("notRecording");
+    await h.service.shutdown();
+  });
+
+  it("shows when the next retry is due", async () => {
+    const h = harness({ retryDelaysMs: [500], retryResetMs: 1000 });
+    await h.service.apply(on());
+    h.sup.fail("helper crashed");
+    await tick(0);
+    expect(h.service.status()).toMatchObject({ status: "notRecording", error: "helper crashed", retryInMs: 500 });
+    await h.service.shutdown();
+  });
+
+  it("cancels a pending retry when the recorder is turned off", async () => {
+    const h = harness({ retryDelaysMs: [40], retryResetMs: 1000 });
+    await h.service.apply(on());
+    h.sup.fail("helper crashed");
+    await h.service.apply(OFF);
+    await tick(80);
+    expect(starts(h)).toBe(1);
+    expect(h.service.status()).toEqual({ status: "off" });
+  });
+
+  it("cancels a pending retry at shutdown", async () => {
+    const h = harness({ retryDelaysMs: [40], retryResetMs: 1000 });
+    await h.service.apply(on());
+    h.sup.fail("helper crashed");
+    await h.service.shutdown();
+    await tick(80);
+    expect(starts(h)).toBe(1);
+  });
+
+  it("resets the retry budget after a run that stayed up", async () => {
+    const h = harness({ retryDelaysMs: [10, 10, 10], retryResetMs: 50 });
+    await h.service.apply(on());
+    for (let i = 0; i < 3; i++) {
+      h.sup.fail("helper crashed");
+      await tick();
+    }
+    await tick(80);
+    h.sup.fail("helper crashed");
+    await tick();
+    expect(starts(h)).toBe(5);
+    await h.service.shutdown();
   });
 });

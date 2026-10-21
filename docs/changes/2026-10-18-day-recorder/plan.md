@@ -1189,3 +1189,20 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - Codex reported that the vitest suites can't run in its read-only sandbox (it can't
     create temp dirs). It checked with direct Node probes instead; `npm run verify` here
     covers the suites.
+- **2026-10-21, PR 3c, James's decisions on the open items** (his words: "go with your
+  recommendations for 1-4").
+  - **Bounded automatic retry.** A helper that exited or went silent is retried after
+    `RETRY_DELAYS_MS` (5 s, 30 s, 120 s), then left Not recording.
+    - Never retried: a permission failure (a message matching `/permission/i`, such as
+      `SCShareableContent failed (Screen Recording permission?)`), a spawn failure, or a
+      protocol violation.
+    - Every failure and every retry is a `capError` event, so a flapping helper stays
+      visible. The status carries `retryInMs` while a retry is pending.
+    - The budget resets after a run that stays recording for `RETRY_RESET_MS` (10 min), or
+      on any settings change. Off, a newer apply, or shutdown cancels a pending retry.
+  - **Convex ties a row's day to its capture time.** `assertCaptureDay` in
+    `addScreenshot` and `addSegment` requires the capture time to fall inside the window
+    when local day D exists somewhere: D 00:00Z − 14 h to D+1 00:00Z + 12 h (UTC−12 to
+    UTC+14). This closes CSO finding 4016f9d6 at the trust boundary as well as in the purge.
+  - **Move OCR off the helper's capture loop:** its own PR, before the soak.
+  - **A final Codex check** covers these changes and the round-4 P2 fix.

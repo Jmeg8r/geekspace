@@ -15,6 +15,13 @@ const MAX_DETAIL_CHARS = 2000;
 // R14 asks for a daily purge. Running more often costs one indexed query and keeps a
 // laptop that sleeps through the run from skipping a day.
 export const PURGE_INTERVAL_MS = 6 * 3_600_000;
+// A helper that exited or went silent is retried after these delays, then left Not
+// recording. A permission, spawn or protocol failure is never retried: retrying can't fix
+// it, and a loop would only hide it.
+export const RETRY_DELAYS_MS = [5_000, 30_000, 120_000];
+// A run that stays recording this long earns a fresh retry budget.
+export const RETRY_RESET_MS = 10 * 60_000;
+const PERMISSION_RE = /permission/i;
 
 export function createDayRecorderService({
   platform,
@@ -26,6 +33,8 @@ export function createDayRecorderService({
   purge,
   log,
   purgeIntervalMs = PURGE_INTERVAL_MS,
+  retryDelaysMs = RETRY_DELAYS_MS,
+  retryResetMs = RETRY_RESET_MS,
 }) {
   let status = { status: "off" };
   let supervisor = null;
@@ -37,6 +46,9 @@ export function createDayRecorderService({
   let purgeTimer = null;
   let purging = false;
   let closed = false;
+  let retries = 0;
+  let retryTimer = null;
+  let recordingSince = null;
   const listeners = new Set();
 
   function setStatus(next) {
@@ -82,14 +94,44 @@ export function createDayRecorderService({
     }
   }
 
+  function cancelRetry() {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+
+  function onFailure(error) {
+    if (recordingSince !== null && Date.now() - recordingSince >= retryResetMs) retries = 0;
+    recordingSince = null;
+    recordError(`${error.reason}: ${error.message}`);
+    const retryable =
+      (error.reason === "exited" || error.reason === "silent") && !PERMISSION_RE.test(error.message);
+    if (!retryable || closed || !latest?.enabled) {
+      setStatus({ status: "notRecording", error: error.message });
+      return;
+    }
+    if (retries >= retryDelaysMs.length) {
+      setStatus({ status: "notRecording", error: error.message });
+      recordError(`no more retries after ${retryDelaysMs.length}; turn the recorder off and on to try again`);
+      return;
+    }
+    const delay = retryDelaysMs[retries++];
+    setStatus({ status: "notRecording", error: error.message, retryInMs: delay });
+    recordError(`retry ${retries} of ${retryDelaysMs.length} in ${Math.round(delay / 1000)} s`);
+    cancelRetry();
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      enqueue();
+    }, delay);
+  }
+
   function onSupervisorState(owner, s) {
     if (owner !== supervisor && owner !== stopping) return;
     if (s.status === "notRecording") {
-      setStatus({ status: "notRecording", error: s.error.message });
-      recordError(`${s.error.reason}: ${s.error.message}`);
-    } else {
-      setStatus({ status: s.status });
+      onFailure(s.error);
+      return;
     }
+    if (s.status === "recording") recordingSince ??= Date.now();
+    setStatus({ status: s.status });
   }
 
   async function applyNow() {
@@ -147,15 +189,25 @@ export function createDayRecorderService({
     }
   }
 
-  /** Apply settings; overlapping calls queue, and each applies the newest settings. */
-  function apply(settings) {
-    latest = settings;
+  function enqueue() {
     queue = queue.then(applyNow, applyNow).catch((err) => log(`Day Recorder could not apply settings: ${err?.message ?? err}`));
     return queue;
   }
 
+  /**
+   * Apply settings; overlapping calls queue, and each applies the newest settings. A
+   * settings change also cancels a pending retry and resets the retry budget.
+   */
+  function apply(settings) {
+    latest = settings;
+    cancelRetry();
+    retries = 0;
+    return enqueue();
+  }
+
   async function shutdown() {
     closed = true;
+    cancelRetry();
     await queue;
     clearInterval(purgeTimer);
     purgeTimer = null;
