@@ -914,4 +914,132 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     | `pr78-run-segments.json` | 1 |
     | `pr78-3a-second-instance.json` | 3 |
     | `pr78-shutdown-unjudged-tail.json` | 1, the helper's output lines and exit code |
+- **2026-10-20, PR 3b-3: `audioUse` events, the build script, packaging, and the signed-build proof.**
+  - **`audioUse`** (`AudioUse.swift`, `protocol.md`) is polled every 100 ms on the audio
+    control queue (spike Q3), for PR 4's mic pause (F2) and call detection (F3).
+    - **Denylisted apps are never named.** They are folded into one `app: null,
+      denylisted: true` entry, by the same rule as `shot.appBundleId`.
+    - **"Denylisted" includes the tap's current exclusion**, so a helper orphaned from a
+      denylisted app (PR #78) pauses the mic too. F2 and the tap can't disagree.
+    - **Ignored:** `replayd` and `avconferenced` (our own capture, Q3/Q4), the helper
+      itself, and the supervisor with its children.
+    - **Found while documenting:** `tapRebuilt`/`tailDropped` name denylisted bundles in
+      their diagnostic fields. `protocol.md` now says the supervisor must not store or log
+      them (a **PR 3c** requirement).
+  - **Build and packaging:**
+    - `scripts/build-gs-capture.mjs` (`npm run build:gs-capture`, run by `package`) does a
+      release `swift build` on macOS, fails loudly if the binary is missing, and skips
+      with a message on other platforms.
+    - `mac.extraResources` ships it as `Contents/Resources/gs-capture`.
+    - `extendInfo` gains a real `NSAudioCaptureUsageDescription`.
+    - The helper's deployment target is now **macOS 26** (bundle-ID taps), and two
+      always-true `#available` checks are gone.
+    - `tests/dayRecorderPackaging.test.ts` checks the packaging config. A missing helper or a
+      generic usage string only shows on end-user machines.
+  - **Proof:**
+    - `swift test`: 41 tests, 4 of them new for `audioUse`.
+    - `run-audio-use`, **3 of 3**: the allowed app is named on start and stop. The
+      denylisted one appears only anonymously, and its ID is in no `audioUse` line (the gate
+      compares whole values, with a positive control). Latency was −17 to +84 ms.
+    - **Signed `npm run package`:** `codesign --verify --deep --strict` passes. The bundled
+      helper is signed with Hardened Runtime, team `Z4CHD4858S`, and the app's **five
+      inherited entitlements**, the same set spike Q7 settled; nothing new is needed. Its
+      minimum OS is 26.0, and the real usage string is in the Info.plist.
+    - **`signed-run`** runs the bundled helper from inside the signed app, with Geekspace as
+      the TCC-responsible process (`scripts/spike/signed-run.cjs`, the spike's Q7 method
+      now kept in the repo). **3 runs, all exit 0, ending `stopped`.** Frames were kept,
+      segments convert through the transcriber's ffmpeg call, and `audioUse` names the
+      allowed app and keeps the denylisted one anonymous.
+    - Evidence: `pr3b3-run-audio-use.json` and `pr3b3-signed-build.json`.
+  - **Observed three times, cause unverified: the first OCR after every fresh package takes
+    about 35 s** (35.3 s, 35.8 s and 36.6 s, on three separately signed packages). Every later frame took
+    440–620 ms. It is tied to the first run of each new build, and the cause (a Vision model
+    load for the new code identity, perhaps) is not proven. **In practice, capture would
+    stall for about 35 s after every app update.**
+    - OCR runs synchronously in the capture loop, so a slow OCR stalls screenshots, and
+      `--duration` overran to 35.8 s.
+    - **For PR 3c:** consider moving OCR off the capture loop, and watch first-launch OCR
+      time in the soak.
+  - **Still open (needs James at the Mac):** the clean-TCC-state proof (a new macOS user),
+    to settle whether the tap needs its own grant (spike Q7). This Mac already has
+    Geekspace's grants from the spike. The proofs above show the packaged helper works
+    under them, not on a fresh install.
+- **2026-10-20, PR 3b-3, Codex round 1 (1 × P1, 1 × P2), both fixed.**
+  - **P1: a child with its own bundle ID under a denylisted parent could be named.**
+    `audioUse` checked the parent only when the child was not an app itself.
+    - **Fix:** `AudioUse.isDenylisted` is now a pure, tested function: the tap's exclusion
+      plus the listener's denied set (`TapRunner.knownDenied`), or the process's bundle, its
+      app, or its **parent's app** matches the denylist.
+    - **Measured before choosing fail-closed:** 6 of 37 live process objects
+      (`systemsoundserverd`, `mediaremoted`, `audiomxd`, …) are other users' daemons whose
+      parent is unreadable. Treating an unreadable parent as denylisted would pause the mic
+      on every alert sound. So an unreadable parent is not denylisted, and a process that
+      is unreadable because it has exited is skipped. A daemon can't be a child of a user's
+      denylisted app. A live orphan reads launchd as its parent and is covered by the
+      tap's and the listener's denied sets.
+    - Tests: 44, including the child, orphan and daemon cases. Mutation check: without the
+      parent clause, the child test fails.
+  - **P2: `signed-run` checked only that an anonymous event existed.** Both proofs now share
+    `audioUse` violation checking over every line: no whole value is the denylisted ID
+    or `<id>.…`, and every denylisted line has a null app. Codex's mixed sequence is
+    rejected.
+  - **Re-proof:** `run-audio-use` 3 of 3, 0 violations. A fresh signed package passes
+    `codesign --verify --deep --strict`, and the helper's entitlements equal the app's.
+    `signed-run` 3 of 3, exit 0, 0 violations.
+- **2026-10-20, PR 3b-3, Codex round 2 (0 × P1, 1 × P2): gate passed; the P2 is fixed.**
+  - **The finding:** the daemon exemption covered only `audioUse`'s own check. A system
+    daemon *arriving after the baseline* went through PR #78's arrival classification. There
+    an unreadable parent means `unreadable`, so the daemon was **denied**. The tap then
+    excluded its audio, and through `knownDenied()` `audioUse` folded it in anyway.
+  - **The fix, in the shared path:** `Tap.identity` records `otherUser` when a process's
+    parent can't be read but the process is alive. `Tap.classify` judges such a process by
+    its own bundle only. Unreadable *because it is gone* stays `unreadable` (fail closed),
+    and #78's orphan path (a parent that dies after the snapshot) is unchanged.
+  - Tests: 46, including a daemon arriving after the baseline that must not reach `denied`.
+    Mutation check: without the `otherUser` branch, both new tests fail.
+  - **Regression on this build (dev):** `run-audio-use` (0 violations), orphan arrival and
+    baseline (0 leaked, decisive rebuild kept the child excluded; one attempt rejected by
+    its own precondition and re-run), b-during-a (0 leaked), `run-segments` (0 leaked),
+    `npm run verify` (40 files, 348 tests).
+  - **Not re-run:** the signed package. The signed-build proof above was taken at `8e6c619`.
+    This change is classification logic only, with no packaging or signing change, so it was
+    proven on the dev build.
+- **2026-10-20, PR 3b-3, Codex round 3 (1 × P1), fixed across its class.**
+  - **The finding:** the round-2 `otherUser` test used `kill(pid, 0)`, which **succeeds for
+    a zombie** (exited, not yet reaped). A denylisted app's short-lived child that exited
+    mid-classification could therefore be judged another user's process, and `allowed`.
+  - **Measured before fixing:** `proc_pidinfo` fails with **EPERM** for every unreadable
+    live object here (5 daemons) and with **ESRCH** for a zombie, while `kill(pid, 0)`
+    succeeds on that zombie.
+  - **The same weakness had a second instance:** the orphan rule's `parentAlive` also used
+    `kill`, so a denylisted parent that had exited but was not yet reaped counted as alive,
+    and its orphan read as `allowed`.
+  - **Fix, for the whole class:** one `Tap.lookup` (`proc_pidinfo`) returns `parent`,
+    `otherUser` (EPERM only) or `gone` (ESRCH, zombies included). Liveness, `otherUser` and
+    `audioUse`'s skip all come from it. `kill(pid, 0)` is no longer used.
+  - Tests: 48. One test spawns a **real zombie** and asserts it reads as gone, while
+    `kill(pid, 0)` succeeds on it. Mutation check: with `kill`-based liveness, it fails.
+  - **Regression (dev build):** `run-audio-use` (0 violations), orphan arrival and baseline
+    (0 leaked, child excluded), b-during-a (0 leaked), `run-segments` (0 leaked),
+    `npm run verify` (40 files, 348 tests).
+- **2026-10-20, PR 3b-3, Codex round 4 (1 × P1), fixed; the review loop pauses at the cap.**
+  - **The finding:** `audioUse.poll` called `Tap.lookup` and then `Tap.parentPid`, a second
+    lookup. If the child exited in between, a readable denylisted parent was thrown away
+    (TOCTOU).
+  - **Fix:** one lookup per process, with the parent derived from it. No other site reads
+    process state twice: `Tap.identity` and the poll's rule read once, and `parentAlive` is a
+    deliberate later re-check.
+  - 48 tests, `run-audio-use` (0 violations), `npm run verify` (40 files, 348 tests).
+  - **Rounds 1–4 each found a real race or rule gap in reading process state** (parent
+    check, daemon exemption, zombie liveness, double lookup). Round 4 is the top of the
+    3–4 round cap (L42), so the next step is James's decision, not a fifth round by default.
+- **2026-10-20, PR 3b-3, Codex round 5 (final): GATE PASS, `[P2] none`, on `6a8f9fb`.**
+  - The signed package was rebuilt from a clean tree at `6a8f9fb`. `codesign --verify --deep
+    --strict` passes. The helper is signed with the runtime flag, team `Z4CHD4858S`, and
+    entitlements equal to the app's, with minimum OS 26.0. No Swift source is newer than
+    the bundled build.
+  - `signed-run`: **3 of 3**, exit 0, 0 anonymity violations, ending `stopped`. The first
+    OCR took 36.6 s again.
+  - Evidence: `pr3b3-signed-build.json` (built from `6a8f9fb`).
+  - This commit changes only docs and evidence. The code is exactly what round 5 reviewed.
 

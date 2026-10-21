@@ -123,7 +123,6 @@ struct TapSession {
                      sinkFor: (AudioStreamBasicDescription) -> TapSink) -> TapSession {
         let description = CATapDescription(stereoGlobalTapButExcludeProcesses: excluded)
         if let bundleIDs {
-            guard #available(macOS 26.0, *) else { fail("--by bundle needs macOS 26") }
             description.bundleIDs = bundleIDs
             description.isProcessRestoreEnabled = true
         }
@@ -208,10 +207,28 @@ enum Tap {
         if status != noErr { fail("\(what) failed, OSStatus \(status)") }
     }
 
-    static func parentPid(_ pid: pid_t) -> pid_t {
+    /// What `proc_pidinfo` says about a process. Measured on macOS 27.0: another user's
+    /// daemon is refused with EPERM; an exited process, INCLUDING an unreaped zombie, fails
+    /// with ESRCH. `kill(pid, 0)` can't tell these apart, because it succeeds for a zombie (Codex
+    /// review of PR #79, round 3), so liveness and "another user's process" come from here.
+    enum Lookup: Equatable {
+        case parent(pid_t)
+        case otherUser
+        case gone
+    }
+
+    static func lookup(_ pid: pid_t) -> Lookup {
         var info = proc_bsdinfo()
+        errno = 0
         let size = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, Int32(MemoryLayout<proc_bsdinfo>.size))
-        return size == MemoryLayout<proc_bsdinfo>.size ? pid_t(info.pbi_ppid) : -1
+        if size == MemoryLayout<proc_bsdinfo>.size { return .parent(pid_t(info.pbi_ppid)) }
+        return errno == EPERM ? .otherUser : .gone
+    }
+
+    /// -1 when the parent can't be read (another user's process, or gone).
+    static func parentPid(_ pid: pid_t) -> pid_t {
+        if case .parent(let parent) = lookup(pid) { return parent }
+        return -1
     }
 
     /// A process belongs to a denylisted app if its bundle ID is the app's or starts with
@@ -226,23 +243,30 @@ enum Tap {
     static func identity(_ object: AudioObjectID) -> ProcessIdentity? {
         guard let pid = ProcWatch.checkedPid(object), pid > 0,
               let bundle = ProcWatch.checkedBundleID(object) else { return nil }
-        return ProcessIdentity(pid: pid, bundle: bundle, parent: parentPid(pid))
+        // Gone (a zombie included) stays unreadable: fail closed. Only a positive EPERM marks
+        // another user's process (measured: every such daemon here, 5-6 of 35-37 objects).
+        switch lookup(pid) {
+        case .parent(let parent): return ProcessIdentity(pid: pid, bundle: bundle, parent: parent)
+        case .otherUser: return ProcessIdentity(pid: pid, bundle: bundle, parent: -1, otherUser: true)
+        case .gone: return ProcessIdentity(pid: pid, bundle: bundle, parent: -1)
+        }
     }
 
     /// The arrivals listener's judgement, on its judge queue: the same rule as `denylisted`.
     static func judge(_ identity: ProcessIdentity, _ denylist: [String]) -> Classification {
-        classify(bundle: identity.bundle, parent: identity.parent, parentBundle: { pid in
+        classify(bundle: identity.bundle, parent: identity.parent, otherUser: identity.otherUser, parentBundle: { pid in
             NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
         }, parentAlive: processAlive, denylist)
     }
 
-    /// kill(pid, 0) probes without signalling; EPERM still means the process exists.
-    static func processAlive(_ pid: pid_t) -> Bool { kill(pid, 0) == 0 || errno == EPERM }
+    /// Alive and not a zombie (see `lookup`).
+    static func processAlive(_ pid: pid_t) -> Bool { lookup(pid) != .gone }
 
     /// The pure half, testable: `parent` is -1 when the parent could not be read.
-    static func classify(bundle: String, parent: pid_t, parentBundle: (pid_t) -> String?,
+    static func classify(bundle: String, parent: pid_t, otherUser: Bool = false, parentBundle: (pid_t) -> String?,
                          parentAlive: (pid_t) -> Bool, _ denylist: [String]) -> Classification {
         if denylist.contains(where: { bundle == $0 || bundle.hasPrefix($0 + ".") }) { return .denylisted(bundle) }
+        if otherUser { return .allowed }
         guard parent > 0 else { return .unreadable }
         if let parentID = parentBundle(parent) {
             return denylist.contains(parentID) ? .denylisted(parentID) : .allowed
@@ -411,6 +435,10 @@ struct ProcessIdentity: Equatable {
     let bundle: String
     /// -1 when the parent could not be read.
     let parent: pid_t
+    /// The parent could not be read but the process is alive: another user's process (a
+    /// system daemon such as systemsoundserverd). It can't be a child of the user's denylisted
+    /// app, so it is judged by its own bundle only (Codex review of PR #79, round 2).
+    var otherUser = false
 }
 
 /// Observes every CoreAudio process object the moment the HAL reports it added, so a
@@ -655,6 +683,12 @@ final class TapRunner {
     static func exclusion(polled: [AudioObjectID], denied: [AudioObjectID],
                           previous: [AudioObjectID] = [], alive: Set<AudioObjectID> = []) -> [AudioObjectID] {
         Array(Set(polled).union(denied).union(Set(previous).intersection(alive))).sorted()
+    }
+
+    /// Every object this runner treats as denylisted right now: the session's exclusion and
+    /// the listener's denied set (which can be ahead of the next rebuild). Control queue only.
+    func knownDenied() -> Set<AudioObjectID> {
+        Set(session.excluded).union(arrivals?.deniedLive() ?? [])
     }
 
     private func exclusionNow() -> [AudioObjectID] {

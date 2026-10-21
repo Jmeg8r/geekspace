@@ -9,8 +9,9 @@ import PackageDescription
 
 let package = Package(
     name: "gs-capture",
-    // 14.2: CoreAudio process taps (Tap.swift) and process objects (ProcWatch.swift).
-    platforms: [.macOS("14.2")],
+    // 26: CoreAudio taps that exclude by bundle ID, which `run` uses whenever the denylist is
+    // non-empty (plan PR 3). Process taps and process objects need 14.2.
+    platforms: [.macOS("26.0")],
     targets: [
         .executableTarget(name: "gs-capture", path: "Sources/gs-capture"),
         // A stand-in "denylisted app" with its own bundle ID, so the spike controls exactly

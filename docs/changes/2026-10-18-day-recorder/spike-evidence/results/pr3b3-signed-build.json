@@ -1,0 +1,435 @@
+{
+  "proof": "Signed npm run package build of the final head 6a8f9fb: the bundled helper is signed, inherits the app entitlements, and runs from inside the app with Geekspace as the TCC-responsible process",
+  "builtFromCommit": "6a8f9fb",
+  "command": "npm run package; node scripts/spike-day-recorder.mjs signed-run",
+  "static": {
+    "codesignVerifyDeepStrict": "OK",
+    "helperSignature": [
+      "Identifier=gs-capture",
+      "CodeDirectory v=20500 size=1462 flags=0x10000(runtime) hashes=35+7 location=embedded",
+      "TeamIdentifier=Z4CHD4858S",
+      "Runtime Version=26.0.0"
+    ],
+    "appEntitlements": {
+      "com.apple.security.cs.allow-unsigned-executable-memory": true,
+      "com.apple.security.automation.apple-events": true,
+      "com.apple.security.cs.allow-jit": true,
+      "com.apple.security.device.audio-input": true,
+      "com.apple.security.cs.disable-library-validation": true
+    },
+    "helperEntitlements": {
+      "com.apple.security.cs.allow-unsigned-executable-memory": true,
+      "com.apple.security.automation.apple-events": true,
+      "com.apple.security.cs.allow-jit": true,
+      "com.apple.security.device.audio-input": true,
+      "com.apple.security.cs.disable-library-validation": true
+    },
+    "NSAudioCaptureUsageDescription": "Geekspace's Day Recorder records your Mac's system audio, leaving out the apps on your denylist, so it can transcribe your day. The audio stays on this Mac.",
+    "helperMinos": " minos 26.0"
+  },
+  "firstUseOcr": {
+    "note": "First OCR after a fresh package, all three times measured (cause unverified)",
+    "ee9b9e6Run1": {
+      "ocrMs": 35314.46,
+      "runMs": 35813
+    },
+    "8e6c619Run1": {
+      "ocrMs": 35812.982
+    },
+    "6a8f9fbRun1": {
+      "ocrMs": 36634.095,
+      "runMs": 37143
+    }
+  },
+  "runs": [
+    {
+      "label": "run-1 (first use of this package)",
+      "result": {
+        "app": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app",
+        "helper": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app/Contents/Resources/gs-capture",
+        "exitCode": 0,
+        "spawnError": null,
+        "stderr": "",
+        "events": [
+          "ready",
+          "audioUse",
+          "audioUse",
+          "segment",
+          "tapRebuilt",
+          "audioUse",
+          "audioUse",
+          "heartbeat",
+          "segment",
+          "segment",
+          "heartbeat",
+          "segment",
+          "segment",
+          "heartbeat",
+          "segment",
+          "heartbeat",
+          "segment",
+          "audioUse",
+          "segment",
+          "heartbeat",
+          "segment",
+          "audioUse",
+          "segment",
+          "heartbeat",
+          "segment",
+          "heartbeat",
+          "segment",
+          "shot",
+          "segment",
+          "stopped"
+        ],
+        "shots": [
+          {
+            "path": "2026-10-20/shot-000656-872.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 2545
+          }
+        ],
+        "segments": [
+          {
+            "path": "2026-10-20/sys-000656-871.m4a",
+            "wavBytes": 42360
+          },
+          {
+            "path": "2026-10-20/sys-000658-861.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000701-869.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000704-877.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000707-885.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000710-893.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000713-901.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000716-909.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000719-917.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000722-925.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000725-933.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000728-941.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000731-949.m4a",
+            "wavBytes": 59428
+          }
+        ],
+        "audioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792469216878.515,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469217554.98,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792469218974.605,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469220536.059,
+            "v": 1
+          },
+          {
+            "app": "com.openai.codex",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": true,
+            "output": false,
+            "t": 1792469239256.689,
+            "v": 1
+          },
+          {
+            "app": "com.openai.codex",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469245857.104,
+            "v": 1
+          }
+        ],
+        "allowedNamed": true,
+        "deniedAnonymous": true,
+        "anonymityViolations": [],
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    },
+    {
+      "label": "run-2",
+      "result": {
+        "app": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app",
+        "helper": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app/Contents/Resources/gs-capture",
+        "exitCode": 0,
+        "spawnError": null,
+        "stderr": "",
+        "events": [
+          "ready",
+          "shot",
+          "audioUse",
+          "shot",
+          "audioUse",
+          "segment",
+          "segment",
+          "tapRebuilt",
+          "audioUse",
+          "shot",
+          "heartbeat",
+          "audioUse",
+          "segment",
+          "segment",
+          "stopped"
+        ],
+        "shots": [
+          {
+            "path": "2026-10-20/shot-000735-390.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 2889
+          },
+          {
+            "path": "2026-10-20/shot-000737-392.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 2888
+          },
+          {
+            "path": "2026-10-20/shot-000739-422.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 2893
+          }
+        ],
+        "segments": [
+          {
+            "path": "2026-10-20/sys-000735-387.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000738-395.m4a",
+            "wavBytes": 13688
+          },
+          {
+            "path": "2026-10-20/sys-000739-497.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000742-505.m4a",
+            "wavBytes": 60792
+          }
+        ],
+        "audioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792469256492.643,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469258013.887,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792469259610.516,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469261252.911,
+            "v": 1
+          }
+        ],
+        "allowedNamed": true,
+        "deniedAnonymous": true,
+        "anonymityViolations": [],
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    },
+    {
+      "label": "run-3",
+      "result": {
+        "app": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app",
+        "helper": "/Volumes/Projects/Repositories/.worktrees/geekspace-3b3/release/mac-arm64/Geekspace.app/Contents/Resources/gs-capture",
+        "exitCode": 0,
+        "spawnError": null,
+        "stderr": "",
+        "events": [
+          "ready",
+          "shot",
+          "audioUse",
+          "shot",
+          "audioUse",
+          "segment",
+          "segment",
+          "tapRebuilt",
+          "audioUse",
+          "heartbeat",
+          "audioUse",
+          "shot",
+          "segment",
+          "shot",
+          "segment",
+          "stopped"
+        ],
+        "shots": [
+          {
+            "path": "2026-10-20/shot-000745-474.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 2888
+          },
+          {
+            "path": "2026-10-20/shot-000747-476.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 1657
+          },
+          {
+            "path": "2026-10-20/shot-000751-499.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 1680
+          },
+          {
+            "path": "2026-10-20/shot-000753-518.heic",
+            "menuBarBlanked": true,
+            "ocrChars": 1812
+          }
+        ],
+        "segments": [
+          {
+            "path": "2026-10-20/sys-000745-470.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000748-478.m4a",
+            "wavBytes": 15054
+          },
+          {
+            "path": "2026-10-20/sys-000749-584.m4a",
+            "wavBytes": 96974
+          },
+          {
+            "path": "2026-10-20/sys-000752-592.m4a",
+            "wavBytes": 60792
+          }
+        ],
+        "audioUse": [
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792469266521.321,
+            "v": 1
+          },
+          {
+            "app": "dev.geekspace.spike.tone2",
+            "denylisted": false,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469268064.671,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": true,
+            "t": 1792469269696.872,
+            "v": 1
+          },
+          {
+            "app": null,
+            "denylisted": true,
+            "event": "audioUse",
+            "input": false,
+            "output": false,
+            "t": 1792469271277.494,
+            "v": 1
+          }
+        ],
+        "allowedNamed": true,
+        "deniedAnonymous": true,
+        "anonymityViolations": [],
+        "last": {
+          "event": "stopped",
+          "reason": "duration",
+          "v": 1
+        }
+      }
+    }
+  ]
+}

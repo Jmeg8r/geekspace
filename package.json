@@ -19,9 +19,10 @@
     "lint:eslint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package": "npm run build && npm run prebake && electron-builder --mac",
+    "package": "npm run build && npm run prebake && npm run build:gs-capture && electron-builder --mac",
     "package:win": "npm run build && npm run prebake && electron-builder --win",
     "prebake": "node scripts/prebake-seed.mjs",
+    "build:gs-capture": "node scripts/build-gs-capture.mjs",
     "fetch-backend": "node scripts/fetch-backend.mjs",
     "migrate:local-data": "node scripts/migrate-local-data.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
@@ -100,10 +101,12 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSAppleEventsUsageDescription": "Geekspace reads your macOS Calendar and Mail to show events and messages, and to auto-schedule work around your appointments.",
-        "NSMicrophoneUsageDescription": "Geekspace records meeting audio so it can transcribe and summarize your meetings — entirely on this Mac."
+        "NSMicrophoneUsageDescription": "Geekspace records meeting audio so it can transcribe and summarize your meetings — entirely on this Mac.",
+      "NSAudioCaptureUsageDescription": "Geekspace's Day Recorder records your Mac's system audio, leaving out the apps on your denylist, so it can transcribe your day. The audio stays on this Mac."
       },
       "extraResources": [
-        { "from": "build/convex-local-backend", "to": "convex-local-backend" }
+        { "from": "build/convex-local-backend", "to": "convex-local-backend" },
+        { "from": "native/gs-capture/.build/release/gs-capture", "to": "gs-capture" }
       ]
     },
     "win": {

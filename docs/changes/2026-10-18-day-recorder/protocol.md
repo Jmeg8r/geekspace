@@ -42,6 +42,7 @@ One JSON object per line on **stdout**, keys sorted. Every line has `"v": 1` and
 | `tailDropped` | `t`, `droppedWindows`, `droppedMaxRms`, `arrivedBundles`, `unjudged`, `addedProcesses`, `addedBundles` | at stop, a denylisted process appeared after the last poll; the held tail was dropped |
 | `sampleRateChanged` | `t`, `from`, `to` | a rebuilt tap runs at a new rate (output device changed); later segments use it |
 | `sessionUnverified` | `t`, `livedMs`, `endedBy` | a tap session ended before its first IO cycle could be expected (under 200 ms); informational |
+| `audioUse` | `t`, `app`, `denylisted`, `input`, `output` | an app started or stopped using audio input or output |
 | `stopped` | `reason` | clean end: `duration` (proofs) or `signal`. Always the **last** line: nothing is written after it |
 
 More detail on the fields:
@@ -78,7 +79,26 @@ More detail on the fields:
     *between* segments (about 0.5–0.6 s), never inside one.
   - `peak` (0–1) is the loudest sample. A silent segment is normal (nothing was playing);
     whether to skip transcribing it is PR 5's decision.
+- **`audioUse`** (plan PR 3b-3) reports an app's audio input and output when either
+  changes. It is polled every 100 ms, because on macOS 27.0 the listeners never fire for
+  mic use (spike Q3). It exists for PR 4's mic pause (spec F2) and call detection (F3).
+  - `app` is the owning app's bundle ID: the process's own app, else its parent's (a
+    Chromium `<id>.helper` maps to the browser). An app with no name at all is not
+    reported.
+  - **Every denylisted app is folded into ONE entry** with `app: null` and
+    `denylisted: true`. Its `input`/`output` are true while any denylisted app uses audio.
+    A denylisted app is never named, by the same rule as `shot.appBundleId`. "Denylisted"
+    includes everything in the tap's current exclusion, such as a helper orphaned from a
+    denylisted app (PR #78), so the mic pause and the tap never disagree.
+  - Ignored: `com.apple.replayd` and `com.apple.avconferenced`, which report input for our
+    own capture (spike Q3, Q4); the helper itself; and the supervisor with every process it
+    started (Electron's renderer records the mic).
+  - At start, every app already using audio is reported once. After that, only changes
+    are reported. `input: false, output: false` means the app stopped.
 - **`tapRebuilt` / `tailDropped`** carry only counts, levels and bundle IDs, never audio.
+  **Their bundle fields can name a denylisted app** (`addedBundles`, `arrivedBundles`).
+  They are diagnostics. The supervisor must not store or log them, or `audioUse`'s and
+  `shot`'s anonymity would be undone (PR 3c).
   `trigger` is `listener` when the HAL's process-list notification reported a denylisted
   process being added (`arrivedBundles`; `unclassified` for one that was already exiting), and
   `poll` when only the 100 ms poll of live processes found it. The listener catches a process
@@ -103,6 +123,3 @@ treats each of these as "Not recording" (spec R3):
 - a line that is not valid JSON, or whose `v` is not 1. That line is dropped and logged
   **without its contents**.
 
-## Coming in later PRs
-
-- **3b-3:** `audioUse` events from the process watcher (PR 4's mic pause and call detection).

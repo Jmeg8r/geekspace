@@ -122,6 +122,19 @@ final class ArrivalClassificationTests: XCTestCase {
         XCTAssertEqual(Tap.classify(bundle: "", parent: 42, parentBundle: noApps, parentAlive: { _ in false }, denylist), .unreadable)
     }
 
+    func testAnotherUsersDaemonIsJudgedByItsOwnBundle() {
+        // Codex review of PR #79, round 2: a system daemon arriving after the baseline has an
+        // unreadable parent but is alive. It must not be denied (the tap would exclude its
+        // audio and audioUse would pause the mic), unless its own bundle is denylisted.
+        XCTAssertEqual(Tap.classify(bundle: "systemsoundserverd", parent: -1, otherUser: true, parentBundle: noApps,
+                                    parentAlive: alive, denylist), .allowed)
+        XCTAssertEqual(Tap.classify(bundle: "com.example.work", parent: -1, otherUser: true, parentBundle: noApps,
+                                    parentAlive: alive, denylist), .denylisted("com.example.work"))
+        // Unreadable because it is gone: still fail-closed.
+        XCTAssertEqual(Tap.classify(bundle: "", parent: -1, otherUser: false, parentBundle: noApps,
+                                    parentAlive: alive, denylist), .unreadable)
+    }
+
     func testAParentThatIsNotAnAppIsAllowed() {
         XCTAssertEqual(Tap.classify(bundle: "com.apple.TextEdit", parent: 1, parentBundle: noApps, parentAlive: alive, denylist), .allowed)
     }
@@ -247,6 +260,23 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         XCTAssertEqual(TapRunner.exclusion(polled: [7], denied: [7], previous: [5], alive: [1, 7]), [7])
     }
 
+    func testADaemonArrivingAfterTheBaselineIsNotDenied() {
+        // The end-to-end shape of the round-2 finding: object 9 arrives after the baseline,
+        // alive, parent unreadable (another user's daemon). It must not reach the denied set,
+        // which feeds both the tap's exclusion and audioUse.
+        var objects: [AudioObjectID] = [1]
+        let arrivals = ProcessArrivals(
+            identify: { ProcessIdentity(pid: pid_t($0), bundle: $0 == 9 ? "systemsoundserverd" : "", parent: $0 == 9 ? -1 : 1,
+                                        otherUser: $0 == 9) },
+            judge: { Tap.classify(bundle: $0.bundle, parent: $0.parent, otherUser: $0.otherUser, parentBundle: { _ in nil },
+                                  parentAlive: { _ in true }, ["com.example.work"]) },
+            list: { objects }, listen: false)
+        objects = [1, 9]
+        XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
+        XCTAssertEqual(arrivals.take(), [])
+        XCTAssertEqual(arrivals.deniedLive(), [])
+    }
+
     func testAnArrivalAlreadyGoneIsFlaggedWithoutJudgement() {
         var objects: [AudioObjectID] = []
         let arrivals = ProcessArrivals(identify: { _ in nil }, judge: { _ in
@@ -256,5 +286,104 @@ final class ArrivalsReleaseCapTests: XCTestCase {
         objects = [7]
         XCTAssertTrue(arrivals.settle(timeoutMs: 1000))
         XCTAssertEqual(arrivals.take().map(\.label), [ProcessArrivals.unclassified])
+    }
+}
+
+/// audioUse decisions (plan PR 3b-3): what counts, what is named, and what is a change.
+final class AudioUseTests: XCTestCase {
+    func process(_ app: String, bundle: String? = nil, pid: pid_t = 50, parent: pid_t = 1,
+                 input: Bool = false, output: Bool = false, denylisted: Bool = false) -> AudioUse.Process {
+        AudioUse.Process(pid: pid, parent: parent, bundle: bundle ?? app, app: app, input: input, output: output,
+                         denylisted: denylisted)
+    }
+
+    func testOurOwnCaptureAndProcessesAreIgnored() {
+        // replayd and avconferenced report input for our own SCK capture (spike Q3, Q4).
+        XCTAssertTrue(AudioUse.ignored(process("com.apple.replayd", input: true), ownPid: 9, supervisorPid: 8))
+        XCTAssertTrue(AudioUse.ignored(process("com.apple.avconferenced", input: true), ownPid: 9, supervisorPid: 8))
+        XCTAssertTrue(AudioUse.ignored(process("x.helper", pid: 9), ownPid: 9, supervisorPid: 8))
+        // The supervisor and everything it started (Electron's renderer records the mic).
+        XCTAssertTrue(AudioUse.ignored(process("com.astgl.geekspace", pid: 8), ownPid: 9, supervisorPid: 8))
+        XCTAssertTrue(AudioUse.ignored(process("com.github.Electron.helper", parent: 8), ownPid: 9, supervisorPid: 8))
+        XCTAssertFalse(AudioUse.ignored(process("us.zoom.xos", input: true), ownPid: 9, supervisorPid: 8))
+    }
+
+    func testDenylistedAppsAreFoldedIntoOneUnnamedEntry() {
+        let states = AudioUse.aggregate([
+            process("com.example.work", input: true, denylisted: true),
+            process("com.example.other", output: true, denylisted: true),
+            process("us.zoom.xos", input: true, output: true),
+        ])
+        XCTAssertEqual(states[.denylisted], AudioUse.State(input: true, output: true))
+        XCTAssertEqual(states[.app("us.zoom.xos")], AudioUse.State(input: true, output: true))
+        XCTAssertNil(states[.app("com.example.work")], "a denylisted app is never named")
+        let fields = AudioUse.fields(.denylisted, states[.denylisted]!, t: 1)
+        XCTAssertTrue(fields["app"] is NSNull)
+        XCTAssertEqual(fields["denylisted"] as? Bool, true)
+    }
+
+    func testHelpersMergeIntoTheirAppAndIdleOrUnnamedProcessesDrop() {
+        let states = AudioUse.aggregate([
+            process("com.google.Chrome", bundle: "com.google.Chrome.helper", input: true),
+            process("com.google.Chrome", bundle: "com.google.Chrome.helper.renderer", output: true),
+            process("com.apple.Music"),
+            process("", bundle: "", output: true),
+        ])
+        XCTAssertEqual(states, [.app("com.google.Chrome"): AudioUse.State(input: true, output: true)])
+    }
+
+    func testAChildWithItsOwnBundleUnderADenylistedParentIsDenylisted() {
+        // Codex review of PR #79: the child is an app of its own, so its owning app is its own
+        // ID; the parent must still be checked.
+        XCTAssertTrue(AudioUse.isDenylisted(bundle: "com.other.player", app: "com.other.player",
+                                            parentApp: "com.example.work", known: false, denylist: ["com.example.work"]))
+    }
+
+    func testTheTapsKnowledgeCountsEvenWhenNothingElseMatches() {
+        // An orphaned helper: parent now launchd, no bundle match, but the tap/listener denied it.
+        XCTAssertTrue(AudioUse.isDenylisted(bundle: "", app: "", parentApp: nil, known: true, denylist: ["com.example.work"]))
+    }
+
+    func testASystemDaemonWithAnUnreadableParentIsNotDenylisted() {
+        // Measured: systemsoundserverd and friends have an unreadable parent. Folding them in
+        // would pause the mic on every alert sound.
+        XCTAssertFalse(AudioUse.isDenylisted(bundle: "systemsoundserverd", app: "systemsoundserverd",
+                                             parentApp: nil, known: false, denylist: ["com.example.work"]))
+    }
+
+    func testOnlyChangesAreReportedAndAnAppThatStopsReadsAsOff() {
+        let zoomOn: [AudioUse.Key: AudioUse.State] = [.app("us.zoom.xos"): .init(input: true, output: true)]
+        XCTAssertTrue(AudioUse.changes(from: zoomOn, to: zoomOn).isEmpty)
+        let stopped = AudioUse.changes(from: zoomOn, to: [:])
+        XCTAssertEqual(stopped.count, 1)
+        XCTAssertEqual(stopped[0].key, .app("us.zoom.xos"))
+        XCTAssertEqual(stopped[0].state, AudioUse.State())
+        let started = AudioUse.changes(from: [:], to: [.denylisted: .init(input: false, output: true)])
+        XCTAssertEqual(started.map(\.key), [.denylisted])
+    }
+}
+
+/// Liveness from proc_pidinfo, not kill(pid, 0) (Codex review of PR #79, round 3): a zombie
+/// must read as gone, or an exited denylisted child could be judged another user's process,
+/// and an exited denylisted parent could make its orphan look allowed.
+final class ProcessLookupTests: XCTestCase {
+    func testAZombieIsGoneEvenThoughKillSucceeds() throws {
+        var child: pid_t = 0
+        var argv: [UnsafeMutablePointer<CChar>?] = [strdup("/usr/bin/true"), nil]
+        defer { argv.compactMap { $0 }.forEach { free($0) } }
+        XCTAssertEqual(posix_spawn(&child, "/usr/bin/true", nil, nil, &argv, nil), 0)
+        // Exited and not reaped yet: a zombie.
+        usleep(300_000)
+        XCTAssertEqual(kill(child, 0), 0, "the trap: kill(pid, 0) succeeds for a zombie")
+        XCTAssertEqual(Tap.lookup(child), .gone)
+        XCTAssertFalse(Tap.processAlive(child))
+        XCTAssertEqual(Tap.parentPid(child), -1)
+        var status: Int32 = 0
+        waitpid(child, &status, 0)
+    }
+
+    func testOurOwnProcessReadsItsParent() {
+        XCTAssertEqual(Tap.lookup(getpid()), .parent(getppid()))
+        XCTAssertTrue(Tap.processAlive(getpid()))
     }
 }

@@ -201,8 +201,7 @@ final class SegmentWriter {
     func close() {
         guard let current = open else { return }
         open = nil
-        if #available(macOS 15.0, *) { current.file.close() }
-        // Before macOS 15 the file finalizes when its last reference goes, which is `current`.
+        current.file.close()
         let (partial, final, path) = (current.partial, current.final, current.path)
         let (startMs, frames, peak, day) = (current.startMs, current.frames, current.peak, current.day)
         _ = consume current
@@ -249,9 +248,10 @@ final class SystemAudioRecorder {
     private var runner: TapRunner?
     private var writer: SegmentWriter?
     private var hold: PCMHold?
+    private var watcher: AudioUseWatcher?
 
-    /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped` and
-    /// `sessionUnverified`.
+    /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped`,
+    /// `sessionUnverified`, `sampleRateChanged` and `audioUse`.
     init(root: String, denylist: [String], segmentSec: Double, report: @escaping (String, [String: Any]) -> Void) {
         queue.sync {
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
@@ -280,12 +280,18 @@ final class SystemAudioRecorder {
                 return hold
             }
             self.runner = runner
+            // On this queue too, so it reads the tap's exclusion (sticky, orphans included)
+            // without a lock: F2's "a denylisted app is using audio" and the tap's exclusion
+            // can never disagree (plan PR 3b-3).
+            let watcher = AudioUseWatcher(denylist: denylist, report: report)
+            self.watcher = watcher
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(Int(Tap.releaseTickMs)))
             timer.setEventHandler {
                 // tick returns the release limit, read before it checks arrivals and capped at
                 // the last completed classification pass (Codex review of PR 3b-2, rounds 4-5).
                 runner.sink.release(now: runner.tick(poll: true))
+                watcher.tick(known: runner.knownDenied())
             }
             timer.resume()
             self.timer = timer
