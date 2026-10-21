@@ -1,6 +1,7 @@
 // WHAT: `gs-capture run`, the production capture process the Electron supervisor spawns.
 // It takes a screenshot every --shot-sec, keeps only frames that changed, writes them as HEIC
-// under <media-root>/<day>/, runs OCR on them, and reports each one as a protocol-v1 JSON line
+// under <media-root>/<day>/, runs OCR on them off the capture loop (OCRQueue.swift), and
+// reports each one as a protocol-v1 JSON line
 // (docs/changes/2026-10-18-day-recorder/protocol.md). System audio is written alongside as
 // segments (Segments.swift, PR 3b-2).
 // WHY one long-lived process: TCC grants, the SCK watchdog and the denylist apply to one
@@ -29,6 +30,15 @@ enum Run {
     static let defaultSegmentSec = 300.0
     // Below this a segment is mostly AAC priming and container overhead.
     static let minSegmentSec = 2.0
+    // Frames waiting for or in OCR. At 1920x1080 points a frame is ~8 MB, so this bounds the
+    // backlog at ~32 MB while still riding out a ~36 s first OCR at the default 30 s interval.
+    static let ocrBacklog = 4
+    // On SIGTERM: the supervisor's stop grace is 8 s and the audio tail can take 5 s, so OCR
+    // in flight gets 2 s. A shot not announced by then is an orphan file the purge sweeps.
+    static let ocrDrainOnSignalSec = 2.0
+    // A proof's --duration run waits for every shot, as the inline OCR used to.
+    static let ocrDrainOnDurationSec = 60.0
+    static let ocr = OCRQueue(capacity: ocrBacklog)
 
     static func line(_ event: String, _ fields: [String: Any] = [:], terminal: Bool = false) {
         var object = fields
@@ -153,6 +163,9 @@ enum Run {
         var lastKept: [Bool]?
         while duration.map({ nowMs() - started < $0 * 1000 }) ?? true {
             let tickStart = nowMs()
+            // A slot first, so a frame is never taken without room to read it. Normally free;
+            // while the backlog is full the loop waits rather than dropping a frame.
+            while !ocr.tryReserve() { try? await Task.sleep(nanoseconds: 50_000_000) }
             let takenAt = Date()
             let ownerBefore = NSWorkspace.shared.menuBarOwningApplication?.bundleIdentifier
             var (image, _, _) = await Screen.capture(excluding: denylist, scale: captureScale)
@@ -166,7 +179,8 @@ enum Run {
             }
             let hash = Screen.dHash(image, grid: hashGrid)
             if let lastKept, Screen.hamming(lastKept, hash) <= skipHamming {
-                // Unchanged: nothing to report.
+                // Unchanged: nothing to report, and no OCR to queue.
+                ocr.release()
             } else {
                 let (day, file) = dayAndFile(takenAt)
                 let dir = "\(root)/\(day)"
@@ -179,15 +193,18 @@ enum Run {
                     fail("cannot write \(day)/\(file): \(error.localizedDescription)")
                 }
                 lastKept = hash
-                let ocr = OCR.recognizeMerged(image)
-                line("shot", [
+                let frame = image
+                let fields: [String: Any] = [
                     "day": day, "path": "\(day)/\(file)", "takenAt": round3(takenAt.timeIntervalSince1970 * 1000),
                     // A denylisted app's id is not recorded either: when it was in use is
                     // information too (plan.md, PR 3b-1). Null also when the owner changed.
                     "appBundleId": decision.appBundleId.map { $0 as Any } ?? NSNull(),
                     "menuBarBlanked": decision.blank,
-                    "ocrText": ocr.text, "ocrMs": round3(ocr.ms),
-                ])
+                ]
+                ocr.submit {
+                    let text = OCR.recognizeMerged(frame)
+                    line("shot", fields.merging(["ocrText": text.text, "ocrMs": round3(text.ms)]) { $1 })
+                }
             }
             var wait = shotSec * 1000 - (nowMs() - tickStart)
             // A proof's --duration must not overrun by up to a whole --shot-sec.
@@ -212,6 +229,11 @@ enum Run {
     static func shutdown(reason: String) -> Never {
         shutdownLock.lock()
         recorder?.stop()
+        // After the audio, which matters more: shots still in OCR get a bounded wait.
+        let drainSec = reason == "signal" ? ocrDrainOnSignalSec : ocrDrainOnDurationSec
+        if !ocr.drain(timeout: drainSec) {
+            FileHandle.standardError.write("gs-capture: OCR still running at stop; its shots stay unannounced\n".data(using: .utf8)!)
+        }
         line("stopped", ["reason": reason], terminal: true)
         exit(0)
     }

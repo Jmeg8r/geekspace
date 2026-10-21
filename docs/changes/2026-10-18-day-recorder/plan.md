@@ -1043,3 +1043,29 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - Evidence: `pr3b3-signed-build.json` (built from `6a8f9fb`).
   - This commit changes only docs and evidence. The code is exactly what round 5 reviewed.
 
+- **2026-10-21, OCR moves off the helper's capture loop** (James's decision, made before the
+  3c soak; branch `feat/day-recorder-ocr-off-loop`).
+  - **Why:** the first OCR in a process stalls for ~36–52 s, after a new build and again
+    after time or idleness (PR 3c Deviations). Inline, it held up every capture behind it.
+  - **`OCRQueue.swift`:** a serial worker with a backlog of 4 frames (~32 MB at 1920x1080
+    points).
+    - The capture loop reserves a slot before each capture and gives it back for an
+      unchanged frame. While all 4 slots are taken, it waits instead of dropping a frame.
+    - `shot` lines keep capture order. Only their timing changes: a line is written when its
+      OCR finishes.
+  - **Stop:** after the audio is finalized, OCR in flight gets up to 2 s on a signal. That
+    fits the supervisor's 8 s stop grace alongside the 5 s audio tail. A `--duration` run
+    waits up to 60 s.
+    - A shot still in OCR at the deadline is never announced. Its file is an orphan, which
+      the PR 3c sweep removes, and a stderr line says so.
+  - **Protocol:** `v` stays 1. No event or field changed, only when `shot` lines arrive.
+    `protocol.md` says so.
+  - **Proof:**
+    - `swift test`: 53 tests, 5 of them new for `OCRQueue`. They cover order, the calling
+      thread not blocking, the capacity bound, release, and the drain timeout.
+    - Live run on a copy re-signed with a fresh identity, to force the stall: the first OCR
+      took **52.0 s**. Frames were still captured at 0.6 s, 10.6 s and 20.6 s (inline, the
+      second capture would have come at ~52 s), and their lines arrived in capture order.
+      The run had 11 heartbeats and exited 0 ending `stopped`.
+  - **Not covered:** a signed `npm run package` run and the 2-hour soak. Both are 3c
+    part 2, with James at the Mac.
