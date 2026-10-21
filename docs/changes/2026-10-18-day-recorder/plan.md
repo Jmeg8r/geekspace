@@ -1206,3 +1206,10 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     UTC+14). This closes CSO finding 4016f9d6 at the trust boundary as well as in the purge.
   - **Move OCR off the helper's capture loop:** its own PR, before the soak.
   - **A final Codex check** covers these changes and the round-4 P2 fix.
+- **2026-10-21, PR 3c, final Codex check on `2fa4d33`: GATE PASS (`[P1] none`, 1 × P2).** It
+  covered the changes since round 4. The P2 is fixed, test first:
+  - A native ScreenCaptureKit denial ("The user declined TCCs for application, window,
+    display capture", spike Q7) has no "permission" in it, so it was being retried.
+  - The match is now `/permission|declined TCC/i`.
+  - A stable failure marker or exit code from the helper would be sturdier than matching
+    message text. That is a helper change, left for the OCR PR or later.

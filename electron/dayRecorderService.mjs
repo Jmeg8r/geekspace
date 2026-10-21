@@ -21,7 +21,9 @@ export const PURGE_INTERVAL_MS = 6 * 3_600_000;
 export const RETRY_DELAYS_MS = [5_000, 30_000, 120_000];
 // A run that stays recording this long earns a fresh retry budget.
 export const RETRY_RESET_MS = 10 * 60_000;
-const PERMISSION_RE = /permission/i;
+// The helper's own permission message says "permission"; a native ScreenCaptureKit denial
+// says "declined TCCs" (spike-findings.md, Q7) and is passed through as-is.
+const PERMISSION_RE = /permission|declined TCC/i;
 
 export function createDayRecorderService({
   platform,

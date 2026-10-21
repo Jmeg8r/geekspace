@@ -379,6 +379,8 @@ describe("Day Recorder service, retry after a failure", () => {
 
   it.each([
     ["a revoked permission", "SCShareableContent failed (Screen Recording permission?): denied", "exited"],
+    // Codex #80 final check: the native TCC denial wording (spike evidence) has no "permission".
+    ["a TCC denial", "captureImage failed: The user declined TCCs for application, window, display capture", "exited"],
     ["a spawn failure", "couldn't start gs-capture: ENOENT", "spawnFailed"],
     ["a protocol violation", "gs-capture broke protocol v1 (not JSON)", "protocol"],
   ] as const)("does not retry %s", async (_name, message, reason) => {
