@@ -1260,3 +1260,16 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - `swift test`: 54 tests, one new for the shrinking deadline.
     - Live, on a re-signed copy with `--duration 10` and SIGTERM at 15 s: it exited at
       17.0 s, and the last frame was captured at 5.7 s.
+- **2026-10-21, PR 3c part 2, the runbook is ready:** `part2-runbook.md`.
+  - **Covers:** the signed package and its checks, the three R3 failure proofs, the 2-hour
+    R2 soak, leak attribution after the soak, and the clean-TCC check (spike Q7).
+  - **New tools:**
+    - `scripts/soak-rss.mjs` samples RSS per process role and media-file counts, and judges
+      the 50 MB rule. It reads no content.
+    - `scripts/day-recorder-ctl.mjs` handles on/off and time markers, writing the same
+      settings the future Settings switch will.
+  - **Runtime change:** the recorder log's `status:` line now carries the error and any
+    pending retry. That makes the log the R3 timing record until the UI lands in 3e.
+  - **Tested locally:** `soak-rss` against a live unsigned helper (it found the helper and
+    passed), and `ctl mark` with its label check. **Not exercised:** `ctl on`/`off` against
+    a running packaged app, which needs the backend from step 2.

@@ -64,7 +64,11 @@ export function startDayRecorder({ convexUrl }) {
     },
     log,
   });
-  service.onStatus((s) => log(`status: ${s.status}`));
+  // The error is the helper's own failure message or a gate's copy, never captured content.
+  // With it, this log alone times the R3 proofs (part2-runbook.md) until the UI lands in 3e.
+  service.onStatus((s) =>
+    log(`status: ${s.status}${s.error ? ` (${s.error})` : ""}${s.retryInMs ? `; retry in ${Math.round(s.retryInMs / 1000)} s` : ""}`)
+  );
 
   const unsubscribe = client.onUpdate(
     api.dayRecorder.getSettings,
