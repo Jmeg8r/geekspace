@@ -1316,3 +1316,24 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       James's to do.
     - 3c: the output device unplugged (physical).
     - 6: the clean-TCC check, which needs a new macOS user.
+- **2026-10-22, PR 3c part 2, step 3b (Screen Recording revoked): pass, and the proof changed.**
+  - **Revoking reaches the running helper.** macOS's "won't take effect until Geekspace is
+    quit and reopened" warning doesn't apply to ScreenCaptureKit. On the first try, the
+    running helper failed with `SCShareableContent failed (Screen Recording permission?):
+    The user declined TCCs…` and reported Not recording, with no retry in the 60 s before
+    the quit.
+    - That first try *looked* like a miss: the 10-minute watch ended at 12:59:34, before
+      the switch was flipped at about 13:02. Read correctly, it was a detection.
+  - **Timed redo:** the helper reported Not recording at **09:38:44.949** local. James's
+    hand-pressed `date +%T`, run right after his click, read **09:38:46**, so detection came
+    within about the 1–2 s between his click and his key press. That is well inside R3's
+    10 s, and consistent with the 5 s heartbeat authorization check. There were 0 retry
+    lines after it.
+  - **Relaunch while revoked:** fails 103 ms after `ready` with the same message, and no
+    retry.
+  - **Restore:** the switch went back on, then a quit and reopen gave `recording` 1.4 s after
+    start-up. The quit was clean each time: the recorder `stopped` before the backend.
+  - **Orphan:** the helper's failure exit left its open segment as `.partial-` (the known
+    case). The sweep removes it.
+  - **Unverified:** macOS's log has no `tccd` entries for these changes, so the switch-off
+    times come from James's notes only.

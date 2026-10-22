@@ -21,7 +21,10 @@
     "2026-10-22T02:17:04.440Z retry cap: 3 more kills",
     "2026-10-22T02:19:39.888Z waiting 10 s to confirm no restart",
     "2026-10-22T02:20:17.639Z soak start",
-    "2026-10-22T04:20:35.669Z soak end"
+    "2026-10-22T04:20:35.669Z soak end",
+    "2026-10-22T12:49:34.117Z revoke screen recording",
+    "2026-10-22T13:03:30.580Z 3b relaunch with Screen Recording revoked",
+    "2026-10-22T13:34:56.618Z 3b timed redo armed"
   ],
   "r3Kill": [
     "2026-10-22T02:16:44.511Z Not recording: exited: gs-capture exited without saying why (code null, signal SIGKILL)",
@@ -388,6 +391,50 @@
         "pid": 77629,
         "capturedWindows100ms": 11
       }
+    }
+  },
+  "r3Revoke": {
+    "live": [
+      "2026-10-22T13:02:18.531Z Not recording: exited: SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture",
+      "2026-10-22T13:02:18.531Z status: notRecording (SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture)",
+      "2026-10-22T13:03:18.698Z status: off",
+      "2026-10-22T13:03:18.698Z status: off",
+      "2026-10-22T13:03:18.701Z stopped",
+      "2026-10-22T13:03:34.236Z status: starting",
+      "2026-10-22T13:03:34.239Z purge: deleted 0, already gone 0, refused 0, failed 0, swept 0 day folders",
+      "2026-10-22T13:03:36.429Z status: starting",
+      "2026-10-22T13:03:36.452Z gs-capture ready (pid 85580)",
+      "2026-10-22T13:03:36.452Z status: recording",
+      "2026-10-22T13:03:36.555Z Not recording: exited: SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture",
+      "2026-10-22T13:03:36.555Z status: notRecording (SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture)"
+    ],
+    "relaunchWhileRevoked": [
+      "2026-10-22T13:03:34.236Z status: starting",
+      "2026-10-22T13:03:34.239Z purge: deleted 0, already gone 0, refused 0, failed 0, swept 0 day folders",
+      "2026-10-22T13:03:36.429Z status: starting",
+      "2026-10-22T13:03:36.452Z gs-capture ready (pid 85580)",
+      "2026-10-22T13:03:36.452Z status: recording",
+      "2026-10-22T13:03:36.555Z Not recording: exited: SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture",
+      "2026-10-22T13:03:36.555Z status: notRecording (SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture)"
+    ],
+    "restoreAndRelaunch": [
+      "2026-10-22T13:34:33.286Z status: off",
+      "2026-10-22T13:34:33.286Z status: off",
+      "2026-10-22T13:34:33.288Z stopped",
+      "2026-10-22T13:34:36.161Z status: starting",
+      "2026-10-22T13:34:36.164Z purge: deleted 0, already gone 0, refused 0, failed 0, swept 0 day folders",
+      "2026-10-22T13:34:37.565Z status: starting",
+      "2026-10-22T13:34:37.585Z gs-capture ready (pid 1481)",
+      "2026-10-22T13:34:37.585Z status: recording"
+    ],
+    "timedRedo": {
+      "log": [
+        "2026-10-22T13:38:44.949Z Not recording: exited: SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture",
+        "2026-10-22T13:38:44.949Z status: notRecording (SCShareableContent failed (Screen Recording permission?): The user declined TCCs for application, window, display capture)"
+      ],
+      "detectedLocal": "09:38:44.949",
+      "clickNotedLocal": "09:38:46 (date +%T pressed by hand right after the click)",
+      "retryLinesAfter": 0
     }
   }
 }
