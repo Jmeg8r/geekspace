@@ -55,19 +55,22 @@ function sample() {
   return { byRole, helperPids };
 }
 
-function localDay(d = new Date()) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Counts only: how many shots and segments exist for today. */
+/**
+ * Counts only: how many shots and segments exist across every day folder. WHY all of them:
+ * a soak that crosses local midnight writes into two folders, and counting only today's
+ * made the totals drop to zero at midnight (first part 2 soak, 2026-10-21/22).
+ */
 function mediaCounts() {
   let names = [];
+  let days = [];
   try {
-    names = fs.readdirSync(path.join(MEDIA_ROOT, localDay()));
+    days = fs.readdirSync(MEDIA_ROOT).filter((d) => DAY_RE.test(d));
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
   }
+  for (const day of days) names = names.concat(fs.readdirSync(path.join(MEDIA_ROOT, day)));
   return {
     shots: names.filter((n) => n.startsWith("shot-")).length,
     segments: names.filter((n) => n.startsWith("sys-") && !n.startsWith(".")).length,

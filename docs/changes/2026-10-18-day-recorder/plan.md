@@ -1273,3 +1273,46 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Tested locally:** `soak-rss` against a live unsigned helper (it found the helper and
     passed), and `ctl mark` with its label check. **Not exercised:** `ctl on`/`off` against
     a running packaged app, which needs the backend from step 2.
+- **2026-10-21/22, PR 3c part 2, first run on the signed build (part2-runbook.md).** Built
+  from `aa71ee6` (#80 with #83 merged in). Evidence: `pr3c-part2-signed.json`.
+  - **Step 1, signature: pass.** Signed with `Developer ID Application: James Cruce
+    (Z4CHD4858S)`, not notarized. `codesign --verify --deep --strict` passes. The helper has
+    the runtime flag and team `Z4CHD4858S`, with the same five entitlements as the app.
+    - Prebake needs the gitignored `.convex/local/default/config.json`, so it was copied into
+      the worktree (mode 600). Prebake only copies it into its own scratch directory.
+  - **Step 2, recorder on: pass.** Recording 1.4 s after the settings change.
+    - The first screenshot was on disk 25 s after `ready`.
+    - The media root is `[Excluded]` from Time Machine and `drwx------`, so F8 and the
+      0700 mode hold in the signed build.
+    - No TCC prompt appeared: Geekspace kept its grants from the spike. Step 6 covers the
+      first-grant case.
+  - **Step 3a, helper killed: pass.** "Not recording" came 1.9 s after the marker (an upper
+    bound, since it includes the marker script's own start-up). A retry followed at 5 s, and
+    recording was back 6.3 s after the kill.
+    - **Retry cap:** four kills gave retries at 5 s, 30 s and 120 s, then no retry. It stayed
+      Not recording, checked for 10 s.
+    - **Seen, for 3e:** while a retry clears the failed supervisor, a `status: off` line
+      comes between `notRecording` and `starting`. A UI would flash "Off" there.
+  - **Step 4, 2-hour soak: pass (R2).** Growth from the 10-minute mark:
+    - helper +8.4 MB, main +1.0 MB, renderer +0.3 MB, backend +15.1 MB, other helpers
+      +4.6 MB;
+    - one helper pid for all 120 minutes;
+    - 0 tap rebuilds, 0 dropped tails, 0 Not recording, 0 failed row writes and 0 Convex
+      client errors in the log.
+    - **Media:** 24 segments in 2 h (one per 5 min), split 20 / 4 across local midnight,
+      plus 31 screenshots on a mostly static screen.
+    - **A logger bug the run caught, now fixed:** `soak-rss` counted only today's folder, so
+      its totals dropped to 0 at midnight. It now counts every day folder. The capture
+      itself was fine.
+    - **Two orphan `.partial-` segments** were written at 22:16:44 and 22:17:06 local, the
+      exact times of the first two SIGKILLs. That is the known orphan case, which the 30-day
+      sweep removes. The last two kills came within 0.4 s of `ready`, before any segment
+      began.
+  - **Step 5, leak attribution after the soak: pass.** The PR 3a second-instance proof ran
+    3 times with the **signed** helper: 0 leaked windows each time. The positive control was
+    heard in 11, 12 and 11 windows. PR 3a's unexplained window did not recur.
+  - **Still open, needing James:**
+    - 3b: Screen Recording revoked in System Settings. Changing security settings is
+      James's to do.
+    - 3c: the output device unplugged (physical).
+    - 6: the clean-TCC check, which needs a new macOS user.
