@@ -145,14 +145,12 @@ the tap is built on that device.
 1. Play something, then: `node scripts/day-recorder-ctl.mjs mark "unplug output"`
 2. Unplug the device, or disconnect the AirPods.
 
-**Expect:**
-- The helper fails its "the tap stopped delivering" check, usually within 1–2 s:
-  `status: notRecording (… tap …); retry in 5 s`.
-- About 5 s later, `status: recording` again, on the new default output.
-- A `system audio sample rate changed` line is normal if the rate differs.
-
-Save the log as `r3-unplug.log`. The segment count in the media folder keeps growing after
-the restart.
+**Expect (observed 2026-10-22):** no failure. The tap follows the new default output with
+no gap, so the proof is about *no silent loss*, not about Not recording. Play a continuous
+sound across the switch, which a 2 s tone file looped with `afplay` does well. Then measure
+the closed segment's per-second loudness (`ffmpeg` to 16 kHz wav, then RMS per second),
+and switch both ways: plug in and select, then unplug. **Pass:** no silent seconds at either
+switch, with the same helper pid throughout. Save the levels as `r3-unplug-levels.txt`.
 
 *Not part of this run:* "mic silent" (R3's first bullet) needs mic capture, which is PR 3d.
 
