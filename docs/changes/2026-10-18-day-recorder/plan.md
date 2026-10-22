@@ -1337,3 +1337,20 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     case). The sweep removes it.
   - **Unverified:** macOS's log has no `tccd` entries for these changes, so the switch-off
     times come from James's notes only.
+- **2026-10-22, PR 3c part 2, step 3c (output device unplugged): pass, but not as the runbook
+  expected.** An output change is not a capture failure for the CoreAudio tap. It follows the
+  new default device without losing audio, so there is nothing for "Not recording" to report.
+  - **First run** (unplug at 12:06:56): no failure, and the helper kept the same pid. Sound
+    was captured through the Bluetooth speaker the output moved to, at 12:08:03. But nothing
+    was playing across the unplug, so the run couldn't show continuity, and it was re-run.
+  - **Re-run with a continuous 440 Hz tone** looped through the current default output. James
+    plugged the USB device in and selected it at **12:10:23**, then pulled it at **12:11:16**.
+    - Per-second RMS of the segment from 12:09:55 to 12:12:29: **no drop at either switch**.
+    - The window has 1 silent second, at 12:10:07, 16 s before the first switch: a longer gap
+      between tone loops.
+    - The same helper (pid 70704) ran throughout, with no failure and no retry.
+    - One routine `tap rebuilt (listener)` came at 12:12:52, after both switches.
+  - **Changed in the proof:** R3's "unplug → Not recording" isn't a real failure mode for this
+    tap. What R3 needs here is "no *silent* loss", and the level trace proves exactly that.
+  - **Still unproven live:** the 1 s stalled-delivery check (PR 3b-2). No scenario stopped
+    delivery, so it stays covered by `swift test` only.
