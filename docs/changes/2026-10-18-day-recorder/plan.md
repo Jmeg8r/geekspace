@@ -1354,3 +1354,31 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     tap. What R3 needs here is "no *silent* loss", and the level trace proves exactly that.
   - **Still unproven live:** the 1 s stalled-delivery check (PR 3b-2). No scenario stopped
     delivery, so it stays covered by `swift test` only.
+- **2026-10-31, PR 3c part 2, step 6 (clean-TCC check on a fresh macOS user): pass, and spike
+  Q7 is answered.** The signed app ran in a new standard user, "GS Test", through
+  `signed-run.cjs`, so Geekspace was the TCC-responsible process.
+  - **Two prompts appeared:**
+    1. "'Geekspace' would like access to record your system audio", with our
+       `NSAudioCaptureUsageDescription` text.
+    2. "'Geekspace' is requesting to bypass the system private window picker and directly
+       access your screen and audio".
+  - **Answer to Q7: the tap needs its own grant.** Afterwards Geekspace was listed under
+    **System Audio Recording Only** and *not* under Screen & System Audio Recording. Spec
+    "Security and data" is updated.
+  - **Result with both allowed:** exit 0, ending `stopped`. There were 2 screenshots, and
+    7 audio segments, each with a peak of about 0.256 from the looping test sound, so system
+    audio was captured.
+  - **Not kept:** the pre-grant outcome. `clean-tcc-1` ran several times and overwrote
+    itself, so the prompts are the pre-grant evidence.
+  - **Unverified:** whether the "bypass the picker" approval persists or macOS asks again.
+    If it lapses, capture fails loudly (3b).
+  - **For 3e:** the onboarding copy must prepare the user for both prompts.
+  - Evidence: `cleanTcc` in `pr3c-part2-signed.json`, plus three cropped screenshots
+    (`pr3c-clean-tcc-*.png`). They were cropped to the prompts and the Settings pane, because
+    the full screenshots show the desktop.
+- **PR 3c part 2: done.** Steps 1, 2, 3a, 3b, 3c, 4, 5 and 6 pass on the signed build. Proofs
+  changed by what was observed:
+  - **3b:** a revoke is caught live, within about 1–2 s of the click.
+  - **3c:** an output change is no failure for the tap, and the proof is now "no silent loss".
+  - **Still unproven live:** the 1 s stalled-delivery check, covered by `swift test` only.
+  - **For 3e's UI:** hide the `status: off` blip during a retry.

@@ -680,5 +680,118 @@
       ],
       "helperPidThroughout": 70704
     }
+  },
+  "cleanTcc": {
+    "account": "new standard macOS user 'GS Test', 2026-10-31",
+    "method": "scripts/spike/signed-run.cjs inside the signed app (ELECTRON_RUN_AS_NODE), 20 s, Submarine.aiff looping",
+    "prompts": [
+      "'Geekspace' would like access to record your system audio. (our NSAudioCaptureUsageDescription; Don't Allow / Allow)",
+      "'Geekspace' is requesting to bypass the system private window picker and directly access your screen and audio. (Allow / Open System Settings)"
+    ],
+    "settingsAfter": "Geekspace listed under 'System Audio Recording Only' (on); not listed under 'Screen & System Audio Recording'",
+    "screenshots": [
+      "spike-evidence/pr3c-clean-tcc-prompt-audio.png",
+      "spike-evidence/pr3c-clean-tcc-prompt-screen.png",
+      "spike-evidence/pr3c-clean-tcc-settings.png"
+    ],
+    "run1": {
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "ms": 20144,
+      "stderr": "",
+      "events": [
+        "ready",
+        "shot",
+        "shot",
+        "segment",
+        "heartbeat",
+        "segment",
+        "segment",
+        "heartbeat",
+        "segment",
+        "heartbeat",
+        "segment",
+        "segment",
+        "segment",
+        "stopped"
+      ],
+      "shots": [
+        {
+          "path": "2026-10-31/shot-095702-887.heic",
+          "ocrChars": 2572,
+          "menuBarBlanked": true
+        },
+        {
+          "path": "2026-10-31/shot-095704-889.heic",
+          "ocrChars": 2627,
+          "menuBarBlanked": true
+        }
+      ],
+      "segmentPeaks": [
+        0.25581467151641846,
+        0.2557322680950165,
+        0.2558145821094513,
+        0.25573664903640747,
+        0.2558142840862274,
+        0.25580495595932007,
+        0.2557765543460846
+      ],
+      "last": {
+        "event": "stopped",
+        "reason": "duration",
+        "v": 1
+      }
+    },
+    "run2": {
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "ms": 20185,
+      "stderr": "",
+      "events": [
+        "ready",
+        "shot",
+        "shot",
+        "segment",
+        "heartbeat",
+        "segment",
+        "segment",
+        "heartbeat",
+        "segment",
+        "heartbeat",
+        "segment",
+        "segment",
+        "segment",
+        "stopped"
+      ],
+      "shots": [
+        {
+          "path": "2026-10-31/shot-100426-839.heic",
+          "ocrChars": 2665,
+          "menuBarBlanked": true
+        },
+        {
+          "path": "2026-10-31/shot-100428-840.heic",
+          "ocrChars": 2914,
+          "menuBarBlanked": true
+        }
+      ],
+      "segmentPeaks": [
+        0.25580894947052,
+        0.2557823657989502,
+        0.2557907998561859,
+        0.2558029592037201,
+        0.2558128237724304,
+        0.25573065876960754,
+        0.2558138370513916
+      ],
+      "last": {
+        "event": "stopped",
+        "reason": "duration",
+        "v": 1
+      }
+    },
+    "note": "clean-tcc-1 was run several times; the saved file is the last run, after the grants. The pre-grant outcome was not kept."
   }
 }
