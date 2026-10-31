@@ -18,6 +18,12 @@ type PreloadArg = boolean | string | ((event: DayRecorderEvent) => void);
 type PreloadFn = (...args: PreloadArg[]) => Promise<IpcReply> | (() => void);
 type Namespaces = Record<string, Record<string, PreloadFn>>;
 
+/** onEvent returns its unsubscribe; every other call returns the invoke promise. */
+function unsubscribeFrom(result: ReturnType<PreloadFn>): () => void {
+  if (result instanceof Promise) throw new Error("onEvent returned a promise, not an unsubscribe");
+  return result;
+}
+
 function loadPreload(platform: NodeJS.Platform = "darwin") {
   const exposed: Record<string, Namespaces> = {};
   const listeners = new Map<string, IpcListener>();
@@ -69,7 +75,7 @@ describe("preload dayRecorder namespace", () => {
   it("delivers events without the IPC event object, and unsubscribes", () => {
     const { dayRecorder, ipcRenderer, listeners } = loadPreload();
     const cb = vi.fn();
-    const off = dayRecorder.onEvent(cb) as () => void;
+    const off = unsubscribeFrom(dayRecorder.onEvent(cb));
     listeners.get("gs:dayRecorder:event")!({ sender: "ipc internals" }, { type: "status", status: { status: "paused" } });
     expect(cb).toHaveBeenCalledWith({ type: "status", status: { status: "paused" } });
     expect(cb.mock.calls[0]).toHaveLength(1);

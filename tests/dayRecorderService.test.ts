@@ -496,11 +496,22 @@ describe("Day Recorder service, pause", () => {
   });
 
   it("starts nothing when pause arrives while a gate is pending", async () => {
+    // Codex #88 r1 [P2]: pause has to land while the start is inside its gate, not before
+    // the start has begun, or the test passes on an implementation that ignores it.
     const gate = deferred<{ ok: true }>();
+    const entered = deferred();
     const h = harness({
-      gates: { fileVault: () => gate.promise, backupExclusion: async () => ({ ok: true }) },
+      gates: {
+        fileVault: () => {
+          entered.resolve();
+          return gate.promise;
+        },
+        backupExclusion: async () => ({ ok: true }),
+      },
     });
     const first = h.service.apply(on());
+    await entered.promise;
+    expect(h.service.status()).toEqual({ status: "starting" });
     const second = h.service.apply(PAUSED);
     gate.resolve({ ok: true });
     await Promise.all([first, second]);
