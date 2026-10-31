@@ -266,6 +266,38 @@ if [ "${#GENERATED[@]}" -gt 0 ]; then
   done
 fi
 
+# ---- 1c. declared JSONL ledgers: sent as a DIGEST, never silently ------------------
+# docs/changes/2026-10-25-review-ledger-data-prs. A ledger that IS the source of truth has
+# no source for 1b to point at, and one batch ingest can be twice the broker's whole budget.
+# When a changed path ends .jsonl, blast-radius.py --jsonl-digest reads $LEDGER_DECL from
+# $BASE and returns a digest for each declared, modified ledger (edited and removed rows in
+# full, appended rows as tallies) and the reason for every path it would not digest, which
+# then goes as a raw diff and meets the cap as before. Digested paths stay in CHANGED. No
+# .jsonl, no call: a stale blast-radius.py then fails only the PRs that need it. A failed
+# call is UNKNOWN. 4a reads each digest from the plan by index, never through a delimiter,
+# so no byte of its text can end it early (review of 2026-10-26).
+LEDGER_DECL=".review-ledger.tsv"
+LEDGER=(); LEDGER_NOTE=""
+LEDGER_PLAN=$(mktemp); _LP=$(mktemp); trap 'rm -f "$LEDGER_PLAN" "$_LP"' EXIT
+printf '{"skipped": [], "digests": []}' > "$LEDGER_PLAN"
+for _f in "${CHANGED[@]}"; do
+  case "$_f" in *.jsonl)
+    for _i in "${!CHANGED[@]}"; do printf '%s\0%s\0' "${CHANGED[$_i]}" "${CHANGED_STATUS[$_i]}"; done \
+      | "${GATE_BIN:-bin}/blast-radius.py" --jsonl-digest "$BASE" "$HEAD_SHA" "$LEDGER_DECL" > "$LEDGER_PLAN" \
+      || die "blast-radius.py --jsonl-digest failed — which ledgers were digested is UNKNOWN, refusing"
+    break ;;
+  esac
+done
+{ jq -r '.skipped[] | "   ledger digest: " + .' "$LEDGER_PLAN" \
+  && jq -r '.digests[] | "   ledger digest: \(.path) (\(.appended) appended, \(.modified) modified, \(.removed) removed; \(.text | length) chars)"' "$LEDGER_PLAN" \
+  && jq -r '.digests[].path' "$LEDGER_PLAN" > "$_LP" \
+  && LEDGER_NOTE=$(jq -r '.digests[] | "- `\(.path)`: \(.appended) appended (tallied, not shown as rows), \(.modified) modified, \(.removed) removed"' "$LEDGER_PLAN"); } \
+  || die "blast-radius.py --jsonl-digest returned unreadable JSON — refusing"
+while IFS= read -r _f; do LEDGER+=("$_f"); done < "$_LP"
+# LEDGER[i] must be the plan's digests[i]: 4a reads the text by that index.
+[ "${#LEDGER[@]}" -eq "$(jq '.digests | length' "$LEDGER_PLAN")" ] \
+  || die "the ledger digest plan lists paths that do not map one to one — refusing"
+
 # ---- 2. blast radius. Its own positive control; non-zero exit means UNKNOWN. ------
 # GATE_BIN lets a CI job run the resolver from somewhere OTHER than the reviewed tree.
 # It matters under pull_request_target, where the workflow re-materializes the gate
@@ -402,7 +434,7 @@ STD_COUNT=$(echo "$STANDARDS" | jq 'length')
 echo "   standards: $STD_COUNT extracted from CLAUDE.md"
 
 # ---- 4a. the changed-file diffs, MEASURED as they are built -----------------------
-REQ=$(mktemp); DTMP=$(mktemp); CJSON=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON"' EXIT
+REQ=$(mktemp); DTMP=$(mktemp); CJSON=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$LEDGER_PLAN" "$_LP"' EXIT
 # The context budget in 4b is derived from this measurement instead of a fixed guess
 # at what the diff would cost. It used to be a guess: CONTEXT_BUDGET was a flat
 # 300,000, which silently assumed the diff plus everything else would fit in the
@@ -447,8 +479,20 @@ DIFF_BYTES=0
     # produced no review at all while reporting a plain CI failure. Observed on
     # claudeclaw #944: three runs at three different heads, all exit 141 immediately
     # after "standards: N extracted", misdiagnosed for a week as an Ollama outage.
-    git diff "$BASE...HEAD" -- "$f" > "$DTMP"
+    # A declared ledger (section 1c) sends its digest in place of the diff. Same field,
+    # same size accounting and the same cap below: a digest is never exempt from either.
+    _li=""
+    for _j in ${LEDGER[@]+"${!LEDGER[@]}"}; do [ "${LEDGER[$_j]}" = "$f" ] && _li="$_j"; done
+    if [ -n "$_li" ]; then
+      jq -j --argjson i "$_li" '.digests[$i].text' "$LEDGER_PLAN" > "$DTMP" \
+        || die "$f: its ledger digest could not be read from the plan"
+    else
+      git diff "$BASE...HEAD" -- "$f" > "$DTMP"
+    fi
     fsz=$(wc -c < "$DTMP" | tr -d '[:space:]')
+    if [ -n "$_li" ] && [ "$fsz" -gt "$DIFF_CAP" ]; then
+      die "$f: ledger digest is $fsz bytes, past the ${DIFF_CAP}-byte per-file cap: $(jq -r --argjson i "$_li" '.digests[$i] | "\(.modified) modified and \(.removed) removed"' "$LEDGER_PLAN") row(s) are shown in full, and in-place edits on that scale are read, never summarized — split the PR"
+    fi
     # An over-cap diff FAILS THE GATE; it is never sent as a prefix. `head -c` used to
     # silently drop every hunk past byte 60,000 while the request still listed the file
     # as supplied and the model still counted it as examined — so a defect at byte
@@ -597,7 +641,7 @@ if [ "$CTX_TRUNCATED" -gt 0 ]; then
 fi
 
 # ---- 5. ask the broker ------------------------------------------------------------
-V=$(mktemp); BHDR=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR"' EXIT
+V=$(mktemp); BHDR=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR" "$LEDGER_PLAN" "$_LP"' EXIT
 # mktemp creates 0600 (verified on BSD and GNU coreutils), so the token is readable
 # only by this user -- unlike argv. An unauthenticated broker leaves the file empty,
 # which curl accepts as "no extra headers".
@@ -616,7 +660,8 @@ print_review_diagnostics() {
       type == "object"
       and (.stage as $s | (["initial_review", "changed_files_followup",
         "standards_followup", "coverage_completion_review",
-        "coverage_completion_followup"] | index($s)) != null)
+        "coverage_completion_followup", "coverage_fallback_review",
+        "coverage_fallback_followup"] | index($s)) != null)
       and (.result as $r | (["completed", "transport_timeout", "transport_error",
         "http_error", "response_envelope_invalid", "model_output_invalid",
         "budget_exhausted", "internal_error"] | index($r)) != null)
@@ -628,7 +673,8 @@ print_review_diagnostics() {
       and ($d | has("admission_wait_s"))
       and ($d.terminal_stage as $s | (["initial_review", "changed_files_followup",
         "standards_followup", "coverage_completion_review",
-        "coverage_completion_followup", "cache_hit", "preflight_refusal",
+        "coverage_completion_followup", "coverage_fallback_review",
+        "coverage_fallback_followup", "cache_hit", "preflight_refusal",
         "admission_wait", "post_model_validation", "complete"] | index($s)) != null)
       and ($d.outcome as $o | (["completed", "transport_timeout", "transport_error",
         "http_error", "response_envelope_invalid", "model_output_invalid",
@@ -637,7 +683,8 @@ print_review_diagnostics() {
       and ($d.cache_state as $c | (["hit", "miss", "unknown"] | index($c)) != null)
       and ($d.elapsed_s | bounded_seconds)
       and ($d.admission_wait_s == null or ($d.admission_wait_s | bounded_seconds))
-      and ($d.calls | type == "array" and length <= 5 and all(.[]; safe_call))
+      # 7 = the broker DIAGNOSTIC_MAX_CALLS: one call per stage listed above.
+      and ($d.calls | type == "array" and length <= 7 and all(.[]; safe_call))
   ' "$V" >/dev/null 2>&1; then
     echo "   broker diagnostics unavailable (request ID: $REQUEST_ID)" >&2
     return
@@ -730,6 +777,34 @@ case "$EXAMINED_CHANGED" in
     ;;
 esac
 REQUIRED_READ=$(( ${#CHANGED[@]} - DELETED_UNREAD ))
+# Binary files, the other unread shape: the model names them in its WHICH follow-up only
+# sometimes (geekspace PR 80, tasks 17499/17510: one PNG of 30). Excused like deletions, by
+# proof: missing_changed_paths distinct, exactly the shortfall long, each path's submitted
+# diff at HEAD_SHA ONLY git's "Binary files" stub (no hunk). Mixed with text/deletions: refused.
+BINARY_UNREAD=0
+if [ "$DELETED_UNREAD" -eq 0 ]; then
+  case "$EXAMINED_CHANGED" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$VERDICT" = "pass" ] && [ "${#EXAMINED_CHANGED}" -le "$MAX_COUNT_DIGITS" ] \
+         && [ "$EXAMINED_CHANGED" -lt "${#CHANGED[@]}" ] && [ "$EXAMINED_CHANGED" -ge 1 ]; then
+        _short=$(( ${#CHANGED[@]} - EXAMINED_CHANGED ))
+        _m=$(jq -c '.missing_changed_paths | if type == "array" and all(.[]; type == "string") then . else [] end' "$V") || die "unreadable missing_changed_paths"
+        if printf '%s' "$_m" | jq -e --argjson n "$_short" 'length == $n and (unique|length) == $n' >/dev/null; then
+          BINARY_UNREAD=$_short
+          while IFS= read -r _p; do
+            _k=0; for _c in "${CHANGED[@]}"; do [ "$_c" = "$_p" ] && _k=1 && break; done
+            _d=$(git diff "$BASE...$HEAD_SHA" -- ":(literal)$_p" 2>/dev/null)
+            { printf '%s\n' "$_d" | grep -q '^Binary files ' && ! printf '%s\n' "$_d" | grep -qE '^(@@|\+|-)'; } || _k=0
+            [ "$_k" -eq 1 ] || { BINARY_UNREAD=0; break; }
+          done < <(printf '%s' "$_m" | jq -r '.[]')
+          [ "$BINARY_UNREAD" -eq 0 ] || echo "   NOTE: $BINARY_UNREAD unread changed file(s) are binary (stub diff only); excused and disclosed"
+        fi
+      fi
+      ;;
+  esac
+fi
+REQUIRED_READ=$(( REQUIRED_READ - BINARY_UNREAD ))
 # A PASS that checked only SOME of the rules is REPORTED, not refused. Measured against
 # live traffic before this was written: viceroy PR #16 merged on a real verdict of 2/12
 # standards checked, and claude-memory's fork -- where this port came from -- would have
@@ -818,12 +893,21 @@ deps_only() {
   done
   return 0
 }
+# Ledger-only is the THIRD exception (spec R9, R10): every changed path went as a 1c digest.
+# LEDGER holds only digested paths of CHANGED, each once, so equal counts mean all of them.
+# A declared ledger that fell back to its raw diff is not in LEDGER and keeps the refusal.
+LEDGER_ONLY=0
+[ "${#LEDGER[@]}" -eq "${#CHANGED[@]}" ] && LEDGER_ONLY=1
 STD_ZERO_DOCS=0
 STD_ZERO_DEPS=0
+STD_ZERO_LEDGER=0
 if [ "$VERDICT" = "pass" ] && [ "$STD_SUPPLIED" -gt 0 ] && [ "$STD_CHECKED" -eq 0 ]; then
   if [ "$DOCS_ONLY" -eq 1 ] && [ "$EXAMINED_CHANGED" = "$REQUIRED_READ" ]; then
     STD_ZERO_DOCS=1
     echo "   NOTE: docs-only PR — 0 of $STD_SUPPLIED standard(s) applied; accepted because every changed file is documentation and all $REQUIRED_READ not excused as deletions were read, and disclosed in the comment"
+  elif [ "$LEDGER_ONLY" -eq 1 ] && [ "$EXAMINED_CHANGED" = "$REQUIRED_READ" ]; then
+    STD_ZERO_LEDGER=1
+    echo "   NOTE: ledger-only PR — 0 of $STD_SUPPLIED standard(s) applied; accepted because every changed file is a declared ledger sent as a digest and all $REQUIRED_READ were read, and disclosed in the comment"
   elif [ "$DOCS_ONLY" -eq 0 ] && [ "$EXAMINED_CHANGED" = "$REQUIRED_READ" ] && deps_only; then
     STD_ZERO_DEPS=1
     echo "   NOTE: dependency-only PR — 0 of $STD_SUPPLIED standard(s) applied; accepted because every changed file is a package.json that differs only in its dependency sections and all $REQUIRED_READ were read, and disclosed in the comment"
@@ -1134,9 +1218,11 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
   --argjson truncated "$CTX_TRUNCATED" --argjson omitted "$CTX_OMITTED" \
   --argjson unreadable "$BR_UNREADABLE" --argjson stdzerodocs "$STD_ZERO_DOCS" \
   --argjson stdzerodeps "$STD_ZERO_DEPS" \
+  --arg ledger "$LEDGER_NOTE" --argjson stdzeroledger "$STD_ZERO_LEDGER" \
   --argjson stdlow "$STD_LOW" --argjson stdunchecked "$STD_UNCHECKED_LABELS" \
   --argjson stdlowchecked "$STD_LOW_CHECKED" --argjson stdlowsupplied "$STD_LOW_SUPPLIED" \
   --argjson deletedunread "$DELETED_UNREAD" \
+  --argjson binaryunread "$BINARY_UNREAD" \
   --argjson ctxcap "$CONTEXT_CAP" '
   "## 🤖 Local AI review — **" + (.verdict|ascii_upcase) + "**\n\n" +
   "`" + $sha + "` · model `" + .model + "` · " +
@@ -1152,7 +1238,17 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
     "> **Coverage completion** — the first review skipped " +
     (.initial_missing_changed_paths|length|tostring) + " changed file(s); a second broker review of only those credited " +
     (((.coverage_completion.examined_changed_paths // [])|length)|tostring) +
-    ". Findings from both are below, and the counts above are what the two reviews covered together.\n\n"
+    (if (.coverage_fallback|type) == "object" and .coverage_fallback.error != null then
+       ", and a third, of what that left and without the already-reviewed diffs, " +
+       "failed and credited nothing. Findings from the first two are below, and the " +
+       "counts above are what they covered together.\n\n"
+     elif (.coverage_fallback|type) == "object" then
+       ", and a third, of what that left and without the already-reviewed diffs, credited " +
+       (((.coverage_fallback.examined_changed_paths // [])|length)|tostring) +
+       ". Findings from all three are below, and the counts above are what they covered together.\n\n"
+     else
+       ". Findings from both are below, and the counts above are what the two reviews covered together.\n\n"
+     end)
    else "" end) +
   # Placed AFTER the metadata line terminates, not inside it. Injected mid-line it landed
   # between "supplied file(s) examined · " and the changed-file ratio, splitting the
@@ -1232,6 +1328,13 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
       "searched for references to them. Accepted because every unread changed file is a " +
       "deletion.\n\n"
     else "" end) +
+   (if $binaryunread > 0 then
+      "> ℹ️ Binary files: the model did not name " + ($binaryunread|tostring) +
+      " binary file(s) as read: " +
+      (.missing_changed_paths | map("`" + . + "`") | join(", ")) + ". git sent only a " +
+      "stub for each: this pass says nothing about their content. Accepted because every " +
+      "unread changed file is binary.\n\n"
+    else "" end) +
    (if $stdzerodocs == 1 then
       "> ℹ️ Docs-only: **no project standard was applied**. This PR changes only " +
       "documentation, and the model judged none of the " +
@@ -1246,6 +1349,13 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
       "manifest diff was read and nothing was flagged. It is not a rule check, and it " +
       "does not judge whether the new versions are safe. That takes a dependency audit " +
       "and an image scan, which this review is not.\n\n"
+    else "" end) +
+   (if $stdzeroledger == 1 then
+      "> ℹ️ Ledger data only: **no project standard was applied**. Every changed file is a " +
+      "declared ledger sent as a digest, and the model judged none of the " +
+      (.standards_supplied|tostring) + " standards applicable. This pass means the digest " +
+      "was read and nothing was flagged. It does not check referential integrity or how IDs " +
+      "are derived: that belongs in this repository\u0027s own CI.\n\n"
     else "" end) +
    # Low standards coverage on a code PR (section 5 decides; this only renders). EVERY
    # line opens with "> ": the forge-pr header, metadata and finding patterns all anchor at
@@ -1323,12 +1433,18 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
      "> correctly: these bytes were never sent to the model.\n>\n" +
      ($generated | split("\n") | map(select(. != "")) | map("> " + .) | join("\n")) + "\n"
    end) +
+  (if $ledger == "" then "" else
+     "\n> **Declared ledgers sent as a digest, not a raw diff**: edited and removed rows were\n" +
+     "> shown in full. Appended rows were shown only as counts and per-field value tallies\n" +
+     "> (a field with few distinct values lists them, shortened), never as rows.\n>\n" +
+     ($ledger | split("\n") | map(select(. != "")) | map("> " + .) | join("\n")) + "\n"
+   end) +
   "\n---\n_Advisory only — this gate does not block merges. Reviews the change and the " +
   "files that depend on it, not the whole project._"' "$V")
 
 if [ "$POST" -eq 1 ]; then
   FHDR=$(mktemp); CMT=$(mktemp)
-  trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR" "$FHDR" "$CMT"' EXIT
+  trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR" "$FHDR" "$CMT" "$LEDGER_PLAN" "$_LP"' EXIT
   printf 'Authorization: token %s\n' "$FT" > "$FHDR"
   # The body goes through a file too. Not a credential, but a long review on argv is
   # an E2BIG waiting for the PR that finally exceeds the limit.
