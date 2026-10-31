@@ -2,6 +2,7 @@
 
 export type RecorderSettingsView = {
   enabled: boolean;
+  paused: boolean;
   denylist: string[];
   shotSec: number;
   batchMin: number;
@@ -10,6 +11,7 @@ export type RecorderSettingsView = {
 
 export function safeSettings(s: RecorderSettingsView): {
   enabled: boolean;
+  paused: boolean;
   denylistCount: number;
   shotSec: number;
   batchMin: number;

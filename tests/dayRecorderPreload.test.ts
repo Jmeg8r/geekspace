@@ -10,25 +10,31 @@ import { describe, expect, it, vi } from "vitest";
 
 const PRELOAD = path.join(__dirname, "..", "electron", "preload.cjs");
 
+type IpcEventStub = { sender: string };
+type DayRecorderEvent = { type: "status"; status: { status: string } };
+type IpcListener = (event: IpcEventStub, data: DayRecorderEvent) => void;
+type IpcReply = { ok: boolean };
+type PreloadArg = boolean | string | ((event: DayRecorderEvent) => void);
+type PreloadFn = (...args: PreloadArg[]) => Promise<IpcReply> | (() => void);
+type Namespaces = Record<string, Record<string, PreloadFn>>;
+
 function loadPreload(platform: NodeJS.Platform = "darwin") {
-  const exposed: Record<string, Record<string, unknown>> = {};
-  const listeners = new Map<string, (event: unknown, data: unknown) => void>();
+  const exposed: Record<string, Namespaces> = {};
+  const listeners = new Map<string, IpcListener>();
   const ipcRenderer = {
     invoke: vi.fn(async () => ({ ok: true })),
-    on: vi.fn((channel: string, fn: (event: unknown, data: unknown) => void) => void listeners.set(channel, fn)),
+    on: vi.fn((channel: string, fn: IpcListener) => void listeners.set(channel, fn)),
     removeListener: vi.fn((channel: string) => void listeners.delete(channel)),
   };
   const contextBridge = {
-    exposeInMainWorld: (key: string, api: Record<string, unknown>) => void (exposed[key] = api),
+    exposeInMainWorld: (key: string, api: Namespaces) => void (exposed[key] = api),
   };
   const fakeRequire = (id: string) => {
     if (id !== "electron") throw new Error(`preload required ${id}`);
     return { contextBridge, ipcRenderer };
   };
   vm.runInNewContext(fs.readFileSync(PRELOAD, "utf8"), { require: fakeRequire, process: { platform } });
-  // SAFETY: the preload's dayRecorder namespace is a plain object of functions; the first test
-  // asserts that every value is a function.
-  const dayRecorder = exposed.geekspace.dayRecorder as Record<string, (...args: unknown[]) => unknown>;
+  const dayRecorder = exposed.geekspace.dayRecorder;
   return { dayRecorder, ipcRenderer, listeners };
 }
 
@@ -36,7 +42,8 @@ describe("preload dayRecorder namespace", () => {
   it("exposes only status, setEnabled, pause, resume and onEvent", () => {
     const { dayRecorder } = loadPreload();
     expect(Object.keys(dayRecorder).sort()).toEqual(["onEvent", "pause", "resume", "setEnabled", "status"]);
-    for (const fn of Object.values(dayRecorder)) expect(typeof fn).toBe("function");
+    // expect.any, not toBeInstanceOf: the preload ran in its own vm context, with its own Function.
+    for (const fn of Object.values(dayRecorder)) expect(fn).toEqual(expect.any(Function));
   });
 
   it("maps each call to its own gs:dayRecorder:* channel", async () => {

@@ -127,6 +127,8 @@ export default defineSchema({
     // Day Recorder (docs/changes/2026-10-18-day-recorder/). Read through
     // dayRecorder.getSettings, which supplies the defaults.
     dayRecorderEnabled: v.optional(v.boolean()),
+    // Saved, not runtime-only, so a paused recorder stays paused across a relaunch or crash.
+    dayRecorderPaused: v.optional(v.boolean()),
     dayRecorderDenylist: v.optional(v.array(v.string())), // app bundle ids
     dayRecorderShotSec: v.optional(v.number()),
     assistantBatchMin: v.optional(v.number()),

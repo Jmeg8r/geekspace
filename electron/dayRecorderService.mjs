@@ -4,7 +4,8 @@
 // (protocol.md). Capture failures are recorded as capError events. The retention purge runs
 // when the service is created and then every PURGE_INTERVAL_MS for its whole life, whether
 // or not capture is on or settings ever arrive: media recorded once still has to go after
-// 30 days (R14). Settings govern capture only.
+// 30 days (R14). Settings govern capture only. A saved pause (plan PR 3d-1) stops the helper
+// but leaves the recorder enabled, so it holds across a relaunch.
 // WHY one queue: settings can change while a start is still running its gates; applying
 // them one at a time means two helpers never run at once.
 
@@ -107,7 +108,7 @@ export function createDayRecorderService({
     recordError(`${error.reason}: ${error.message}`);
     const retryable =
       (error.reason === "exited" || error.reason === "silent") && !PERMISSION_RE.test(error.message);
-    if (!retryable || closed || !latest?.enabled) {
+    if (!retryable || closed || !latest?.enabled || latest.paused) {
       setStatus({ status: "notRecording", error: error.message });
       return;
     }
@@ -142,9 +143,9 @@ export function createDayRecorderService({
     // After every await below: a newer apply is already queued and takes over, or shutdown
     // has begun. Either way this one must not go on to start a helper.
     const superseded = () => closed || latest !== s;
-    if (!s.enabled) {
+    if (!s.enabled || s.paused) {
       await stopCurrent();
-      if (!closed) setStatus({ status: "off" });
+      if (!closed) setStatus({ status: s.enabled ? "paused" : "off" });
       return;
     }
     if (platform !== "darwin") {

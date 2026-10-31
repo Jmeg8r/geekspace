@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  type ControlHandler,
   DAY_RECORDER_EVENT,
   createDayRecorderControls,
   forwardStatus,
@@ -12,11 +13,10 @@ import type { RecorderStatus } from "../electron/dayRecorderService.mjs";
 // handlers are the boundary between the renderer and the recorder, so each one validates its
 // argument and goes through main.mjs's handle(), which refuses any sender but the app page.
 
-type Handler = (args: Record<string, unknown>) => unknown;
 
 function fakeHandle() {
-  const handlers = new Map<string, Handler>();
-  const handle = (channel: string, fn: Handler) => void handlers.set(channel, fn);
+  const handlers = new Map<string, ControlHandler>();
+  const handle = (channel: string, fn: ControlHandler) => void handlers.set(channel, fn);
   return { handle, handlers };
 }
 
