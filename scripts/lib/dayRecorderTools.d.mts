@@ -37,3 +37,7 @@ export function judgeSoak(
   growth: Record<string, { atWarmupMB: number; peakMB: number; growthMB: number }>;
   helperPids: number[];
 };
+
+export class CtlUsageError extends Error {}
+
+export function soakSchedule(totalMs: number, intervalMs: number): number[];

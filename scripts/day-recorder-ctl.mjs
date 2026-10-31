@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi as api } from "convex/server";
-import { describeCtlError, safeSettings } from "./lib/dayRecorderTools.mjs";
+import { CtlUsageError, describeCtlError, safeSettings } from "./lib/dayRecorderTools.mjs";
 
 const CONVEX_URL = process.env.CONVEX_URL ?? "http://127.0.0.1:3210";
 const EVIDENCE_DIR = process.env.GS_EVIDENCE_DIR ?? path.join(os.homedir(), "gs-part2-evidence");
@@ -23,12 +23,14 @@ function flag(args, name) {
   const i = args.indexOf(`--${name}`);
   if (i < 0) return undefined;
   const value = args[i + 1];
-  if (value === undefined || value.startsWith("--")) throw new Error(`--${name} needs a value`);
+  if (value === undefined || value.startsWith("--")) throw new CtlUsageError(`--${name} needs a value`);
   return value;
 }
 
 async function main([command, ...args]) {
-  const client = new ConvexHttpClient(CONVEX_URL);
+  // No client logger: it prints the backend's log lines and errors itself, before the handler
+  // below, and those can name denylisted apps (Codex re-check of #80).
+  const client = new ConvexHttpClient(CONVEX_URL, { logger: false });
   switch (command) {
     case "on": {
       const denylist = flag(args, "denylist");
@@ -51,7 +53,7 @@ async function main([command, ...args]) {
       return;
     case "mark": {
       const label = args.join(" ");
-      if (!LABEL_RE.test(label)) throw new Error("mark needs a short label: letters, digits, spaces, . _ : -");
+      if (!LABEL_RE.test(label)) throw new CtlUsageError("mark needs a short label: letters, digits, spaces, . _ : -");
       fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
       const line = `${new Date().toISOString()} ${label}\n`;
       fs.appendFileSync(path.join(EVIDENCE_DIR, "markers.log"), line);
@@ -59,14 +61,13 @@ async function main([command, ...args]) {
       return;
     }
     default:
-      throw new Error("usage: day-recorder-ctl.mjs <on [--denylist id,id] [--shot-sec N] | off | settings | mark <label>>");
+      throw new CtlUsageError("usage: day-recorder-ctl.mjs <on [--denylist id,id] [--shot-sec N] | off | settings | mark <label>>");
   }
 }
 
 main(process.argv.slice(2)).catch((err) => {
-  // Usage and label errors are this script's own wording; anything from the backend goes
-  // through describeCtlError, which never echoes the request (it can hold the denylist).
-  const own = err instanceof Error && /^(usage:|mark needs|--)/.test(err.message);
-  console.error(`day-recorder-ctl: ${own ? err.message : describeCtlError(err, CONVEX_URL)}`);
+  // Only this script's own errors are printed as they are; anything else (the backend's
+  // included) goes through describeCtlError, which never echoes the request.
+  console.error(`day-recorder-ctl: ${err instanceof CtlUsageError ? err.message : describeCtlError(err, CONVEX_URL)}`);
   process.exit(1);
 });

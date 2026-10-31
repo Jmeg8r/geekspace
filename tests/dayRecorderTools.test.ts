@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCtlError, judgeSoak, safeSettings, type SoakRow } from "../scripts/lib/dayRecorderTools.mjs";
+import { describeCtlError, judgeSoak, safeSettings, soakSchedule, type SoakRow } from "../scripts/lib/dayRecorderTools.mjs";
 
 // WHAT: the decisions behind the PR 3c part 2 tools (scripts/day-recorder-ctl.mjs and
 // scripts/soak-rss.mjs). WHY tested: the ctl script's output lands in terminals and evidence
@@ -74,5 +74,84 @@ describe("judgeSoak", () => {
     const rows = [row(0, { helper: 100 }, [1]), row(10, { helper: 100 }, [1]), row(20, { helper: 160 }, [2])];
     const v = judgeSoak(rows, opts);
     expect(v.failures).toEqual(expect.arrayContaining(["helper grew 60 MB", "gs-capture restarted (2 pids)"]));
+  });
+});
+
+// Codex re-check of #80: the formatter alone missed two paths. The Convex client logged the
+// backend's logLines itself before the handler ran, and a backend message starting "--" was
+// taken for the script's own error. So the real script runs against a fake backend here.
+describe("day-recorder-ctl, the real script against a fake backend", () => {
+  const SECRET = "com.example.private-one";
+
+  async function runCtl(args: string[], respond: (path: string) => object) {
+    const { createServer } = await import("node:http");
+    const { spawn } = await import("node:child_process");
+    const path = await import("node:path");
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(respond(req.url ?? "")));
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    // SAFETY: listen() on a TCP host and port gives an AddressInfo, never a pipe path or null.
+    const port = (server.address() as { port: number }).port;
+    try {
+      return await new Promise<{ code: number | null; out: string }>((resolve) => {
+        const child = spawn(process.execPath, [path.join(__dirname, "..", "scripts", "day-recorder-ctl.mjs"), ...args], {
+          env: { ...process.env, CONVEX_URL: `http://127.0.0.1:${port}` },
+        });
+        let out = "";
+        child.stdout.on("data", (d) => (out += d));
+        child.stderr.on("data", (d) => (out += d));
+        child.on("close", (code) => resolve({ code, out }));
+      });
+    } finally {
+      server.close();
+    }
+  }
+
+  it("prints neither the backend's log lines nor an error message that names a denylisted app", async () => {
+    const { code, out } = await runCtl(["on", "--denylist", SECRET], () => ({
+      status: "error",
+      errorMessage: `--denylist rejected ${SECRET}`,
+      logLines: [`[ERROR] denylist [${SECRET}]`],
+    }));
+    expect(code).toBe(1);
+    expect(out).not.toContain(SECRET);
+    expect(out).toMatch(/details withheld/);
+  });
+
+  it("prints the settings with the denylist as a count", async () => {
+    const { code, out } = await runCtl(["settings"], () => ({
+      status: "success",
+      value: { enabled: true, denylist: [SECRET], shotSec: 30, batchMin: 15, dailyCapUsd: null },
+      logLines: [`[LOG] read ${SECRET}`],
+    }));
+    expect(code).toBe(0);
+    expect(out).not.toContain(SECRET);
+    expect(out).toMatch(/"denylistCount": 1/);
+  });
+
+  it("still prints its own usage errors", async () => {
+    const { code, out } = await runCtl(["bogus"], () => ({ status: "success", value: null, logLines: [] }));
+    expect(code).toBe(1);
+    expect(out).toMatch(/usage: day-recorder-ctl/);
+  });
+});
+
+describe("soakSchedule", () => {
+  it("ends with a sample taken at the end of the run, not one interval before it", () => {
+    // Codex re-check of #80: the last sample came 30 s before the end, so a helper that died
+    // in that window still passed.
+    const times = soakSchedule(120 * 60_000, 30_000);
+    expect(times.at(-1)).toBe(120 * 60_000);
+    expect(times[0]).toBe(0);
+    expect(times).toHaveLength(241);
+  });
+
+  it("keeps the final sample when the interval doesn't divide the run", () => {
+    expect(soakSchedule(100_000, 30_000)).toEqual([0, 30_000, 60_000, 90_000, 100_000]);
   });
 });

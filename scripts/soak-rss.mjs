@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { judgeSoak } from "./lib/dayRecorderTools.mjs";
+import { judgeSoak, soakSchedule } from "./lib/dayRecorderTools.mjs";
 
 const args = process.argv.slice(2);
 function num(name, fallback) {
@@ -88,7 +88,12 @@ fs.writeFileSync(csvPath, `t,elapsedMin,${ROLES.map((r) => `${r}MB`).join(",")},
 const started = Date.now();
 const rows = [];
 console.log(`soak-rss: ${MINUTES} min every ${INTERVAL_SEC} s -> ${csvPath}`);
-while (Date.now() - started < MINUTES * 60_000) {
+// One sample every interval plus one at the very end, so a helper that dies in the last
+// interval still fails the run (soakSchedule, tested in tests/dayRecorderTools.test.ts).
+for (const at of soakSchedule(MINUTES * 60_000, INTERVAL_SEC * 1000)) {
+  const wait = started + at - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+
   const { byRole, helperPids } = sample();
   const media = mediaCounts();
   const elapsedMin = (Date.now() - started) / 60_000;
@@ -98,7 +103,6 @@ while (Date.now() - started < MINUTES * 60_000) {
     csvPath,
     `${new Date().toISOString()},${elapsedMin.toFixed(2)},${ROLES.map((r) => (byRole[r] ?? 0).toFixed(1)).join(",")},${helperPids.join(" ")},${media.shots},${media.segments},${media.partials}\n`
   );
-  await new Promise((r) => setTimeout(r, INTERVAL_SEC * 1000));
 }
 
 // R2, judged in scripts/lib/dayRecorderTools.mjs (tested there): growth from the warmup mark,

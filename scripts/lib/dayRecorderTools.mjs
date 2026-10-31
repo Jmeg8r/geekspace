@@ -54,3 +54,25 @@ export function judgeSoak(rows, { warmupMinutes, limitMB }) {
   }
   return { pass: failures.length === 0, failures, growth, helperPids: [...pids] };
 }
+
+/**
+ * An error in the ctl script's own input (usage, a flag, a marker label). Its message is the
+ * script's own wording, so it is safe to print. WHY a class: whether an error is ours is
+ * decided by type, never by its text, because a backend message can look like ours (Codex
+ * re-check of #80).
+ */
+export class CtlUsageError extends Error {
+  name = "CtlUsageError";
+}
+
+/**
+ * When a soak takes its samples, in ms from the start: every `intervalMs`, plus one at
+ * `totalMs` itself. WHY the last one: a helper that dies after the final interval sample must
+ * still fail the run (Codex re-check of #80).
+ */
+export function soakSchedule(totalMs, intervalMs) {
+  const times = [];
+  for (let t = 0; t < totalMs; t += intervalMs) times.push(t);
+  times.push(totalMs);
+  return times;
+}
