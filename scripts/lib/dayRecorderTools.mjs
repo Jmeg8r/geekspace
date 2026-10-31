@@ -76,3 +76,21 @@ export function soakSchedule(totalMs, intervalMs) {
   times.push(totalMs);
   return times;
 }
+
+const BUNDLED_HELPER = "Geekspace.app/Contents/Resources/gs-capture";
+
+/**
+ * Which part of the app a process is, from its executable path, or null for anything else.
+ * WHY only the bundled helper counts: a stray `gs-capture` run (a dev build, a diagnostic
+ * subcommand) must not stand in for the recorder's own helper in a soak verdict (Codex
+ * re-check round 3 of #80).
+ */
+export function processRole(comm) {
+  if (comm.endsWith(BUNDLED_HELPER)) return "helper";
+  if (!comm.includes("Geekspace.app/")) return null;
+  if (comm.endsWith("Contents/MacOS/Geekspace")) return "main";
+  if (comm.includes("(Renderer)")) return "renderer";
+  if (comm.includes("(GPU)")) return "gpu";
+  if (comm.includes("convex-local-backend")) return "backend";
+  return "otherHelper";
+}

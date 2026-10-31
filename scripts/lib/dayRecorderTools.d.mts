@@ -41,3 +41,5 @@ export function judgeSoak(
 export class CtlUsageError extends Error {}
 
 export function soakSchedule(totalMs: number, intervalMs: number): number[];
+
+export function processRole(comm: string): "helper" | "main" | "renderer" | "gpu" | "backend" | "otherHelper" | null;

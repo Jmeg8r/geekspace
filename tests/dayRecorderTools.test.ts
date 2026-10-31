@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeCtlError, judgeSoak, safeSettings, soakSchedule, type SoakRow } from "../scripts/lib/dayRecorderTools.mjs";
+import { describeCtlError, judgeSoak, processRole, safeSettings, soakSchedule, type SoakRow } from "../scripts/lib/dayRecorderTools.mjs";
 
 // WHAT: the decisions behind the PR 3c part 2 tools (scripts/day-recorder-ctl.mjs and
 // scripts/soak-rss.mjs). WHY tested: the ctl script's output lands in terminals and evidence
@@ -153,5 +153,22 @@ describe("soakSchedule", () => {
 
   it("keeps the final sample when the interval doesn't divide the run", () => {
     expect(soakSchedule(100_000, 30_000)).toEqual([0, 30_000, 60_000, 90_000, 100_000]);
+  });
+});
+
+describe("processRole", () => {
+  // Codex re-check round 3 of #80: any gs-capture counted as the helper, so a stray
+  // diagnostic run could pass a soak with Geekspace stopped.
+  const APP = "/Volumes/x/release/mac-arm64/Geekspace.app";
+  it.each([
+    [`${APP}/Contents/Resources/gs-capture`, "helper"],
+    [`${APP}/Contents/MacOS/Geekspace`, "main"],
+    [`${APP}/Contents/Frameworks/Geekspace Helper (Renderer).app/Contents/MacOS/Geekspace Helper (Renderer)`, "renderer"],
+    [`${APP}/Contents/Resources/convex-local-backend`, "backend"],
+    ["/Volumes/x/native/gs-capture/.build/release/gs-capture", null],
+    ["gs-capture", null],
+    ["/usr/bin/top", null],
+  ])("classifies %s as %s", (comm, expected) => {
+    expect(processRole(comm)).toBe(expected);
   });
 });

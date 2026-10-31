@@ -1,5 +1,5 @@
-// WHAT: the plan PR 3c part 2 soak logger. Samples the resident memory of gs-capture and of
-// every Geekspace.app process, plus how many shot and segment files today's media folder
+// WHAT: the plan PR 3c part 2 soak logger. Samples the resident memory of every Geekspace.app
+// process, its bundled gs-capture included (a stray dev or diagnostic gs-capture doesn't count), plus how many shot and segment files today's media folder
 // holds, and judges spec R2: each process grows less than --limit-mb from the --warmup mark.
 // WHY files and RSS only: they need no access to captured content. Nothing here reads a
 // frame, a segment or OCR text, so the CSV and summary are safe to commit as evidence.
@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { judgeSoak, soakSchedule } from "./lib/dayRecorderTools.mjs";
+import { judgeSoak, processRole, soakSchedule } from "./lib/dayRecorderTools.mjs";
 
 const args = process.argv.slice(2);
 function num(name, fallback) {
@@ -30,16 +30,6 @@ const OUT = outIndex >= 0 ? args[outIndex + 1] : path.join(os.homedir(), "gs-par
 const MEDIA_ROOT = process.env.GS_MEDIA_ROOT ?? path.join(os.homedir(), "Library", "Application Support", "Geekspace", "day-recorder");
 const KB_PER_MB = 1024;
 
-/** Which part of the app a process is, from its executable path. */
-function role(comm) {
-  if (comm.endsWith("/gs-capture") || comm === "gs-capture") return "helper";
-  if (!comm.includes("Geekspace.app/")) return null;
-  if (comm.endsWith("Contents/MacOS/Geekspace")) return "main";
-  if (comm.includes("(Renderer)")) return "renderer";
-  if (comm.includes("(GPU)")) return "gpu";
-  if (comm.includes("convex-local-backend")) return "backend";
-  return "otherHelper";
-}
 
 function sample() {
   const out = execFileSync("ps", ["-axo", "pid=,rss=,comm="], { encoding: "utf8" });
@@ -48,7 +38,7 @@ function sample() {
   for (const raw of out.split("\n")) {
     const m = raw.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
     if (!m) continue;
-    const r = role(m[3]);
+    const r = processRole(m[3]);
     if (!r) continue;
     byRole[r] = (byRole[r] ?? 0) + Number(m[2]) / KB_PER_MB;
     if (r === "helper") helperPids.push(Number(m[1]));
