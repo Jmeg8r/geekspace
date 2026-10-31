@@ -60,6 +60,20 @@ const api = {
     },
     saveDone: (ok, error) => invoke("gs:recorder:saveDone", { ok: ok === true, error }),
   },
+  // Day Recorder controls (plan PR 3d-1). Each is a saved settings change; capture follows.
+  // The rest of the spec's namespace lands with its feature: notices in PR 4, images, drafts,
+  // undo and the API key in PR 6.
+  dayRecorder: {
+    status: () => invoke("gs:dayRecorder:status"),
+    setEnabled: (enabled) => invoke("gs:dayRecorder:setEnabled", { enabled }),
+    pause: () => invoke("gs:dayRecorder:pause"),
+    resume: () => invoke("gs:dayRecorder:resume"),
+    onEvent: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on("gs:dayRecorder:event", listener);
+      return () => ipcRenderer.removeListener("gs:dayRecorder:event", listener);
+    },
+  },
   chrome: {
     setOverlay: (color, symbolColor) => invoke("gs:chrome:setOverlay", { color, symbolColor }),
   },

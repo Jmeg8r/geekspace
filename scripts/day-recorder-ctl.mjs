@@ -37,6 +37,8 @@ async function main([command, ...args]) {
       const shotSec = flag(args, "shot-sec");
       await client.mutation(api.dayRecorder.updateSettings, {
         enabled: true,
+        // As the app's own control does: turning on clears a saved pause (dayRecorderIpc.mjs).
+        paused: false,
         ...(denylist !== undefined && { denylist: denylist.split(",").filter(Boolean) }),
         ...(shotSec !== undefined && { shotSec: Number(shotSec) }),
       });

@@ -103,8 +103,14 @@ function harness(overrides: Partial<ServiceOptions> = {}) {
   return { service, sup, events, purges };
 }
 
-const on = (denylist: string[] = [], shotSec = 30): RecorderSettings => ({ enabled: true, denylist, shotSec });
-const OFF: RecorderSettings = { enabled: false, denylist: [], shotSec: 30 };
+const on = (denylist: string[] = [], shotSec = 30): RecorderSettings => ({
+  enabled: true,
+  paused: false,
+  denylist,
+  shotSec,
+});
+const OFF: RecorderSettings = { enabled: false, paused: false, denylist: [], shotSec: 30 };
+const PAUSED: RecorderSettings = { ...on(), paused: true };
 
 describe("Day Recorder service", () => {
   it("starts the helper with the settings once both gates pass", async () => {
@@ -445,5 +451,71 @@ describe("Day Recorder service, retry after a failure", () => {
     await tick();
     expect(starts(h)).toBe(5);
     await h.service.shutdown();
+  });
+});
+
+describe("Day Recorder service, pause", () => {
+  // Decision 2026-10-31 (James): pause is a saved setting, so a paused recorder stays paused
+  // across a relaunch or crash. Pause stops the helper but leaves the recorder enabled.
+  const starts = (h: ReturnType<typeof harness>) => h.sup.calls.filter((c) => c.op === "start").length;
+  const tick = (ms = 30) => vi.advanceTimersByTimeAsync(ms);
+
+  it("starts nothing when the saved settings are paused, as after a relaunch", async () => {
+    const h = harness();
+    await h.service.apply(PAUSED);
+    expect(h.sup.calls).toEqual([]);
+    expect(h.service.status()).toEqual({ status: "paused" });
+  });
+
+  it("stops a running helper on pause and starts it again on resume", async () => {
+    const h = harness();
+    await h.service.apply(on());
+    await h.service.apply(PAUSED);
+    expect(h.sup.calls.map((c) => c.op)).toEqual(["start", "stop"]);
+    expect(h.service.running()).toBe(false);
+    expect(h.service.status()).toEqual({ status: "paused" });
+    await h.service.apply(on());
+    expect(starts(h)).toBe(2);
+    expect(h.service.status()).toEqual({ status: "recording" });
+  });
+
+  it("reports off, not paused, when the recorder is turned off while paused", async () => {
+    const h = harness();
+    await h.service.apply({ ...OFF, paused: true });
+    expect(h.service.status()).toEqual({ status: "off" });
+  });
+
+  it("does not retry a failed helper once the recorder is paused", async () => {
+    const h = harness({ retryDelaysMs: [10], retryResetMs: 1000 });
+    await h.service.apply(on());
+    h.sup.fail("helper crashed");
+    await h.service.apply(PAUSED);
+    await tick(80);
+    expect(starts(h)).toBe(1);
+    expect(h.service.status()).toEqual({ status: "paused" });
+  });
+
+  it("starts nothing when pause arrives while a gate is pending", async () => {
+    // Codex #88 r1 [P2]: pause has to land while the start is inside its gate, not before
+    // the start has begun, or the test passes on an implementation that ignores it.
+    const gate = deferred<{ ok: true }>();
+    const entered = deferred();
+    const h = harness({
+      gates: {
+        fileVault: () => {
+          entered.resolve();
+          return gate.promise;
+        },
+        backupExclusion: async () => ({ ok: true }),
+      },
+    });
+    const first = h.service.apply(on());
+    await entered.promise;
+    expect(h.service.status()).toEqual({ status: "starting" });
+    const second = h.service.apply(PAUSED);
+    gate.resolve({ ok: true });
+    await Promise.all([first, second]);
+    expect(starts(h)).toBe(0);
+    expect(h.service.status()).toEqual({ status: "paused" });
   });
 });

@@ -39,6 +39,7 @@ import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { oneTurnAtATime } from "./agentShared.mjs";
 import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
+import { forwardStatus, registerDayRecorderIpc } from "./dayRecorderIpc.mjs";
 import { startDayRecorder } from "./dayRecorderRuntime.mjs";
 import { createQuitHold } from "./dayRecorderService.mjs";
 import {
@@ -503,6 +504,7 @@ app.whenReady().then(async () => {
   try {
     const recorder = startDayRecorder({ convexUrl: convexUrl() });
     dayRecorder = recorder;
+    forwardStatus({ service: recorder.service, windows: () => BrowserWindow.getAllWindows() });
     holdQuitForDayRecorder = createQuitHold({
       stop: () => recorder.stop(),
       quit: () => app.quit(),
@@ -531,6 +533,8 @@ let shuttingDown = false;
 // Kept for the process-exit kill, even while (and after) the recorder is stopping.
 let dayRecorder = null;
 let holdQuitForDayRecorder = null;
+// Registered before the recorder exists: until it starts, or if it failed to, they say so.
+registerDayRecorderIpc({ handle, recorder: () => dayRecorder });
 app.on("before-quit", (event) => {
   // The recording guard runs first: saving needs the backend still up. While the save
   // handshake runs, a second quit is held back too (the recorder is idle by then).

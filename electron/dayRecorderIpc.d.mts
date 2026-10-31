@@ -1,0 +1,35 @@
+// WHAT: types for the Day Recorder's renderer controls, so tests/ can import them.
+import type { RecorderStatus } from "./dayRecorderService.mjs";
+
+export const DAY_RECORDER_EVENT: "gs:dayRecorder:event";
+
+export type SettingsPatch = { enabled?: boolean; paused?: boolean };
+
+export type DayRecorderControls = {
+  setEnabled: (enabled: boolean) => Promise<void>;
+  pause: () => Promise<void>;
+  resume: () => Promise<void>;
+};
+
+export function createDayRecorderControls(updateSettings: (patch: SettingsPatch) => Promise<void>): DayRecorderControls;
+
+export type ControllableRecorder = DayRecorderControls & { service: { status: () => RecorderStatus } };
+
+/** What a page can send. setEnabled checks `enabled` itself, so a wrong type is refused there. */
+export type ControlArgs = { enabled?: boolean | string | number | null | object };
+export type ControlHandler = (args: ControlArgs) => RecorderStatus | Promise<void>;
+
+export function registerDayRecorderIpc(options: {
+  handle: (channel: string, fn: ControlHandler) => void;
+  recorder: () => ControllableRecorder | null;
+}): void;
+
+export type StatusWindow = {
+  isDestroyed: () => boolean;
+  webContents: { send: (channel: string, payload: unknown) => void };
+};
+
+export function forwardStatus(options: {
+  service: { onStatus: (cb: (status: RecorderStatus) => void) => () => void };
+  windows: () => StatusWindow[];
+}): () => void;

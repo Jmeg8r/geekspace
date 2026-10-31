@@ -160,10 +160,11 @@ describe("dayRecorder retention", () => {
 });
 
 describe("dayRecorder settings", () => {
-  it("defaults to off, an empty denylist, no cap, 30 s shots and 15 min batches", async () => {
+  it("defaults to off, unpaused, an empty denylist, no cap, 30 s shots and 15 min batches", async () => {
     const t = convexTest(schema, modules);
     expect(await t.query(api.dayRecorder.getSettings, {})).toEqual({
       enabled: false,
+      paused: false,
       denylist: [],
       dailyCapUsd: null,
       batchMin: 15,
@@ -183,6 +184,15 @@ describe("dayRecorder settings", () => {
       denylist: ["com.microsoft.teams2", "us.zoom.xos"],
       dailyCapUsd: 2.5,
     });
+  });
+
+  it("saves pause apart from enabled, so a paused recorder stays enabled", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.updateSettings, { enabled: true });
+    await t.mutation(api.dayRecorder.updateSettings, { paused: true });
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ enabled: true, paused: true });
+    await t.mutation(api.dayRecorder.updateSettings, { paused: false });
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ enabled: true, paused: false });
   });
 
   it.each([

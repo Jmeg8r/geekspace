@@ -10,12 +10,20 @@ describe("safeSettings", () => {
   it("reports the denylist as a count, never its bundle ids", () => {
     const out = safeSettings({
       enabled: true,
+      paused: false,
       denylist: ["com.example.private-one", "com.example.private-two"],
       shotSec: 30,
       batchMin: 15,
       dailyCapUsd: null,
     });
-    expect(out).toEqual({ enabled: true, denylistCount: 2, shotSec: 30, batchMin: 15, dailyCapSet: false });
+    expect(out).toEqual({
+      enabled: true,
+      paused: false,
+      denylistCount: 2,
+      shotSec: 30,
+      batchMin: 15,
+      dailyCapSet: false,
+    });
     expect(JSON.stringify(out)).not.toMatch(/com\.example/);
   });
 });

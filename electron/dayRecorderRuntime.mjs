@@ -3,8 +3,8 @@
 // client, and a log file next to the backend's.
 // WHY a main-process client: capture runs whether or not a window is open, so the rows for
 // what the helper writes can't depend on the renderer. Settings arrive by subscription, so
-// turning the recorder on, or editing the denylist, reaches the helper without IPC (the
-// renderer's controls come in PR 3d/3e).
+// turning the recorder on, pausing it, or editing the denylist reaches the helper the same
+// way whether the change came from the renderer's controls (dayRecorderIpc.mjs) or not.
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +15,7 @@ import { anyApi as api } from "convex/server";
 import { contentFreeLogger, createFileLog, createSupervisor } from "./dayRecorder.mjs";
 import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired } from "./dayRecorderMedia.mjs";
+import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { createDayRecorderService } from "./dayRecorderService.mjs";
 
 const GEEKSPACE_DIR = path.join(app.getPath("appData"), "Geekspace");
@@ -73,12 +74,13 @@ export function startDayRecorder({ convexUrl }) {
   const unsubscribe = client.onUpdate(
     api.dayRecorder.getSettings,
     {},
-    (s) => void service.apply({ enabled: s.enabled, denylist: s.denylist, shotSec: s.shotSec }),
+    (s) => void service.apply({ enabled: s.enabled, paused: s.paused, denylist: s.denylist, shotSec: s.shotSec }),
     (err) => log(`could not read Day Recorder settings: ${err?.message ?? err}`)
   );
 
   return {
     service,
+    ...createDayRecorderControls(rows(api.dayRecorder.updateSettings)),
     async stop() {
       unsubscribe();
       await service.shutdown();

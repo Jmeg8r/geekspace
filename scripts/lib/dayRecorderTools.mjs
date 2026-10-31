@@ -9,6 +9,7 @@
 export function safeSettings(s) {
   return {
     enabled: s.enabled,
+    paused: s.paused,
     denylistCount: s.denylist.length,
     shotSec: s.shotSec,
     batchMin: s.batchMin,

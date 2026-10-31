@@ -1405,3 +1405,46 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     counts only `Geekspace.app/Contents/Resources/gs-capture`.
   - **Round 4 (PASS, `[P1] none`, `[P2] none`):** the review loop stops here (L42 cap).
   - `npm run verify`: 45 files, 466 tests.
+- **2026-10-31, PR 3c, re-check after the dependency bumps (#86, Electron 42.11.18).** A
+  signed `npm run package` from `ed5cadf` passed runbook steps 1 and 2.
+  - The signature and entitlements matched the earlier run.
+  - Recording began 3.4 s after `on`, screenshots landed, and a finished system-audio
+    segment was written.
+  - The first attempt was rejected: settings left on from earlier started the recorder at
+    launch, before `on`. The redo went off, then a marker, then on.
+  - Evidence: `~/gs-part2-evidence/post-deps-2026-10-31/`.
+- **2026-10-31, PR 3 is now 3a–3e with 3d split in two (James).** Same reason as the first
+  split: #80's 30 files strained the ai-review gate.
+  - **3d-1:** the renderer's controls, IPC and preload, and a saved pause.
+  - **3d-2:** mic capture, its own preload, and `probe:segment-decode`.
+- **2026-10-31, PR 3d-1, pause is a saved setting (James).**
+  - `settings.dayRecorderPaused` is apart from `dayRecorderEnabled`, so a paused recorder
+    stays paused across a relaunch or crash.
+  - Runtime-only pause would let a crash quietly resume recording, because the recorder is
+    still enabled.
+  - The service treats paused like stopped, reports `paused`, and never retries a failure
+    once paused. Turning the recorder on clears a saved pause (`day-recorder-ctl on` too).
+- **2026-10-31, PR 3d-1, the preload exposes only the controls that exist.**
+  - `dayRecorder` has `status`, `setEnabled`, `pause`, `resume` and `onEvent`.
+  - `noticeGiven`/`noticeDeclined` move to PR 4. `requestImage`, `approveDraft`, `undo` and
+    `setApiKey` move to PR 6, each with its feature, so the preload never exposes a stub.
+  - Each control is a settings patch, not a direct call into the service: capture follows
+    settings by subscription, so a control behaves the same now and after a relaunch.
+  - `electron/dayRecorderIpc.mjs` registers the four channels through `main.mjs`'s
+    `handle()`, which refuses any sender but the app page. `setEnabled` refuses anything
+    but a boolean. A recorder that failed to start says "not running" rather than
+    reporting off.
+- **2026-10-31, PR 3d-1, live probe (signed package from `245b913`, through the real
+  page).** The DevTools protocol called `window.geekspace.dayRecorder.*` in the running
+  app's page, so the real preload, IPC and `handle()` path ran.
+  - The namespace exposed exactly the five calls.
+  - `setEnabled(true)` reached Recording with one helper. `pause()` stopped it: zero
+    helpers, status `paused`.
+  - A real quit and relaunch came back `paused`, with no `starting` in the log first and no
+    helper. `resume()` reached Recording again, and `setEnabled(false)` reached off with
+    zero helpers.
+  - `setEnabled("yes")` returned `{ ok: false, error: "setEnabled needs true or false" }`,
+    and the status stayed `paused`.
+  - **For 3e:** pause emits `stopping`, then `off`, then `paused`, because the supervisor's
+    own `off` is passed through first. The UI should not flash Off on pause.
+  - Evidence: `~/gs-part2-evidence/pr3d1-ipc-2026-10-31/status.log` (status lines only).

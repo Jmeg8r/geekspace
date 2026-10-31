@@ -38,6 +38,7 @@ export const getSettings = query({
     const s = await settingsDoc(ctx);
     return {
       enabled: s?.dayRecorderEnabled ?? false,
+      paused: s?.dayRecorderPaused ?? false,
       denylist: s?.dayRecorderDenylist ?? [],
       // No cap set means the assistant does not run (spec F-cap; see assistant.capStatus).
       dailyCapUsd: s?.assistantDailyCapUsd ?? null,
@@ -52,6 +53,7 @@ export const getSettings = query({
 export const updateSettings = mutation({
   args: {
     enabled: v.optional(v.boolean()),
+    paused: v.optional(v.boolean()),
     denylist: v.optional(v.array(v.string())),
     dailyCapUsd: v.optional(v.number()),
     batchMin: v.optional(v.number()),
@@ -64,6 +66,7 @@ export const updateSettings = mutation({
     if (args.shotSec !== undefined) assertShotSec(args.shotSec);
     const patch = {
       ...(args.enabled !== undefined && { dayRecorderEnabled: args.enabled }),
+      ...(args.paused !== undefined && { dayRecorderPaused: args.paused }),
       ...(args.denylist !== undefined && { dayRecorderDenylist: [...new Set(args.denylist)] }),
       ...(args.dailyCapUsd !== undefined && { assistantDailyCapUsd: args.dailyCapUsd }),
       ...(args.batchMin !== undefined && { assistantBatchMin: args.batchMin }),
