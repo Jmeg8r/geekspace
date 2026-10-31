@@ -519,3 +519,31 @@ describe("Day Recorder service, pause", () => {
     expect(h.service.status()).toEqual({ status: "paused" });
   });
 });
+
+describe("Day Recorder service, mic state", () => {
+  // Decision 2026-10-31 (James): a mic failure degrades loudly. Screens and system audio carry
+  // on, and the Recording status carries the mic's own state, so nothing claims a full recording.
+  it("carries the mic's state on Recording and tells listeners", async () => {
+    const h = harness();
+    const seen: string[] = [];
+    h.service.onStatus((s) => void seen.push(JSON.stringify(s)));
+    await h.service.apply(on());
+    h.service.setMic({ state: "error", kind: "denied", error: "Microphone access is off for Geekspace." });
+    expect(h.service.status()).toEqual({
+      status: "recording",
+      mic: { state: "error", kind: "denied", error: "Microphone access is off for Geekspace." },
+    });
+    expect(seen.at(-1)).toContain('"mic"');
+    expect(h.service.running()).toBe(true);
+  });
+
+  it("leaves the mic out of every status but Recording", async () => {
+    const h = harness();
+    h.service.setMic({ state: "ok" });
+    expect(h.service.status()).toEqual({ status: "off" });
+    await h.service.apply(on());
+    expect(h.service.status()).toEqual({ status: "recording", mic: { state: "ok" } });
+    await h.service.apply(PAUSED);
+    expect(h.service.status()).toEqual({ status: "paused" });
+  });
+});
