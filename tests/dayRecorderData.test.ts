@@ -195,3 +195,45 @@ describe("dayRecorder settings", () => {
     await expect(t.mutation(api.dayRecorder.updateSettings, patch)).rejects.toThrow(message);
   });
 });
+
+describe("dayRecorder capture day vs capture time", () => {
+  // Decision 2026-10-21 (CSO finding 4016f9d6): a row's day must be a local day its own
+  // capture time could fall on, in some timezone (UTC-12 to UTC+14), so the purge, which
+  // selects by time, can never be pointed at a current day's file.
+  it("rejects a screenshot whose day is far from its takenAt", async () => {
+    const t = convexTest(schema, modules);
+    await expect(
+      t.mutation(api.dayRecorder.addScreenshot, {
+        day: "2026-10-18",
+        path: "2026-10-18/shot-150000-000.heic",
+        takenAt: 0,
+        ocrText: "SYNTHETIC",
+      })
+    ).rejects.toThrow(/does not match its capture time/);
+  });
+
+  it("rejects a segment whose day is far from its start", async () => {
+    const t = convexTest(schema, modules);
+    await expect(
+      t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 31 * DAY_MS }))
+    ).rejects.toThrow(/does not match its capture time/);
+  });
+
+  it.each([
+    ["UTC+14, just after local midnight", Date.UTC(2026, 9, 17, 10, 0, 1)],
+    ["UTC-12, just before local midnight", Date.UTC(2026, 9, 19, 11, 59, 59)],
+  ])("accepts the edge of the day window: %s", async (_name, start) => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.addSegment, segment({ start }))).resolves.toBeTruthy();
+  });
+
+  it.each([
+    ["before any timezone's midnight", Date.UTC(2026, 9, 17, 9, 59, 59)],
+    ["after every timezone's midnight", Date.UTC(2026, 9, 19, 12, 0, 0)],
+  ])("rejects just outside the window: %s", async (_name, start) => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.addSegment, segment({ start }))).rejects.toThrow(
+      /does not match its capture time/
+    );
+  });
+});

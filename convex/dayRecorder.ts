@@ -8,6 +8,7 @@ import {
   DEFAULT_SHOT_SEC,
   assertBatchMin,
   assertBundleId,
+  assertCaptureDay,
   assertCount,
   assertDailyCap,
   assertDay,
@@ -114,6 +115,7 @@ export const addSegment = mutation({
     assertDay(args.day);
     assertMediaPath(args.path, args.day);
     assertSpan(args.start, args.end);
+    assertCaptureDay(args.day, args.start);
     // Spec R5 / F3: call audio reaches disk only after James gave the recording notice.
     // This is the last line of that guarantee, so it checks the event itself, not a flag.
     if (args.kind === "call") {
@@ -171,6 +173,7 @@ export const addScreenshot = mutation({
     assertDay(args.day);
     assertMediaPath(args.path, args.day);
     assertTime("takenAt", args.takenAt);
+    assertCaptureDay(args.day, args.takenAt);
     if (args.appBundleId !== undefined) assertBundleId(args.appBundleId);
     assertText("OCR text", args.ocrText);
     return ctx.db.insert("screenshots", args);

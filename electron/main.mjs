@@ -39,6 +39,8 @@ import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { oneTurnAtATime } from "./agentShared.mjs";
 import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
+import { startDayRecorder } from "./dayRecorderRuntime.mjs";
+import { createQuitHold } from "./dayRecorderService.mjs";
 import {
   getFunctionSyncResult,
   getLogPath as convexLogPath,
@@ -497,6 +499,18 @@ app.whenReady().then(async () => {
   process.env.CONVEX_URL = convexUrl();
 
   createWindow();
+  // Follows the Day Recorder settings; it starts nothing until the recorder is turned on.
+  try {
+    const recorder = startDayRecorder({ convexUrl: convexUrl() });
+    dayRecorder = recorder;
+    holdQuitForDayRecorder = createQuitHold({
+      stop: () => recorder.stop(),
+      quit: () => app.quit(),
+      log: (message) => console.error(message),
+    });
+  } catch (err) {
+    console.error("Day Recorder could not start", err);
+  }
   // Warm the knowledge connector (connect + tools/list only — no quota used).
   prewarmKnowledge().catch(() => {});
   // Warm the reader connector (spawns aib-reader-mcp + tools/list).
@@ -514,6 +528,9 @@ app.on("window-all-closed", () => {
 // `convex dev` we merely attached to). before-quit can fire before async work
 // settles, so defer the real quit until SIGTERM completes.
 let shuttingDown = false;
+// Kept for the process-exit kill, even while (and after) the recorder is stopping.
+let dayRecorder = null;
+let holdQuitForDayRecorder = null;
 app.on("before-quit", (event) => {
   // The recording guard runs first: saving needs the backend still up. While the save
   // handshake runs, a second quit is held back too (the recorder is idle by then).
@@ -527,11 +544,17 @@ app.on("before-quit", (event) => {
     void confirmLeaveWhileRecording(win);
     return;
   }
+  // Before the backend: SIGTERM finalizes the open segment, and its row needs the backend.
+  // Every quit is held until that stop finishes, then one quit goes through.
+  if (holdQuitForDayRecorder?.(event)) return;
   if (shuttingDown || !convexManaged()) return;
   event.preventDefault();
   shuttingDown = true;
   stopConvex().finally(() => app.quit());
 });
 
-// Last resort: never leak the backend if the parent dies unexpectedly.
-process.on("exit", killBackendSync);
+// Last resort: never leak the backend or a capturing helper if the parent dies unexpectedly.
+process.on("exit", () => {
+  dayRecorder?.killSync();
+  killBackendSync();
+});
