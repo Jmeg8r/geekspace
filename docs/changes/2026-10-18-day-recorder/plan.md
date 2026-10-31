@@ -1382,3 +1382,26 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **3c:** an output change is no failure for the tap, and the proof is now "no silent loss".
   - **Still unproven live:** the 1 s stalled-delivery check, covered by `swift test` only.
   - **For 3e's UI:** hide the `status: off` blip during a retry.
+- **2026-10-31, PR 3c, final Codex check before ready: 4 rounds, ending with a clean PASS.**
+  The scope was the code since `2fa4d33`: the TCC-wording retry fix, the fake-timer tests,
+  the status-line logging, `soak-rss` and `day-recorder-ctl`.
+  - **Round 1 (FAIL; 1 × P1, 1 × P2):**
+    - P1: `ctl on` and `settings` printed the whole settings object, denylisted bundle ids
+      included.
+    - P2: `soak-rss` passed if the helper vanished after the first sample.
+    - Fix: a safe settings view (the denylist as a count), and a verdict that requires the
+      helper in every sample and a warmup baseline. The decisions moved to
+      `scripts/lib/dayRecorderTools.mjs`.
+  - **Round 2 (FAIL; 2 × P1, 1 × P2):**
+    - Errors were treated as the script's own by message text, which a backend error could
+      imitate.
+    - The Convex HTTP client printed backend `logLines` itself, the same class as the
+      main-process P1 in #80's round 1.
+    - The soak took no sample after its last sleep.
+    - Fix: `CtlUsageError` (decided by type), `{ logger: false }`, and `soakSchedule` with a
+      final sample at the end. A script-level test now runs the real ctl against a fake
+      backend.
+  - **Round 3 (PASS; 1 × P2):** any `gs-capture` counted as the helper. Fix: `processRole`
+    counts only `Geekspace.app/Contents/Resources/gs-capture`.
+  - **Round 4 (PASS, `[P1] none`, `[P2] none`):** the review loop stops here (L42 cap).
+  - `npm run verify`: 45 files, 466 tests.
