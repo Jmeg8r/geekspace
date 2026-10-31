@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { ConvexHttpClient } from "convex/browser";
 import { anyApi as api } from "convex/server";
+import { describeCtlError, safeSettings } from "./lib/dayRecorderTools.mjs";
 
 const CONVEX_URL = process.env.CONVEX_URL ?? "http://127.0.0.1:3210";
 const EVIDENCE_DIR = process.env.GS_EVIDENCE_DIR ?? path.join(os.homedir(), "gs-part2-evidence");
@@ -37,7 +38,8 @@ async function main([command, ...args]) {
         ...(denylist !== undefined && { denylist: denylist.split(",").filter(Boolean) }),
         ...(shotSec !== undefined && { shotSec: Number(shotSec) }),
       });
-      console.log("Day Recorder: on", JSON.stringify(await client.query(api.dayRecorder.getSettings, {})));
+      // The denylist is printed as a count: a denylisted app is never named (protocol.md).
+      console.log("Day Recorder: on", JSON.stringify(safeSettings(await client.query(api.dayRecorder.getSettings, {}))));
       return;
     }
     case "off":
@@ -45,7 +47,7 @@ async function main([command, ...args]) {
       console.log("Day Recorder: off");
       return;
     case "settings":
-      console.log(JSON.stringify(await client.query(api.dayRecorder.getSettings, {}), null, 2));
+      console.log(JSON.stringify(safeSettings(await client.query(api.dayRecorder.getSettings, {})), null, 2));
       return;
     case "mark": {
       const label = args.join(" ");
@@ -62,11 +64,9 @@ async function main([command, ...args]) {
 }
 
 main(process.argv.slice(2)).catch((err) => {
-  const unreachable = /fetch failed|ECONNREFUSED/.test(String(err?.message ?? err));
-  console.error(
-    unreachable
-      ? `day-recorder-ctl: no Geekspace backend at ${CONVEX_URL}. Open Geekspace first (it starts the backend).`
-      : `day-recorder-ctl: ${err?.message ?? err}`
-  );
+  // Usage and label errors are this script's own wording; anything from the backend goes
+  // through describeCtlError, which never echoes the request (it can hold the denylist).
+  const own = err instanceof Error && /^(usage:|mark needs|--)/.test(err.message);
+  console.error(`day-recorder-ctl: ${own ? err.message : describeCtlError(err, CONVEX_URL)}`);
   process.exit(1);
 });

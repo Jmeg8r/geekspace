@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { judgeSoak } from "./lib/dayRecorderTools.mjs";
 
 const args = process.argv.slice(2);
 function num(name, fallback) {
@@ -86,11 +87,9 @@ fs.writeFileSync(csvPath, `t,elapsedMin,${ROLES.map((r) => `${r}MB`).join(",")},
 
 const started = Date.now();
 const rows = [];
-const helperPidsSeen = new Set();
 console.log(`soak-rss: ${MINUTES} min every ${INTERVAL_SEC} s -> ${csvPath}`);
 while (Date.now() - started < MINUTES * 60_000) {
   const { byRole, helperPids } = sample();
-  helperPids.forEach((p) => helperPidsSeen.add(p));
   const media = mediaCounts();
   const elapsedMin = (Date.now() - started) / 60_000;
   const row = { elapsedMin, byRole, helperPids, ...media };
@@ -102,26 +101,16 @@ while (Date.now() - started < MINUTES * 60_000) {
   await new Promise((r) => setTimeout(r, INTERVAL_SEC * 1000));
 }
 
-// R2: growth from the first sample at or after the warmup mark to the largest later sample.
-const base = rows.find((r) => r.elapsedMin >= WARMUP_MIN) ?? rows[0];
-const after = rows.filter((r) => r.elapsedMin >= base.elapsedMin);
-const growth = Object.fromEntries(
-  ROLES.filter((r) => base.byRole[r] !== undefined).map((r) => {
-    const peak = Math.max(...after.map((x) => x.byRole[r] ?? 0));
-    return [r, { atWarmupMB: +base.byRole[r].toFixed(1), peakMB: +peak.toFixed(1), growthMB: +(peak - base.byRole[r]).toFixed(1) }];
-  })
-);
+// R2, judged in scripts/lib/dayRecorderTools.mjs (tested there): growth from the warmup mark,
+// and the helper present in every sample with one pid.
+const verdict = judgeSoak(rows, { warmupMinutes: WARMUP_MIN, limitMB: LIMIT_MB });
+const { growth, failures } = verdict;
 const last = rows.at(-1);
-const failures = [
-  ...Object.entries(growth).filter(([, g]) => g.growthMB >= LIMIT_MB).map(([r, g]) => `${r} grew ${g.growthMB} MB`),
-  ...(helperPidsSeen.size === 0 ? ["gs-capture was never running"] : []),
-  ...(helperPidsSeen.size > 1 ? [`gs-capture restarted (${helperPidsSeen.size} pids)`] : []),
-];
 const summary = {
   minutes: MINUTES, intervalSec: INTERVAL_SEC, warmupMinutes: WARMUP_MIN, limitMB: LIMIT_MB,
-  samples: rows.length, helperPids: [...helperPidsSeen], growth,
+  samples: rows.length, helperPids: verdict.helperPids, growth,
   media: { shots: last.shots, segments: last.segments, partials: last.partials },
-  pass: failures.length === 0, failures, csv: path.basename(csvPath),
+  pass: verdict.pass, failures, csv: path.basename(csvPath),
 };
 fs.writeFileSync(path.join(OUT, `soak-rss-${stamp}.summary.json`), `${JSON.stringify(summary, null, 2)}\n`);
 console.log(JSON.stringify(summary, null, 2));
