@@ -27,7 +27,7 @@ export function registerDayRecorderIpc({ handle, recorder }) {
     if (!r) throw new Error(NOT_RUNNING);
     return r;
   };
-  handle("gs:dayRecorder:status", () => live().service.status());
+  handle("gs:dayRecorder:status", () => live().view.status());
   handle("gs:dayRecorder:setEnabled", ({ enabled }) => {
     if (typeof enabled !== "boolean") throw new Error("setEnabled needs true or false");
     return live().setEnabled(enabled);

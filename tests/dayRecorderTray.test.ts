@@ -251,15 +251,11 @@ describe("trayImage", () => {
   });
 });
 
+type FakeTray = { image: string; title: string; tooltip: string; menu: MenuItem[]; destroyed: boolean };
+
 function indicator(opts: { platform?: string; register?: boolean; initial?: RecorderStatus } = {}) {
   const source = fakeSource(opts.initial);
-  const trays: {
-    image: string;
-    title: string;
-    tooltip: string;
-    menu: MenuItem[];
-    destroyed: boolean;
-  }[] = [];
+  const trays: FakeTray[] = [];
   let pressed: (() => void) | null = null;
   const shortcut = {
     register: vi.fn((_accelerator: string, cb: () => void) => {
@@ -279,7 +275,7 @@ function indicator(opts: { platform?: string; register?: boolean; initial?: Reco
     view: source,
     platform: opts.platform ?? "darwin",
     createTray: (image) => {
-      const t = { image, title: "", tooltip: "", menu: [] as MenuItem[], destroyed: false };
+      const t: FakeTray = { image, title: "", tooltip: "", menu: [], destroyed: false };
       trays.push(t);
       return {
         setImage: (i) => void (t.image = i),
