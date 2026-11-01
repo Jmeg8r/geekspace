@@ -370,6 +370,48 @@ describe("createDayAssistant.runBatch, round 2", () => {
   });
 });
 
+// Codex 6a r3 P1: an oldest item that couldn't fit even in its smallest part blocked an
+// affordable one behind it; and a part could end inside a surrogate pair.
+describe("createDayAssistant.runBatch, round 3", () => {
+  it("[P1] an item that can't fit is left for later, and the ones that fit are sent", async () => {
+    const h = harness({
+      cap: { capUsd: 0.05, spentUsd: 0, reached: false },
+      input: {
+        transcripts: [
+          { _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 500_000, text: "中".repeat(10_000) },
+          { _id: "tr2", segmentId: "seg2", start: Date.now() - 400_000, end: Date.now() - 300_000, text: "SYNTHETIC Send deck" },
+        ],
+        screenshots: [],
+      },
+    });
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    expect(JSON.stringify(h.requests[0])).toContain("SYNTHETIC Send deck");
+    expect(h.begun[0].transcriptIds).toContain("tr2");
+  });
+
+  it("[P1] never ends a part inside a surrogate pair", async () => {
+    const text = "x".repeat(7_999) + "😀" + "tail";
+    const h = harness({
+      input: { transcripts: [{ _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 300_000, text }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    const end = h.begun[0].transcriptEnds?.[0] ?? 0;
+    expect(end).toBe(7_999);
+    const sent = h.requests[0].messages[0].content;
+    expect(sent).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it("[P1] continues a text with its pair whole", async () => {
+    const text = "x".repeat(7_999) + "😀" + "tail";
+    const h = harness({
+      input: { transcripts: [{ _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 300_000, text, readChars: 7_999 }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    expect(h.requests[0].messages[0].content).toContain("😀tail");
+  });
+});
+
 describe("assistantClient", () => {
   it("[P1] never logs, whatever ANTHROPIC_LOG says", () => {
     vi.stubEnv("ANTHROPIC_LOG", "debug");
