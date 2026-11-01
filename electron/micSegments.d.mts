@@ -23,4 +23,6 @@ export function createMicSegmentWriter(options: {
   log: (message: string) => void;
   maxChunkBytes?: number;
   maxSegmentBytes?: number;
+  /** The clock a segment's start is checked against. */
+  now?: () => number;
 }): MicSegmentWriter;

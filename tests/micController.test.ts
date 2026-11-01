@@ -85,6 +85,16 @@ describe("createMicController", () => {
     expect(h.errors).toHaveLength(1);
   });
 
+  it.each([[{ type: "silent", silentSec: "25" }], [{ type: "silent", silentSec: -1 }], [{ type: "silent" }]])(
+    "treats a malformed silence report %j as a protocol error",
+    async (message) => {
+      const h = harness();
+      await h.controller.start();
+      h.controller.receive(h.fromWindow(), message);
+      expect(h.states.at(-1)).toMatchObject({ state: "error", kind: "protocol" });
+    }
+  );
+
   it("follows silence and signal from the window", async () => {
     const h = harness();
     await h.controller.start();

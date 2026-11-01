@@ -19,6 +19,11 @@ export const MAX_SEGMENT_BYTES = 64 * 1024 * 1024;
 const MAX_OPEN = 2;
 // How long close() waits for row writes still in flight.
 const DRAIN_MS = 5_000;
+// A segment starts now, give or take: a day back covers a window that ran across midnight or
+// a slow handoff, a minute ahead covers clock skew between processes. Anything else is not a
+// real start, and would only make a junk day folder.
+const START_PAST_MS = 86_400_000;
+const START_FUTURE_MS = 60_000;
 
 const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 const isSegment = (x) => Number.isSafeInteger(x) && x >= 0;
@@ -42,6 +47,7 @@ export function createMicSegmentWriter({
   log,
   maxChunkBytes = MAX_CHUNK_BYTES,
   maxSegmentBytes = MAX_SEGMENT_BYTES,
+  now = Date.now,
 }) {
   const open = new Map();
   const pending = new Set();
@@ -52,7 +58,10 @@ export function createMicSegmentWriter({
 
   function begin(segment, start) {
     if (!isSegment(segment)) return refuse("segmentStart needs a segment number");
-    if (!isNum(start) || start <= 0) return refuse("segmentStart needs a start time");
+    const t = now();
+    if (!isNum(start) || start < t - START_PAST_MS || start > t + START_FUTURE_MS) {
+      return refuse("segmentStart needs a start time near now");
+    }
     if (segment <= highest) return refuse(`segment ${segment} is not after segment ${highest}`);
     if (open.size >= MAX_OPEN) return refuse("too many segments open at once");
     const day = localDay(start);

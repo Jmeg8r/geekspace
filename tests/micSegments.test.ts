@@ -25,7 +25,7 @@ const DAY = localDay(START);
 const NAME = "mic-102000-005.webm";
 const bytes = (s: string) => new TextEncoder().encode(s).buffer;
 
-function harness(opts: { maxChunkBytes?: number; maxSegmentBytes?: number; failRows?: boolean } = {}) {
+function harness(opts: { maxChunkBytes?: number; maxSegmentBytes?: number; failRows?: boolean; now?: number } = {}) {
   const rows: MicSegmentRow[] = [];
   const logs: string[] = [];
   const writer = createMicSegmentWriter({
@@ -35,6 +35,7 @@ function harness(opts: { maxChunkBytes?: number; maxSegmentBytes?: number; failR
       rows.push(row);
     },
     log: (m) => void logs.push(m),
+    now: () => opts.now ?? START,
     ...(opts.maxChunkBytes !== undefined && { maxChunkBytes: opts.maxChunkBytes }),
     ...(opts.maxSegmentBytes !== undefined && { maxSegmentBytes: opts.maxSegmentBytes }),
   });
@@ -80,6 +81,10 @@ describe("createMicSegmentWriter", () => {
     [{ type: "segmentStart", segment: 1.5, start: START }, /segment/],
     [{ type: "segmentEnd", segment: 0, end: END }, /not started/],
     [null, /not a message/],
+    // Security review of 3d-2: a time far off the clock made an Invalid Date day folder.
+    [{ type: "segmentStart", segment: 0, start: 1e20 }, /start/],
+    [{ type: "segmentStart", segment: 0, start: START - 2 * 86_400_000 }, /start/],
+    [{ type: "segmentStart", segment: 0, start: START + 3_600_000 }, /start/],
     ["chunk", /not a message/],
   ])("refuses %j", (message, reason) => {
     const h = harness();

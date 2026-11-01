@@ -83,6 +83,11 @@ export function createMicController({
         if (!stopping) void teardown();
         return;
       case "silent":
+        if (!Number.isFinite(message.silentSec) || message.silentSec < 0) {
+          failMic("protocol", "the capture window sent a malformed silence report");
+          void stop();
+          return;
+        }
         if (state.state !== "error") setState({ state: "silent", silentSec: message.silentSec });
         return;
       case "signal":
