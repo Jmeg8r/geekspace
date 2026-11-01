@@ -27,6 +27,14 @@ func emit(_ object: [String: Any], terminal: Bool = false) {
     }
 }
 
+func placeWithoutReplacing(_ partial: URL, at final: URL) throws {
+    try FileManager.default.moveItem(at: partial, to: final)
+}
+
+func writeWithoutReplacing(_ data: Data, to final: URL) throws {
+    try data.write(to: final, options: .atomic)
+}
+
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write("gs-capture: \(message)\n".data(using: .utf8)!)
     exit(1)
