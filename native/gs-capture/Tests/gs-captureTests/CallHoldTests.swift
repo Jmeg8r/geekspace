@@ -456,4 +456,60 @@ final class CallRouterTests: XCTestCase {
         XCTAssertTrue(sink.system.isEmpty, "a held call's audio stays held, gap or not")
         XCTAssertTrue(router.canRelease)
     }
+
+    // Codex 4b r7 P1: the first poll could come late with nothing to compare it with, and a
+    // gap was kept inside a startup hold that a `call clear` then wrote as system audio.
+    func testALateFirstPollIsAGapFromCaptureStart() {
+        var t = 0.0
+        var gaps: [(Double, Double)] = []
+        let watcher = AudioUseWatcher(denylist: [], onGap: { gaps.append(($0, $1)) }, now: { t }, readProcesses: { _ in [] },
+                                      report: { _, _ in })
+        t = 3_000
+        watcher.tick(known: [])
+        XCTAssertEqual(gaps.count, 1)
+        XCTAssertEqual(gaps[0].0, -.infinity, "everything captured before the first poll")
+        XCTAssertEqual(gaps[0].1, 3_000 - AudioUse.detectionLagMs)
+    }
+
+    func testAPromptFirstPollIsNoGap() {
+        var t = 0.0
+        var gaps = 0
+        let watcher = AudioUseWatcher(denylist: [], onGap: { _, _ in gaps += 1 }, now: { t }, readProcesses: { _ in [] },
+                                      report: { _, _ in })
+        t = 50
+        watcher.tick(known: [])
+        XCTAssertEqual(gaps, 0)
+    }
+
+    func testAGapInsideTheStartupHoldIsNeverClearedAsSystemAudio() {
+        let sink = Sink()
+        var cleared: Double = -1
+        let router = CallRouter(maxSec: 60, startHeld: true,
+                                append: { sink.system.append($0.endMs - 10) },
+                                closeSystem: { sink.systemCloses += 1 },
+                                flush: { runs in sink.flushed.append(runs.map(\.startMs)); return runs.count },
+                                flushSystem: { runs in runs.count },
+                                report: { event, fields in if event == "callCleared" { cleared = fields["heldSec"] as? Double ?? -1 } })
+        router.gap(from: 1_000, to: 1_100)
+        for start in stride(from: 900.0, to: 1_200, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.clear(at: 1_200)
+        router.settle(frontier: 1_300)
+        XCTAssertEqual(cleared, 0.2, accuracy: 0.0001, "the 100 ms gap is dropped; 900-1000 and 1100-1200 are kept")
+    }
+
+    func testALateFirstPollDropsTheWholeStartupHold() {
+        let sink = Sink()
+        var cleared: Double = -1
+        let router = CallRouter(maxSec: 60, startHeld: true,
+                                append: { sink.system.append($0.endMs - 10) },
+                                closeSystem: { sink.systemCloses += 1 },
+                                flush: { runs in runs.count },
+                                flushSystem: { runs in runs.count },
+                                report: { event, fields in if event == "callCleared" { cleared = fields["heldSec"] as? Double ?? -1 } })
+        router.gap(from: -.infinity, to: 1_100)
+        for start in stride(from: 900.0, to: 1_200, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.clear(at: 1_200)
+        router.settle(frontier: 1_300)
+        XCTAssertEqual(cleared, 0.1, accuracy: 0.0001)
+    }
 }
