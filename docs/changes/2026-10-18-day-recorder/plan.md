@@ -1636,3 +1636,30 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-11-01, PR 3e-2, Codex: 4 rounds, ending PASS.** Round 1 FAIL (1 × P1, 3 × P2),
   round 2 FAIL (1 × P1, 2 × P2), round 3 FAIL (2 × P1, 2 × P2), round 4 PASS ([P1] none,
   1 × P2: the enabled thumb's contrast, fixed in `c85576c`).
+- **2026-11-01, PR 4 is split in two.** 4a is the helper's call hold and the supervisor's
+  commands; 4b is call detection, the room-mic pause, the notice and its prompt. Same reason
+  as 3d and 3e: each reviewable alone, and the gate reads the whole diff.
+- **2026-11-01, PR 4a, the call hold.** Built as planned (spec R5, F3), with these choices:
+  - **Commands on stdin** (`call hold`, `call release`, `call discard`): the helper reads
+    them on a thread and runs them on the recorder's control queue. Unknown or out-of-order
+    commands fail the helper. protocol.md "Commands" is the contract.
+  - **Held call audio is 16 kHz mono 16-bit PCM in memory** (32 KB/s, about 58 MB at the
+    1800 s cap: the 15-minute notice timeout and its one extension). A release writes it as
+    `call-` segments (16 kHz mono AAC, each decodes alone); a discard or a stop drops it.
+  - **Audio is routed sample by sample by when it was captured** (`CallRouter`), against the
+    moments the commands arrived. Codex round 1 found the 500 ms denylist hold-back sent a
+    discarded call's tail to a `sys-` file; round 2 found a chunk straddling a boundary, and
+    a callback that had stamped a chunk but not added it, could still do so. `PCMHold` now
+    registers each chunk under its lock before adding it, and a call settles only when the
+    frontier (held and in-flight chunks included) has passed its end.
+  - **The supervisor** sends the commands, keeps released notices in a queue, stores a `call`
+    segment only with the notice that released it, treats an unreleased one as a broken
+    helper, and stops capture if the command channel breaks.
+- **2026-11-01, PR 4a, live proof** (`npm run probe:call-hold`, release helper, real tap, a
+  synthetic tone): hold then release came back as one `call-` file that decodes at 16 kHz
+  with the tone in it (peak 0.25); hold then discard left nothing on disk; a `sys-` segment
+  closed at the hold, recording resumed after the release, no `sys-` segment covered a call's
+  time, and no partials were left. 11 of 11 checks passed at `57b125e`.
+- **2026-11-01, PR 4a, Codex: 3 rounds, ending PASS.** Round 1 FAIL (3 × P1), round 2 FAIL
+  (2 × P1, 1 × P2), round 3 PASS ([P1] none, 1 × P2: released segments could overshoot a
+  fractional `--segment-sec`, fixed in the commit after `3080b80`).
