@@ -6,6 +6,7 @@
 // nothing was turned off. The view holds that `off` back briefly; a real one still shows.
 // WHY Electron is passed in: so the tests drive the tray and the shortcut with fakes.
 import { crc32, deflateSync } from "node:zlib";
+import { statusCopy } from "./dayRecorderCopy.mjs";
 
 // The measured gaps are 0–1 ms (status lines in ~/gs-part2-evidence), so this is ample,
 // and a real `off` shows this much later at worst.
@@ -58,53 +59,8 @@ export function createStatusView(source) {
   };
 }
 
-export const SHORTCUT_TAKEN = " Another app is using ⌥⌘R, so pause and resume from this menu.";
-
-/** What the menu bar shows for a status (spec, UI states and copy); null means no tray. */
-export function trayView(status, { shortcut }) {
-  const view = stateView(status, shortcut);
-  return view && !shortcut ? { ...view, tooltip: `${view.tooltip}${SHORTCUT_TAKEN}` } : view;
-}
-
-function stateView(status, shortcut) {
-  switch (status.status) {
-    case "recording": {
-      const mic = status.mic;
-      if (mic?.state === "silent") {
-        return {
-          tone: "amber",
-          title: "Mic silent",
-          tooltip: `No sound from the microphone for ${mic.silentSec} seconds. Check the input in System Settings → Sound, or pause recording.`,
-          action: "pause",
-        };
-      }
-      if (mic?.state === "error") {
-        return {
-          tone: "amber",
-          title: "Recording without the mic",
-          tooltip: `Recording without the mic. ${mic.error} Screens and system audio are still recording.`,
-          action: "pause",
-        };
-      }
-      const tooltip = shortcut ? "Day Recorder is on. ⌥⌘R to pause." : "Day Recorder is on.";
-      return { tone: "red", title: "Recording", tooltip, action: "pause" };
-    }
-    case "paused":
-      return { tone: "hollow", title: "Paused", tooltip: "Recording paused. Resume when you're ready.", action: "resume" };
-    case "starting":
-      return { tone: "hollow", title: "Starting", tooltip: "Day Recorder is starting.", action: "pause" };
-    case "stopping":
-      return { tone: "hollow", title: "Stopping", tooltip: "Day Recorder is stopping.", action: "pause" };
-    case "notRecording": {
-      const retry = status.retryInMs ? ` Trying again in ${Math.round(status.retryInMs / 1000)} s.` : "";
-      return { tone: "grey", title: "Not recording", tooltip: `${status.error}${retry}`, action: "pause" };
-    }
-    case "blocked":
-      return { tone: "grey", title: "Not recording", tooltip: status.error, action: "pause" };
-    default:
-      return null;
-  }
-}
+// The state copy lives in dayRecorderCopy.mjs, shared with the app (plan PR 3e-2).
+export { SHORTCUT_TAKEN, statusCopy as trayView } from "./dayRecorderCopy.mjs";
 
 // Red and amber keep 3:1 against both a light and a dark menu bar (WCAG 1.4.11). Grey and
 // hollow are black template images, which macOS tints to suit the menu bar.
@@ -193,7 +149,7 @@ export function startRecorderIndicator({ view, platform, createTray, buildMenu, 
   };
 
   const render = (status) => {
-    if (!trayView(status, { shortcut: true })) {
+    if (!statusCopy(status, { shortcut: true })) {
       teardown();
       return;
     }
@@ -201,7 +157,7 @@ export function startRecorderIndicator({ view, platform, createTray, buildMenu, 
       shortcut = globalShortcut.register(PAUSE_ACCELERATOR, toggle);
       if (!shortcut) log("menu bar: ⌥⌘R is in use by another app, so pause and resume are in the menu only");
     }
-    const v = trayView(status, { shortcut });
+    const v = statusCopy(status, { shortcut });
     if (!tray) tray = createTray(createImage(v.tone));
     else if (v.tone !== tone) tray.setImage(createImage(v.tone));
     tone = v.tone;

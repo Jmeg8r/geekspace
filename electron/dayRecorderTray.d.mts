@@ -4,8 +4,7 @@ import type { RecorderStatus } from "./dayRecorderService.mjs";
 /** How long an `off` straight after `stopping` or `notRecording` is held back. */
 export const OFF_HOLD_MS: number;
 export const PAUSE_ACCELERATOR: "Alt+Command+R";
-/** Appended to every tooltip while another app holds ⌥⌘R. */
-export const SHORTCUT_TAKEN: string;
+export { SHORTCUT_TAKEN } from "./dayRecorderCopy.mjs";
 
 export type StatusSource = {
   status: () => RecorderStatus;
@@ -17,9 +16,9 @@ export type StatusView = StatusSource & { stop: () => void };
 /** The status the windows and the tray show: the service's, without the passing `off`. */
 export function createStatusView(source: StatusSource): StatusView;
 
-export type Tone = "red" | "amber" | "grey" | "hollow";
-
-export type TrayView = { tone: Tone; title: string; tooltip: string; action: "pause" | "resume" };
+import type { StatusCopy, Tone } from "./dayRecorderCopy.mjs";
+export type { Tone };
+export type TrayView = StatusCopy;
 
 /** What the menu bar shows for a status; null means no tray at all. */
 export function trayView(status: RecorderStatus, options: { shortcut: boolean }): TrayView | null;

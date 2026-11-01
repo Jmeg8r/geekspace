@@ -14,7 +14,14 @@ import {
 
 type Event = { type: "status"; status: RecorderStatus } | { type: "other" };
 
-function install(bridge: object | undefined) {
+type FakeBridge = {
+  status?: () => Promise<{ ok: true; data: RecorderStatus }>;
+  setEnabled?: (enabled: boolean) => Promise<{ ok: true; data: undefined }>;
+  pause?: () => Promise<{ ok: false; error: string }>;
+  onEvent?: (cb: (e: Event) => void) => () => void;
+};
+
+function install(bridge: FakeBridge | undefined) {
   vi.stubGlobal("window", bridge ? { geekspace: { dayRecorder: bridge } } : {});
 }
 
