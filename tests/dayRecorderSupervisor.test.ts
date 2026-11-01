@@ -352,3 +352,57 @@ describe("Day Recorder supervisor", () => {
     expect(() => h.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300 })).toThrow(/already/);
   });
 });
+
+// Plan PR 4a: the call hold. Spec R5 / F3: call audio reaches disk only after the notice, so
+// the supervisor tells the helper when to hold, release or discard, and a `call` segment is
+// stored only with the notice event that released it.
+describe("Day Recorder supervisor, call hold", () => {
+  it("parses the call events and a call segment", () => {
+    expect(parseLine('{"v":1,"event":"callHeld","t":1}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callReleased","segments":2,"heldSec":600}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callDiscarded","heldSec":42,"reason":"stop"}').ok).toBe(true);
+    expect(
+      parseLine('{"v":1,"event":"segment","kind":"call","day":"2026-10-20","path":"2026-10-20/call-a.m4a","start":1,"end":2}').ok
+    ).toBe(true);
+    expect(
+      parseLine('{"v":1,"event":"segment","kind":"mic","day":"2026-10-20","path":"2026-10-20/a.m4a","start":1,"end":2}').ok
+    ).toBe(false);
+  });
+
+  it("holds, then stores the released audio as call segments with the notice that released it", async () => {
+    const h = started(harness("call"));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    h.supervisor.holdCall();
+    await until(() => h.logs.some((l) => l.includes("call audio held")));
+    h.supervisor.releaseCall("notice-1");
+    await until(() => h.rows.length === 2);
+    expect(h.rows.map((r) => r.args)).toEqual([
+      expect.objectContaining({ kind: "call", noticeEventId: "notice-1", path: expect.stringContaining("/call-") }),
+      expect.objectContaining({ kind: "call", noticeEventId: "notice-1" }),
+    ]);
+    await until(() => h.logs.some((l) => l.includes("call audio released: 2 segment(s), 600 s")));
+  });
+
+  it("discards held audio, and stores nothing", async () => {
+    const h = started(harness("call"));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    h.supervisor.holdCall();
+    h.supervisor.discardCall();
+    await until(() => h.logs.some((l) => l.includes("call audio discarded: 42 s (command)")));
+    expect(h.rows).toEqual([]);
+  });
+
+  it("never stores a call segment no release asked for, and stops recording over it", async () => {
+    const h = started(harness("call", { env: { ...process.env, FAKE_SCENARIO: "call", FAKE_STRAY_CALL: "1" } }));
+    await until(() => h.states.some((s) => s.status === "notRecording"));
+    expect(h.rows).toEqual([]);
+    expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
+  });
+
+  it("refuses a call command while no helper is running", () => {
+    const h = harness("call");
+    expect(() => h.supervisor.holdCall()).toThrow("The capture helper is not running");
+    expect(() => h.supervisor.releaseCall("notice-1")).toThrow("The capture helper is not running");
+    expect(() => h.supervisor.discardCall()).toThrow("The capture helper is not running");
+  });
+});
