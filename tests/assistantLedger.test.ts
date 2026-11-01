@@ -203,3 +203,14 @@ describe("assistant.unread, past a page", () => {
     expect(next.transcriptsDone).toBe(true);
   });
 });
+
+// Codex 6a r5 P2: spec R8 logs every call with its tokens and cost, not just the day's total.
+describe("assistant requests keep their own usage", () => {
+  it("settling records the call's tokens and cost on the request", async () => {
+    const t = await seeded(1);
+    const id = await t.mutation(api.assistant.beginRequest, { day: DAY, reservedUsd: 0.2, transcriptIds: [], screenshotIds: [] });
+    await t.mutation(api.assistant.settleRequest, { requestId: id!, costUsd: 0.0123, inputTokens: 456, outputTokens: 78, proposals: [] });
+    const row = await t.run((ctx) => ctx.db.get(id!));
+    expect(row).toMatchObject({ costUsd: 0.0123, inputTokens: 456, outputTokens: 78, reservedUsd: 0.2 });
+  });
+});

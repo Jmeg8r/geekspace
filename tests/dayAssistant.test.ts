@@ -62,6 +62,7 @@ function harness(
 ) {
   const requests: AssistantRequest[] = [];
   const calls: string[] = [];
+  const unreadArgs: { transcriptAfter?: object; screenshotAfter?: object }[] = [];
   const begun: { reservedUsd: number; transcriptIds: string[]; transcriptEnds?: number[]; screenshotIds: string[]; screenshotEnds?: number[] }[] = [];
   const settled: { requestId: string; costUsd: number; proposals: object[] }[] = [];
   const events: { kind: string; detail?: string }[] = [];
@@ -83,7 +84,10 @@ function harness(
         calls.push(`start ${at}`);
         return at;
       },
-      unread: async () => (opts.pages ? (opts.pages.shift() ?? { transcripts: [], screenshots: [] }) : (opts.input ?? INPUT)),
+      unread: async (args: { transcriptAfter?: object; screenshotAfter?: object }) => {
+        unreadArgs.push(args);
+        return opts.pages ? (opts.pages.shift() ?? { transcripts: [], screenshots: [] }) : (opts.input ?? INPUT);
+      },
       capStatus: async () => opts.cap ?? { capUsd: 5, spentUsd: 0, reached: false },
       beginRequest: async (args: { reservedUsd: number; transcriptIds: string[]; transcriptEnds?: number[]; screenshotIds: string[]; screenshotEnds?: number[] }) => {
         begun.push(args);
@@ -113,7 +117,7 @@ function harness(
     },
     log: (m: string) => void logs.push(m),
   });
-  return { assistant, client, requests, calls, begun, settled, events, logs };
+  return { assistant, client, requests, calls, begun, settled, events, logs, unreadArgs };
 }
 
 describe("costOf", () => {
@@ -427,6 +431,36 @@ describe("createDayAssistant.runBatch, round 4", () => {
     await h.assistant.runBatch();
     expect(h.requests).toHaveLength(1);
     expect(h.begun[0].screenshotIds).toEqual(["shot201"]);
+  });
+});
+
+// Codex 6a r5 P1: every batch began its scan at the top, so 10 pages of rows too long for the
+// cap hid the rows after them for good. The scan keeps its place, and starts over once it
+// has sent something or reached the end.
+describe("createDayAssistant.runBatch, round 5", () => {
+  const big = (n: number) => ({ _id: `big${n}`, takenAt: n, ocrText: "中".repeat(10_000) });
+  const fullPage = (p: number) => ({
+    transcripts: [],
+    screenshots: Array.from({ length: 200 }, (_, i) => big(p * 200 + i)),
+    transcriptsDone: true,
+    screenshotsDone: false,
+    screenshotAfter: { at: p * 200 + 199, ids: [`big${p * 200 + 199}`] },
+  });
+
+  it("[P1] the next batch continues where an exhausted scan stopped, then starts over", async () => {
+    const pages = [
+      ...Array.from({ length: 10 }, (_, p) => fullPage(p)),
+      { transcripts: [], screenshots: [{ _id: "late", takenAt: 5_000, ocrText: "SYNTHETIC Send deck" }], transcriptsDone: true, screenshotsDone: true },
+    ];
+    const h = harness({ cap: { capUsd: 0.05, spentUsd: 0, reached: false }, pages });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+    expect(h.unreadArgs).toHaveLength(10);
+    await h.assistant.runBatch();
+    expect(h.unreadArgs[10].screenshotAfter).toEqual({ at: 1_999, ids: ["big1999"] });
+    expect(h.begun.at(-1)?.screenshotIds).toEqual(["late"]);
+    await h.assistant.runBatch();
+    expect(h.unreadArgs[11].screenshotAfter).toBeUndefined();
   });
 });
 
