@@ -48,6 +48,8 @@ export function registerDayRecorderIpc({ handle, recorder }) {
   handle("gs:dayRecorder:noticeDeclined", ({ callId }) => live().notice.declined(checkCallId(callId)));
   handle("gs:dayRecorder:extendNotice", ({ callId }) => live().notice.extend(checkCallId(callId)));
   handle("gs:dayRecorder:dismissCallWarning", () => live().notice.dismiss());
+  // The prompt a page that opens now should show (events carry changes after that).
+  handle("gs:dayRecorder:callPrompt", () => live().callPrompt());
 }
 
 /** Push every status change to the open windows. Returns the unsubscribe. */

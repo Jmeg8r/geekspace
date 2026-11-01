@@ -1,13 +1,17 @@
 // WHAT: typed wrapper over the Day Recorder's renderer controls (window.geekspace.dayRecorder,
 // electron/preload.cjs and dayRecorderIpc.mjs). WHY: every IPC failure comes back as an
 // error result the UI can show, never a thrown promise.
+import type { CallPrompt } from "../../electron/callNotice.mjs";
 import type { RecorderStatus } from "../../electron/dayRecorderService.mjs";
 
-export type { RecorderStatus };
+export type { CallPrompt, RecorderStatus };
 
 type IpcResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
-type RecorderEvent = { type: "status"; status: RecorderStatus } | { type: string; status?: undefined };
+type RecorderEvent =
+  | { type: "status"; status: RecorderStatus }
+  | { type: "call"; prompt: CallPrompt | null }
+  | { type: string; status?: undefined; prompt?: undefined };
 
 interface DayRecorderBridge {
   status(): Promise<IpcResult<RecorderStatus>>;
@@ -15,6 +19,11 @@ interface DayRecorderBridge {
   pause(): Promise<IpcResult<void>>;
   resume(): Promise<IpcResult<void>>;
   onEvent(cb: (event: RecorderEvent) => void): () => void;
+  noticeGiven(callId: string): Promise<IpcResult<void>>;
+  noticeDeclined(callId: string): Promise<IpcResult<void>>;
+  extendNotice(callId: string): Promise<IpcResult<void>>;
+  dismissCallWarning(): Promise<IpcResult<void>>;
+  callPrompt(): Promise<IpcResult<CallPrompt | null>>;
 }
 
 // SAFETY: electron/preload.cjs exposes exactly this shape on window.geekspace.dayRecorder; in
@@ -49,5 +58,24 @@ export function onRecorderStatus(cb: (status: RecorderStatus) => void): () => vo
   if (!b) return () => {};
   return b.onEvent((event) => {
     if (event.type === "status" && event.status) cb(event.status);
+  });
+}
+
+/** The page's answer to the call prompt (plan PR 4b), naming the call it answers. */
+export function answerCall(answer: "given" | "declined" | "extend", callId: string) {
+  return call((b) =>
+    answer === "given" ? b.noticeGiven(callId) : answer === "declined" ? b.noticeDeclined(callId) : b.extendNotice(callId)
+  );
+}
+
+export const dismissCallWarning = () => call((b) => b.dismissCallWarning());
+export const currentCallPrompt = () => call((b) => b.callPrompt());
+
+/** Follow the call prompt. Returns the unsubscribe. */
+export function onCallPrompt(cb: (prompt: CallPrompt | null) => void): () => void {
+  const b = bridge();
+  if (!b) return () => {};
+  return b.onEvent((event) => {
+    if (event.type === "call" && event.prompt !== undefined) cb(event.prompt);
   });
 }

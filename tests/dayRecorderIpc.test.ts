@@ -6,6 +6,7 @@ import {
   forwardStatus,
   registerDayRecorderIpc,
 } from "../electron/dayRecorderIpc.mjs";
+import type { CallPrompt } from "../electron/callNotice.mjs";
 import type { RecorderStatus } from "../electron/dayRecorderService.mjs";
 
 // WHAT: the renderer's controls for the Day Recorder (plan PR 3d-1): the gs:dayRecorder:*
@@ -26,7 +27,7 @@ function fakeRecorder(status: RecorderStatus = { status: "off" }) {
     setEnabled: vi.fn(async () => {}),
     pause: vi.fn(async () => {}),
     resume: vi.fn(async () => {}),
-    callPrompt: () => ({ state: "asking", callId: "call-1", app: "us.zoom.xos", deadline: 1, canExtend: true }),
+    callPrompt: (): CallPrompt => ({ state: "asking", callId: "call-1", app: "us.zoom.xos", deadline: 1, canExtend: true }),
     notice: {
       given: vi.fn(async (_callId: string) => {}),
       declined: vi.fn(async (_callId: string) => {}),

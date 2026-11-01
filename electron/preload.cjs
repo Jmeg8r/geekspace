@@ -73,6 +73,7 @@ const api = {
     noticeDeclined: (callId) => invoke("gs:dayRecorder:noticeDeclined", { callId }),
     extendNotice: (callId) => invoke("gs:dayRecorder:extendNotice", { callId }),
     dismissCallWarning: () => invoke("gs:dayRecorder:dismissCallWarning"),
+    callPrompt: () => invoke("gs:dayRecorder:callPrompt"),
     onEvent: (cb) => {
       const listener = (_event, data) => cb(data);
       ipcRenderer.on("gs:dayRecorder:event", listener);

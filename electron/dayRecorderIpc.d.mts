@@ -1,4 +1,5 @@
 // WHAT: types for the Day Recorder's renderer controls, so tests/ can import them.
+import type { CallPrompt } from "./callNotice.mjs";
 import type { RecorderStatus } from "./dayRecorderService.mjs";
 
 export const DAY_RECORDER_EVENT: "gs:dayRecorder:event";
@@ -23,11 +24,12 @@ export type NoticeAnswers = {
 export type ControllableRecorder = DayRecorderControls & {
   view: { status: () => RecorderStatus };
   notice: NoticeAnswers;
+  callPrompt: () => CallPrompt | null;
 };
 
 /** What a page can send. setEnabled checks `enabled` itself, so a wrong type is refused there. */
 export type ControlArgs = { enabled?: boolean | string | number | null | object; callId?: string | number | null | object };
-export type ControlHandler = (args: ControlArgs) => RecorderStatus | void | Promise<void>;
+export type ControlHandler = (args: ControlArgs) => RecorderStatus | CallPrompt | null | void | Promise<void>;
 
 export function registerDayRecorderIpc(options: {
   handle: (channel: string, fn: ControlHandler) => void;
