@@ -212,7 +212,7 @@ final class AudioUseWatcher {
     init(denylist: [String], calls: AudioUse.CallTracker = AudioUse.CallTracker(apps: [], browsers: []),
          startHeld: Bool = false, onCallStart: @escaping (String, Double) -> Void = { _, _ in },
          onGap: @escaping (Double, Double) -> Void = { _, _ in },
-         now: @escaping () -> Double = nowMs, readProcesses: ((Set<AudioObjectID>) -> [AudioUse.Process])? = nil,
+         now: @escaping () -> Double = nowMs, captureStartedAt: Double? = nil, readProcesses: ((Set<AudioObjectID>) -> [AudioUse.Process])? = nil,
          report: @escaping (String, [String: Any]) -> Void) {
         self.denylist = denylist
         self.calls = calls
@@ -220,7 +220,8 @@ final class AudioUseWatcher {
         self.onCallStart = onCallStart
         self.onGap = onGap
         self.now = now
-        startedAt = now()
+        // When the tap began, which is before this watcher exists (Codex review of PR 4b, round 8).
+        startedAt = captureStartedAt ?? now()
         self.readProcesses = readProcesses ?? { known in AudioUse.poll(denylist: denylist, known: known) }
         self.report = report
     }

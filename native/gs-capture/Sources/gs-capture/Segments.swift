@@ -327,6 +327,9 @@ final class SystemAudioRecorder {
                             },
                             report: report)
         queue.sync {
+            // Read before the tap starts: the first audio-use poll counts its gap from here, so a
+            // stall between the tap starting and the watcher existing is never classified.
+            let captureStartedAt = nowMs()
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
             // silenced only one of two live instances (spike Q2). Bundle-ID taps need macOS 26.
             let bundleIDs = denylist.isEmpty ? nil : denylist.flatMap { [$0, "\($0).helper"] }
@@ -363,6 +366,7 @@ final class SystemAudioRecorder {
             let watcher = AudioUseWatcher(denylist: denylist, calls: calls, startHeld: startHeld,
                                           onCallStart: { [unowned self] app, t in self.router.hold(at: t, app: app) },
                                           onGap: { [unowned self] from, to in self.router.gap(from: from, to: to) },
+                                          captureStartedAt: captureStartedAt,
                                           report: report)
             self.watcher = watcher
             let timer = DispatchSource.makeTimerSource(queue: queue)

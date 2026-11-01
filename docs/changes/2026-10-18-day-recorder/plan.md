@@ -1695,8 +1695,9 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     around each long released call can be lost.** Moving that write off the queue would avoid
     it; it is a larger change.
   - **A late first poll is a gap from capture start, and the startup hold drops gaps (round
-    7)**, so a `call clear` never writes unchecked startup audio as system audio.
-  - **Codex: rounds 5 to 8, by James's decision** after round 4 failed with five P1s (the L42
+    7)**, so a `call clear` never writes unchecked startup audio as system audio. The gap
+    clock is read before the tap starts (round 8), not when the watcher is made.
+  - **Codex: rounds 5 to 9, by James's decision (from round 8: until PASS)** after round 4 failed with five P1s (the L42
     cap), round 5 with four, round 6 with one, and round 7 with two.
   - **Each hold of the helper's is a call of its own** unless the newest call is unanswered or
     declined, which it joins; an answer resolves every hold of its call. An app starting after
