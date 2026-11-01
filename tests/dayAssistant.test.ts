@@ -61,7 +61,7 @@ function harness(
 ) {
   const requests: AssistantRequest[] = [];
   const calls: string[] = [];
-  const begun: { reservedUsd: number; transcriptIds: string[]; screenshotIds: string[] }[] = [];
+  const begun: { reservedUsd: number; transcriptIds: string[]; transcriptEnds?: number[]; screenshotIds: string[]; screenshotEnds?: number[] }[] = [];
   const settled: { requestId: string; costUsd: number; proposals: object[] }[] = [];
   const events: { kind: string; detail?: string }[] = [];
   const logs: string[] = [];
@@ -84,7 +84,7 @@ function harness(
       },
       unread: async () => opts.input ?? INPUT,
       capStatus: async () => opts.cap ?? { capUsd: 5, spentUsd: 0, reached: false },
-      beginRequest: async (args: { reservedUsd: number; transcriptIds: string[]; screenshotIds: string[] }) => {
+      beginRequest: async (args: { reservedUsd: number; transcriptIds: string[]; transcriptEnds?: number[]; screenshotIds: string[]; screenshotEnds?: number[] }) => {
         begun.push(args);
         return opts.begin ? opts.begin() : "req1";
       },
@@ -97,6 +97,7 @@ function harness(
         open = [{ _id: args.requestId, status: "settled", proposals: args.proposals.map((proposal) => ({ proposal, state: "pending" })) }];
       },
       failRequest: async ({ requestId }: { requestId: string }) => void calls.push(`fail ${requestId}`),
+      abandonRequest: async ({ requestId }: { requestId: string }) => void calls.push(`abandon ${requestId}`),
       openRequests: async () => open,
       applyProposal: async ({ requestId, index }: { requestId: string; index: number }) => {
         if (opts.applyFails) throw new Error("refused");
@@ -234,10 +235,10 @@ describe("createDayAssistant.runBatch", () => {
     expect(h.settled[0].proposals).toEqual([]);
   });
 
-  it("a call that fails frees its reservation, with nothing settled and nothing logged of the text", async () => {
+  it("a call the API refused before any work frees its reservation, with nothing logged of the text", async () => {
     const h = harness({
       replyFn: async () => {
-        throw new Error("network down");
+        throw Object.assign(new Error("rate limited"), { status: 429 });
       },
     });
     await h.assistant.runBatch();
@@ -325,11 +326,56 @@ describe("createDayAssistant.runBatch", () => {
 
 // Codex 6a r1 P1: the SDK took ANTHROPIC_LOG from the environment, and at debug it logs the
 // request: the whole batch of captured text.
+// Codex 6a r2 P1: a dropped connection or a timeout may have been paid for; a long item could
+// never fit and blocked everything after it.
+describe("createDayAssistant.runBatch, round 2", () => {
+  it.each([
+    ["a dropped connection", Object.assign(new Error("socket hang up"), { name: "APIConnectionError" })],
+    ["a timeout", Object.assign(new Error("timed out"), { name: "APIConnectionTimeoutError" })],
+    ["a server error", Object.assign(new Error("internal"), { status: 500 })],
+  ])("[P1] %s keeps the call charged at its reservation", async (_name, err) => {
+    const h = harness({
+      replyFn: async () => {
+        throw err;
+      },
+    });
+    await h.assistant.runBatch();
+    expect(h.calls).toContain("abandon req1");
+    expect(h.calls).not.toContain("fail req1");
+  });
+
+  it("[P1] sends a long item in parts and says how far it got", async () => {
+    const long = "SYNTHETIC ".repeat(8_000);
+    const h = harness({
+      cap: { capUsd: 1, spentUsd: 0, reached: false },
+      input: { transcripts: [{ _id: "tr9", segmentId: "seg9", start: Date.now() - 600_000, end: Date.now() - 300_000, text: long }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    const end = h.begun[0].transcriptEnds?.[0] ?? 0;
+    expect(end).toBeGreaterThan(0);
+    expect(end).toBeLessThan(long.length);
+    expect(JSON.stringify(h.requests[0])).not.toContain(long);
+  });
+
+  it("[P1] continues a long item where the last part ended", async () => {
+    const long = "A".repeat(30_000) + "SYNTHETIC-TAIL";
+    const h = harness({
+      input: { transcripts: [{ _id: "tr9", segmentId: "seg9", start: Date.now() - 600_000, end: Date.now() - 300_000, text: long, readChars: 29_990 }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    expect(JSON.stringify(h.requests[0])).toContain("SYNTHETIC-TAIL");
+    expect(h.begun[0].transcriptEnds).toEqual([long.length]);
+  });
+});
+
 describe("assistantClient", () => {
   it("[P1] never logs, whatever ANTHROPIC_LOG says", () => {
     vi.stubEnv("ANTHROPIC_LOG", "debug");
     const client = assistantClient("sk-ant-SYNTHETIC");
     expect(client.logLevel).toBe("off");
+    // One reservation covers one attempt: a retried request could be paid twice.
+    expect(client.maxRetries).toBe(0);
     vi.unstubAllEnvs();
   });
 });

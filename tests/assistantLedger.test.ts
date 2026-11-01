@@ -144,3 +144,46 @@ describe("assistant requests and the cap", () => {
     expect(await t.query(api.assistant.openRequests, {})).toEqual([]);
   });
 });
+
+// Codex 6a r2: a call that may have been paid for stays charged; a long item is read in parts.
+describe("assistant requests, round 2", () => {
+  it("[P1] an ambiguous failure is charged at its reservation, and its items are read again", async () => {
+    const t = await seeded(1);
+    const item = await transcript(t, Date.now() - MIN, "SYNTHETIC");
+    const id = await t.mutation(api.assistant.beginRequest, { day: DAY, reservedUsd: 0.3, transcriptIds: [item], screenshotIds: [] });
+    await t.mutation(api.assistant.abandonRequest, { requestId: id! });
+    expect(await t.query(api.assistant.capStatus, { day: DAY })).toMatchObject({ spentUsd: 0.3 });
+    expect((await t.query(api.assistant.unread, { since: 0, limit: 50 })).transcripts).toHaveLength(1);
+    expect(await t.query(api.assistant.openRequests, {})).toEqual([]);
+  });
+
+  it("[P1] a part of an item records how far it was read; the rest stays unread", async () => {
+    const t = await seeded(1);
+    const text = "SYNTHETIC ".repeat(10);
+    const item = await transcript(t, Date.now() - MIN, text);
+    const settle = async (end: number) => {
+      const id = await t.mutation(api.assistant.beginRequest, {
+        day: DAY,
+        reservedUsd: 0.01,
+        transcriptIds: [item],
+        transcriptEnds: [end],
+        screenshotIds: [],
+      });
+      await t.mutation(api.assistant.settleRequest, { requestId: id!, costUsd: 0.001, inputTokens: 1, outputTokens: 1, proposals: [] });
+    };
+    await settle(40);
+    const after = await t.query(api.assistant.unread, { since: 0, limit: 50 });
+    expect(after.transcripts).toHaveLength(1);
+    expect(after.transcripts[0].readChars).toBe(40);
+    await settle(text.length);
+    expect((await t.query(api.assistant.unread, { since: 0, limit: 50 })).transcripts).toEqual([]);
+  });
+
+  it("refuses ends that don't match the items", async () => {
+    const t = await seeded(1);
+    const item = await transcript(t, Date.now() - MIN, "SYNTHETIC");
+    await expect(
+      t.mutation(api.assistant.beginRequest, { day: DAY, reservedUsd: 0.01, transcriptIds: [item], transcriptEnds: [1, 2], screenshotIds: [] })
+    ).rejects.toThrow(/ends/);
+  });
+});
