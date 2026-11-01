@@ -7,6 +7,12 @@
 // retention sweep removes (dayRecorderMedia.mjs); a finished name always means a whole file.
 // WHY a broken segment is dropped (Codex #89 r1): once one of its chunks is refused, short or
 // lost, the rest can still arrive, but the file has a hole in it. It gets no file and no row.
+// WHY chunks wait for the helper (Codex review of PR 4b, rounds 3 and 4): a call is seen a poll
+// after it began, so the mic's latest audio may be the call's. With waitForClassification, each
+// chunk stays in memory until gs-capture says its audio-use polls have looked past the time it
+// arrived (audioClassified), and a segment is finished only once its end has been. A call, or a
+// never-record app, seen in between discards what waits, and the discard lasts for the window:
+// segments that start after it write nothing. Nothing of a call reaches disk before its notice.
 // WHY synchronous writes: chunks are about a second of Opus each (a few KB), and appending
 // them in arrival order is what keeps the file a valid WebM.
 import fs from "node:fs";
@@ -19,6 +25,13 @@ export const MAX_CHUNK_BYTES = 1024 * 1024;
 export const MAX_SEGMENT_BYTES = 64 * 1024 * 1024;
 // One recording and the one finishing behind it, at a boundary.
 const MAX_OPEN = 2;
+// While chunks wait for classification (Codex review of PR 4b, round 5): at most this much
+// audio (an hour of Opus is about 30 MB), at most this many finished segments, and no longer
+// than this without classification moving. Past any of them the mic fails loudly and keeps
+// nothing that waited.
+export const MAX_WAITING_BYTES = 16 * 1024 * 1024;
+const MAX_ENDING = 2;
+export const CLASSIFY_STALL_MS = 10_000;
 // How long close() waits for row writes still in flight.
 const DRAIN_MS = 5_000;
 // A segment starts now, give or take: a day back covers a window that ran across midnight or
@@ -55,8 +68,23 @@ export function createMicSegmentWriter({
   maxSegmentBytes = MAX_SEGMENT_BYTES,
   now = Date.now,
   writeSync = fs.writeSync,
+  rmSync = fs.rmSync,
+  maxWaitingBytes = MAX_WAITING_BYTES,
+  classifyStallMs = CLASSIFY_STALL_MS,
+  // Hold chunks until classified (the Day Recorder). Off, chunks are written as they come.
+  waitForClassification = false,
+  // A write that fails while catching up, outside any message: the caller fails the mic.
+  onError = (reason) => log(reason),
 }) {
   const open = new Map();
+  // Segments whose end came, waiting for it to be classified: segment -> { s, endAt, arrival }.
+  const ending = new Map();
+  // Set by discardOpen, for the rest of this writer (one capture window).
+  let discarding = false;
+  let classifiedThrough = -Infinity;
+  let waiters = [];
+  let waitingBytes = 0;
+  let stallTimer = null;
   const pending = new Set();
   let highest = -1;
   let closed = false;
@@ -73,12 +101,18 @@ export function createMicSegmentWriter({
     if (open.size >= MAX_OPEN) return refuse("too many segments open at once");
     const day = localDay(start);
     const name = fileName(start);
+    if (discarding) {
+      // A call or a never-record app is going on: this segment writes nothing at all.
+      highest = segment;
+      open.set(segment, { segment, fd: null, day, name, start, bytes: 0, broken: true, discarded: true, queue: [] });
+      return { ok: true };
+    }
     const dir = path.join(root, day);
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const partial = path.join(dir, `.partial-${name}`);
     const fd = fs.openSync(partial, "wx", 0o600);
     highest = segment;
-    open.set(segment, { fd, partial, final: path.join(dir, name), day, name, start, bytes: 0, broken: false });
+    open.set(segment, { segment, fd, partial, final: path.join(dir, name), day, name, start, bytes: 0, broken: false, queue: [] });
     return { ok: true };
   }
 
@@ -108,13 +142,21 @@ export function createMicSegmentWriter({
       s.broken = true;
       return refuse(why);
     }
+    s.bytes += bytes.byteLength;
+    if (waitForClassification) {
+      s.queue.push({ bytes, at: now() });
+      waitingBytes += bytes.byteLength;
+      if (waitingBytes > maxWaitingBytes) {
+        giveUp(`mic audio waited for gs-capture's classification past ${maxWaitingBytes} bytes`);
+      } else armStall();
+      return { ok: true };
+    }
     try {
       writeAll(s.fd, bytes);
     } catch (err) {
       s.broken = true;
       return refuse(`could not write mic audio (${err?.code ?? err?.name ?? "Error"})`);
     }
-    s.bytes += bytes.byteLength;
     return { ok: true };
   }
 
@@ -131,25 +173,140 @@ export function createMicSegmentWriter({
     if (!s) return refuse(`segment ${segment} was not started`);
     if (!isNum(endAt) || endAt < s.start) return refuse("segmentEnd needs an end time after the start");
     open.delete(segment);
-    fs.closeSync(s.fd);
+    // Discarded for a call: its file is already gone, or never was.
+    if (s.discarded) return { ok: true, dropped: true };
     if (s.broken) {
       // Already reported when it broke; a file with a hole in it is not kept.
-      fs.rmSync(s.partial, { force: true });
+      fs.closeSync(s.fd);
+      rmSync(s.partial, { force: true });
       return { ok: true, dropped: true };
     }
     if (s.bytes === 0) {
       // No row and no file. Whether that is a dead mic or a stop just after a boundary is the
       // caller's call (micController.mjs).
-      fs.rmSync(s.partial, { force: true });
+      fs.closeSync(s.fd);
+      rmSync(s.partial, { force: true });
       return { ok: true, empty: true };
     }
+    if (waitForClassification) {
+      ending.set(segment, { s, endAt, arrival: now() });
+      if (ending.size > MAX_ENDING) {
+        giveUp(`mic audio waited for gs-capture's classification: ${ending.size} finished segments`);
+        return { ok: true };
+      }
+      armStall();
+      catchUp();
+      return { ok: true };
+    }
+    fs.closeSync(s.fd);
+    return finish(s, endAt);
+  }
+
+  /** Write what waits up to the classified time; false when a write failed (reported). */
+  function writeClassified(s) {
+    while (s.queue.length > 0 && s.queue[0].at <= classifiedThrough) {
+      const { bytes } = s.queue.shift();
+      waitingBytes -= bytes.byteLength;
+      try {
+        writeAll(s.fd, bytes);
+      } catch (err) {
+        s.broken = true;
+        dropQueue(s);
+        onError(`could not write mic audio (${err?.code ?? err?.name ?? "Error"})`);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Write and finish what the helper has classified. Never throws: failures go to onError. */
+  function catchUp() {
+    for (const s of open.values()) if (!s.discarded && !s.broken) writeClassified(s);
+    for (const [segment, e] of ending) {
+      if (!writeClassified(e.s)) {
+        ending.delete(segment);
+        dropFile(e.s);
+        continue;
+      }
+      if (e.s.queue.length > 0 || e.arrival > classifiedThrough) break;
+      ending.delete(segment);
+      try {
+        fs.closeSync(e.s.fd);
+        const result = finish(e.s, e.endAt);
+        if (!result.ok) onError(result.reason);
+      } catch (err) {
+        onError(`could not finish mic segment ${segment} (${err?.code ?? err?.name ?? "Error"})`);
+      }
+    }
+    if (!busy()) {
+      for (const w of waiters) w();
+      waiters = [];
+    }
+  }
+
+  const busy = () => ending.size > 0 || [...open.values()].some((s) => s.queue.length > 0);
+
+  function dropFile(s) {
+    if (s.fd !== null) {
+      try {
+        fs.closeSync(s.fd);
+      } catch (err) {
+        // Already closed by an earlier failure; the file is removed below either way.
+        log(`mic segment ${s.segment}: its file was already closed (${err?.code ?? "Error"})`);
+      }
+      s.fd = null;
+    }
+    if (s.partial) {
+      try {
+        rmSync(s.partial, { force: true });
+      } catch (err) {
+        // Reported, never thrown: this runs from the helper's line handler.
+        onError(`could not remove mic segment ${s.segment}'s file (${err?.code ?? err?.name ?? "Error"})`);
+      }
+    }
+    dropQueue(s);
+  }
+
+  function dropQueue(s) {
+    for (const { bytes } of s.queue) waitingBytes -= bytes.byteLength;
+    s.queue = [];
+  }
+
+  function armStall() {
+    if (stallTimer || closed) return;
+    stallTimer = setTimeout(() => {
+      stallTimer = null;
+      if (busy()) giveUp(`no classification from gs-capture for ${Math.round(classifyStallMs / 1000)} s while mic audio waited`);
+    }, classifyStallMs);
+  }
+
+  /** Classification stalled or too much waits: keep nothing that waited, write nothing more. */
+  function giveUp(reason) {
+    clearTimeout(stallTimer);
+    stallTimer = null;
+    discarding = true;
+    for (const s of open.values()) {
+      if (s.discarded) continue;
+      dropFile(s);
+      s.broken = true;
+      s.discarded = true;
+    }
+    for (const { s } of ending.values()) dropFile(s);
+    ending.clear();
+    for (const w of waiters) w();
+    waiters = [];
+    onError(reason);
+  }
+
+  /** Give a whole segment its name and its row. */
+  function finish(s, endAt) {
     // A hard link, then unlinking the partial: unlike rename, linking fails when the name is
     // taken, so a finished recording can never be replaced. The partial stays for the sweep.
     try {
       fs.linkSync(s.partial, s.final);
     } catch (err) {
       if (err?.code !== "EEXIST") throw err;
-      return refuse(`segment ${segment}'s file name already exists; the earlier file is kept`);
+      return refuse(`segment ${s.segment}'s file name already exists; the earlier file is kept`);
     }
     fs.unlinkSync(s.partial);
     const row = { day: s.day, kind: "mic", path: `${s.day}/${s.name}`, start: s.start, end: endAt };
@@ -200,13 +357,69 @@ export function createMicSegmentWriter({
     if (!done) log(`${pending.size} mic segment row write(s) still pending after ${DRAIN_MS} ms`);
   }
 
-  /** Stop accepting messages. An unfinished segment stays a partial for the retention sweep. */
+  /** gs-capture's audio-use polls have looked at everything before `through`. */
+  function classified(through) {
+    if (closed || !isNum(through) || through <= classifiedThrough) return;
+    classifiedThrough = through;
+    clearTimeout(stallTimer);
+    stallTimer = null;
+    try {
+      catchUp();
+    } catch (err) {
+      // Never thrown into the helper's line handler.
+      onError(`could not write mic audio (${err?.code ?? err?.name ?? "Error"})`);
+    }
+    if (busy()) armStall();
+  }
+
+  /** Resolves once nothing waits for classification. */
+  function settled() {
+    if (!busy()) return Promise.resolve();
+    return new Promise((resolve) => waiters.push(resolve));
+  }
+
+  /**
+   * A call started, or a never-record app is using audio: delete what waits and the open
+   * segments, with no row, and write nothing more for this window. Up to one segment of audio
+   * from before it is lost with them (plan.md Deviations, 4b).
+   */
+  function discardOpen() {
+    discarding = true;
+    for (const s of open.values()) {
+      if (s.discarded) continue;
+      dropFile(s);
+      s.broken = true;
+      s.discarded = true;
+    }
+    for (const { s } of ending.values()) dropFile(s);
+    ending.clear();
+    catchUp();
+  }
+
+  /**
+   * Stop accepting messages. An unfinished segment stays a partial for the retention sweep;
+   * what was never classified is dropped, not written: no poll can say a call wasn't in it.
+   */
   async function close() {
     closed = true;
-    for (const s of open.values()) fs.closeSync(s.fd);
+    clearTimeout(stallTimer);
+    stallTimer = null;
+    for (const s of open.values()) {
+      if (s.discarded) continue;
+      if (s.queue.length > 0) log(`mic segment ${s.segment}: ${s.queue.length} chunk(s) not classified at close, dropped`);
+      s.queue = [];
+      fs.closeSync(s.fd);
+    }
     open.clear();
+    for (const [segment, { s }] of ending) {
+      log(`mic segment ${segment} dropped at close: its end was not classified`);
+      dropFile(s);
+    }
+    ending.clear();
+    for (const w of waiters) w();
+    waiters = [];
     await drain();
   }
 
-  return { handle, drain, close };
+  return { handle, drain, close, discardOpen, classified, settled };
 }

@@ -17,8 +17,13 @@ export type MicConfig = { segmentSec: number; timesliceMs: number };
 export type ConfigReply = { ok: true; data: MicConfig } | { ok: false; cancelled: true; error: string };
 
 export type MicController = {
-  start: () => Promise<void>;
+  /** `owner`: the capture helper this mic is for; classification counts only from it. */
+  start: (owner?: number) => Promise<void>;
   stop: () => Promise<void>;
+  /** A call started: drop the open segment unfinished, then stop. */
+  discard: () => Promise<void>;
+  /** gs-capture has classified everything before `through`. */
+  classified: (through: number, owner?: number) => void;
   receive: (sender: { id: number } | null | undefined, message: IncomingMessage) => void;
   ownsSender: (sender: { id: number } | null | undefined) => boolean;
   /** The capture page's config: cancelled when a stop came first; null for another sender. */
@@ -32,10 +37,14 @@ export type MicController = {
 export function createMicController(options: {
   askMic: () => Promise<boolean>;
   createWindow: (hooks: { onGone: () => void }) => CaptureWindow;
-  createWriter: () => Pick<MicSegmentWriter, "handle" | "drain" | "close">;
+  createWriter: (options: {
+    onError: (reason: string) => void;
+  }) => Pick<MicSegmentWriter, "handle" | "drain" | "close" | "discardOpen" | "classified" | "settled">;
   onState: (state: MicState) => void;
   recordError: (detail: string) => void;
   log: (message: string) => void;
   micConfig: MicConfig;
   stopTimeoutMs?: number;
+  /** How long a stop waits for chunks still waiting on classification. */
+  settleMs?: number;
 }): MicController;

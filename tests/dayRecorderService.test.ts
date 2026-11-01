@@ -68,6 +68,7 @@ function fakeSupervisors() {
       holdCall: () => void calls.push({ op: "holdCall" }),
       releaseCall: (id: string) => void calls.push({ op: `releaseCall ${id}` }),
       discardCall: () => void calls.push({ op: "discardCall" }),
+      clearCall: () => void calls.push({ op: "clearCall" }),
     };
   };
   return {
@@ -589,5 +590,72 @@ describe("Day Recorder service, calls", () => {
     await h.service.apply(on());
     h.sup.options()!.onAudioUse!({ v: 1, event: "audioUse", app: "us.zoom.xos", denylisted: false, input: true, output: false });
     expect(seen).toEqual(["us.zoom.xos"]);
+  });
+});
+
+describe("Day Recorder service, the first report", () => {
+  it("clears the startup hold on the live helper, and forwards audioUseReady", async () => {
+    const h = harness();
+    let ready = 0;
+    h.service.onAudioUseReady(() => void (ready += 1));
+    await h.service.apply(on());
+    h.service.calls.clear();
+    expect(h.sup.calls.map((c) => c.op).at(-1)).toBe("clearCall");
+    h.sup.options()!.onAudioUseReady!();
+    expect(ready).toBe(1);
+  });
+});
+
+// Codex 4b r5 P1: the helper was detached before its stop, so its last classification never
+// reached the mic, and a replacement helper's could flush the old helper's mic audio. The mic
+// now finishes first, while the helper that classifies it is still the current one.
+describe("Day Recorder service, before a helper stops", () => {
+  it.each([
+    ["a pause", PAUSED],
+    ["off", OFF],
+    ["a denylist change", on(["com.example.secret"])],
+  ])("[P1] %s runs beforeHelperStop first, with the old helper still current", async (_name, next) => {
+    const order: string[] = [];
+    const seen: number[] = [];
+    let h: ReturnType<typeof harness> | null = null;
+    h = harness({
+      beforeHelperStop: async () => {
+        order.push("beforeHelperStop");
+        // The old helper still classifies while the mic finishes.
+        h?.sup.options()?.onAudioClassified?.(42);
+      },
+    });
+    h.service.onAudioClassified((t) => void seen.push(t));
+    await h.service.apply(on());
+    h.sup.calls.length = 0;
+    await h.service.apply(next);
+    order.push(...h.sup.calls.map((c) => c.op));
+    expect(order.slice(0, 2)).toEqual(["beforeHelperStop", "stop"]);
+    expect(seen).toEqual([42]);
+  });
+
+  it("a failing hook is logged and the helper still stops", async () => {
+    const logs: string[] = [];
+    const h = harness({
+      log: (m) => void logs.push(m),
+      beforeHelperStop: async () => {
+        throw new Error("mic window gone");
+      },
+    });
+    await h.service.apply(on());
+    await h.service.apply(OFF);
+    expect(h.sup.calls.some((c) => c.op === "stop")).toBe(true);
+    expect(logs.join("\n")).toMatch(/mic window gone/);
+  });
+});
+
+describe("Day Recorder service, a poll gap", () => {
+  it("passes the live helper's gaps on", async () => {
+    const seen: number[][] = [];
+    const h = harness();
+    h.service.onAudioGap((from, to) => void seen.push([from, to]));
+    await h.service.apply(on());
+    h.sup.options()?.onAudioGap?.(1, 2);
+    expect(seen).toEqual([[1, 2]]);
   });
 });

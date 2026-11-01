@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { BROWSERS, DEDICATED_CALL_APPS } from "../electron/callDetector.mjs";
 import {
   contentFreeLogger,
   createFileLog,
@@ -170,6 +171,11 @@ describe("Day Recorder supervisor", () => {
       "30",
       "--segment-sec",
       "300",
+      // The helper holds calls itself (Codex 4b r3).
+      "--call-apps",
+      [...DEDICATED_CALL_APPS].join(","),
+      "--browsers",
+      [...BROWSERS].join(","),
     ]);
   });
 
@@ -454,5 +460,139 @@ describe("Day Recorder supervisor, audioUse", () => {
     await until(() => seen.length === 1);
     expect(seen).toEqual([{ app: "us.zoom.xos", input: true }]);
     expect(h.logs.join("\n")).not.toContain("us.zoom.xos");
+  });
+});
+
+// Codex 4b r1 P1: a helper started while a call waits for its notice, or was declined, must
+// hold from its first sample.
+describe("Day Recorder supervisor, start held", () => {
+  it("passes --start-held when asked, and not otherwise", async () => {
+    const argv: string[][] = [];
+    const spawnImpl: SupervisorOptions["spawnImpl"] = (command, args, options) => {
+      argv.push(args);
+      return spawn(command, args, options);
+    };
+    const held = started(harness("healthy", { spawnImpl }));
+    live.push(held.supervisor);
+    await until(() => held.states.some((s) => s.status === "recording"));
+    await held.supervisor.stop();
+    held.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300, startHeld: true });
+    await until(() => argv.length === 2);
+    expect(argv[0]).not.toContain("--start-held");
+    expect(argv[1]).toContain("--start-held");
+  });
+});
+
+// Codex 4b r2: every helper starts held until its first audio-use report; with no call going
+// on, the held start becomes ordinary system audio.
+describe("Day Recorder supervisor, the first report and the startup hold", () => {
+  it("parses audioUseReady and callCleared", () => {
+    expect(parseLine('{"v":1,"event":"audioUseReady","apps":2,"t":1}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callCleared","segments":1,"heldSec":1.5}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioUseReady","apps":"two","t":1}').ok).toBe(false);
+  });
+
+  it("says when the first report is in, and clears the startup hold into system segments", async () => {
+    let ready = 0;
+    const h = started(harness("call", { onAudioUseReady: () => void (ready += 1) }));
+    await until(() => ready === 1);
+    h.supervisor.clearCall();
+    await until(() => h.rows.length === 1);
+    expect(h.rows[0].args).toMatchObject({ kind: "system", path: expect.stringContaining("/sys-") });
+    expect(h.rows[0].args).not.toHaveProperty("noticeEventId");
+    await until(() => h.logs.some((l) => l.includes("startup hold cleared: 1 segment(s), 1.5 s")));
+  });
+});
+
+// Codex 4b r3 P4: a helper that never sends its first audio-use report kept the mic off and
+// system audio held while the status said Recording. Heartbeats don't count for it.
+describe("Day Recorder supervisor, the first-report deadline", () => {
+  it("[P1] is Not recording, loudly, when no audio-use report comes in time", async () => {
+    const h = started(harness("healthy", { audioUseReadyLimitMs: 200 }));
+    await until(() => h.states.some((s) => s.status === "notRecording"));
+    expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
+    expect(h.logs.join("\n")).toMatch(/audio-use report/);
+  });
+
+  it("stays Recording when the report comes", async () => {
+    const h = started(harness("call", { audioUseReadyLimitMs: 200 }));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(h.states.at(-1)).toEqual({ status: "recording" });
+  });
+});
+
+// Codex 4b r3 P3: the helper holds a call app's audio itself, so it is told which apps are
+// call apps, and says which app it held.
+describe("Day Recorder supervisor, the helper's own call holds", () => {
+  it("passes the call apps and browsers to the helper", async () => {
+    const argv: string[][] = [];
+    const spawnImpl: SupervisorOptions["spawnImpl"] = (command, args, options) => {
+      argv.push(args);
+      return spawn(command, args, options);
+    };
+    const h = started(harness("healthy", { spawnImpl }));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    const at = (flag: string) => argv[0][argv[0].indexOf(flag) + 1].split(",");
+    expect(at("--call-apps")).toContain("us.zoom.xos");
+    expect(at("--call-apps")).not.toContain("com.google.Chrome");
+    expect(at("--browsers")).toContain("com.google.Chrome");
+  });
+
+  it("passes on which app the helper held, and logs no app", async () => {
+    const seen: string[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CALL_HELD: "1" },
+        onCallHeld: (app) => void seen.push(app),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual(["us.zoom.xos"]);
+    expect(h.logs.join("\n")).not.toContain("us.zoom.xos");
+  });
+
+  it("refuses a callHeld whose app is not a string", () => {
+    expect(parseLine('{"v":1,"event":"callHeld","t":1,"app":"us.zoom.xos"}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callHeld","t":1,"app":7}').ok).toBe(false);
+  });
+});
+
+// Codex 4b r4 P1: the helper says how far its audio-use polls have classified, so the mic's
+// chunks wait for it; the line is passed on and never logged.
+describe("Day Recorder supervisor, classification", () => {
+  it("parses audioClassified", () => {
+    expect(parseLine('{"v":1,"event":"audioClassified","through":1.5}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioClassified","through":"soon"}').ok).toBe(false);
+  });
+
+  it("passes each classified time on", async () => {
+    const seen: number[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CLASSIFIED: "1" },
+        onAudioClassified: (through) => void seen.push(through),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([1_760_970_000_000]);
+    expect(h.logs.join("\n")).not.toMatch(/classif/i);
+  });
+});
+
+// Codex 4b r6 P1: a poll gap is unchecked time; the mic's waiting audio is discarded for it.
+describe("Day Recorder supervisor, a poll gap", () => {
+  it("parses audioGap and passes it on", async () => {
+    expect(parseLine('{"v":1,"event":"audioGap","from":1,"to":2}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioGap","from":1}').ok).toBe(false);
+    const seen: number[][] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_GAP: "1" },
+        onAudioGap: (from, to) => void seen.push([from, to]),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([[1_760_970_000_000, 1_760_970_008_000]]);
+    expect(h.logs.join("\n")).toMatch(/gap/);
   });
 });
