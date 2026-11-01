@@ -578,3 +578,21 @@ describe("Day Recorder supervisor, classification", () => {
     expect(h.logs.join("\n")).not.toMatch(/classif/i);
   });
 });
+
+// Codex 4b r6 P1: a poll gap is unchecked time; the mic's waiting audio is discarded for it.
+describe("Day Recorder supervisor, a poll gap", () => {
+  it("parses audioGap and passes it on", async () => {
+    expect(parseLine('{"v":1,"event":"audioGap","from":1,"to":2}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioGap","from":1}').ok).toBe(false);
+    const seen: number[][] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_GAP: "1" },
+        onAudioGap: (from, to) => void seen.push([from, to]),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([[1_760_970_000_000, 1_760_970_008_000]]);
+    expect(h.logs.join("\n")).toMatch(/gap/);
+  });
+});

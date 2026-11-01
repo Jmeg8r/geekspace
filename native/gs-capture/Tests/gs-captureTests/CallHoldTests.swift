@@ -415,4 +415,45 @@ final class CallRouterTests: XCTestCase {
         XCTAssertEqual(tracker.update([.denylisted: on, .app("com.apple.Music"): out]), [], "never-record and other apps")
         XCTAssertTrue(tracker.inCall.isEmpty)
     }
+
+    // Codex 4b r6 P1: a poll delayed past a call that started and ended inside the delay saw
+    // nothing, and classified the whole gap. A gap longer than a few polls is unchecked: its
+    // system audio is dropped, and the gap is reported before the classification.
+    func testAPollGapIsReportedAndNeverClassifiedAsSafe() {
+        var t = 1_000.0
+        var gaps: [(Double, Double)] = []
+        var reports: [String] = []
+        let watcher = AudioUseWatcher(denylist: [], onGap: { gaps.append(($0, $1)) }, now: { t }, readProcesses: { _ in [] },
+                                      report: { event, _ in reports.append(event) })
+        watcher.tick(known: [])
+        t = 1_100
+        watcher.tick(known: [])
+        XCTAssertTrue(gaps.isEmpty, "an ordinary poll interval is no gap")
+        t = 9_100
+        watcher.tick(known: [])
+        XCTAssertEqual(gaps.count, 1)
+        XCTAssertEqual(gaps[0].0, 1_100 - AudioUse.detectionLagMs)
+        XCTAssertEqual(gaps[0].1, 9_100 - AudioUse.detectionLagMs)
+        XCTAssertEqual(Array(reports.suffix(2)), ["audioGap", "audioClassified"])
+    }
+
+    func testAGapDropsSystemAudioAndRecordingResumesAfterIt() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.gap(from: 1_000, to: 1_100)
+        for start in stride(from: 900.0, to: 1_200, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.settle(frontier: 1_200)
+        XCTAssertFalse(sink.system.contains { $0 >= 1_000 && $0 < 1_100 })
+        XCTAssertEqual(sink.system.first, 900)
+        XCTAssertTrue(sink.system.contains(1_100), "system audio resumes after the gap")
+    }
+
+    func testAGapLeavesAHeldCallHeld() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 900)
+        router.gap(from: 1_000, to: 1_100)
+        for start in stride(from: 900.0, to: 1_200, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.settle(frontier: 1_200)
+        XCTAssertTrue(sink.system.isEmpty, "a held call's audio stays held, gap or not")
+        XCTAssertTrue(router.canRelease)
+    }
 }

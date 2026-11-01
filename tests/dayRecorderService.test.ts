@@ -648,3 +648,14 @@ describe("Day Recorder service, before a helper stops", () => {
     expect(logs.join("\n")).toMatch(/mic window gone/);
   });
 });
+
+describe("Day Recorder service, a poll gap", () => {
+  it("passes the live helper's gaps on", async () => {
+    const seen: number[][] = [];
+    const h = harness();
+    h.service.onAudioGap((from, to) => void seen.push([from, to]));
+    await h.service.apply(on());
+    h.sup.options()?.onAudioGap?.(1, 2);
+    expect(seen).toEqual([[1, 2]]);
+  });
+});
