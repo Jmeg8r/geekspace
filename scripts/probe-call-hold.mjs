@@ -109,8 +109,9 @@ async function main() {
       discardedTheSecondCall: discarded?.reason === "command" && discarded.heldSec > 0,
       recordingResumedAfterRelease: systems.some((s) => s.at > released.at),
       noPartialsLeft: partials.length === 0,
-      // Codex 4a r1: the tail still in the 500 ms hold-back must follow its call, so no sys-
-      // segment may cover a call's time (beyond the 10 ms chunk a boundary falls in).
+      // Codex 4a r1–r2: the tail still in the 500 ms hold-back must follow its call, so no
+      // sys- segment may cover a call's time. The window's end here is when the probe sent the
+      // command, a few ms before the helper read it; that is the tolerance, not the routing.
       noSystemAudioInsideACall: systems.every((s) => windows.every(([from, to]) => Math.min(s.end, to) - Math.max(s.start, from) <= CHUNK_MS)),
     };
     console.log(

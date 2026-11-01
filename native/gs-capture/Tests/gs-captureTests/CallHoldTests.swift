@@ -97,6 +97,25 @@ final class CallSegmentTests: XCTestCase {
         let first = try XCTUnwrap(reports.first?["start"] as? Double)
         XCTAssertEqual(first, start, accuracy: 0.01)
     }
+
+    // Codex 4a r3 P2: 100 ms pieces overshot a --segment-sec that is not a multiple of them.
+    func testFlushedSegmentsNeverExceedAFractionalSegmentLength() throws {
+        var reports: [[String: Any]] = []
+        let hold = CallHold(maxSec: 60)
+        for i in 1...300 {
+            hold.store(PCMChunk(endMs: 1_000 + Double(i) * 10, samples: [Float](repeating: 0.2, count: 160)), sourceRate: 16_000)
+        }
+        _ = CallHold.flush(hold.take(), root: root.path, segmentSec: 2.05) { event, fields in
+            if event == "segment" { reports.append(fields) }
+        }
+        let lengths = reports.compactMap { r -> Double? in
+            guard let s = r["start"] as? Double, let e = r["end"] as? Double else { return nil }
+            return e - s
+        }
+        XCTAssertEqual(lengths.count, 2)
+        XCTAssertEqual(lengths[0], 2_050, accuracy: 0.01)
+        XCTAssertEqual(lengths.reduce(0, +), 3_000, accuracy: 0.01)
+    }
 }
 
 // Codex 4a r1 P1: the command lands while up to 500 ms of audio still sits in PCMHold. That
@@ -106,6 +125,8 @@ final class CallSegmentTests: XCTestCase {
 final class CallRouterTests: XCTestCase {
     final class Sink {
         var system: [Double] = []      // start ms of chunks written as system audio
+        var systemSamples = 0
+        var heldSamples: Int?
         var systemCloses = 0
         var flushed: [[Double]] = []   // per released call: start ms of its runs' samples
         var reports: [(String, [String: Any])] = []
@@ -118,7 +139,10 @@ final class CallRouterTests: XCTestCase {
 
     func makeRouter(_ sink: Sink) -> CallRouter {
         CallRouter(maxSec: 60,
-                   append: { sink.system.append($0.endMs - 10) },
+                   append: { chunk in
+                       sink.system.append(chunk.endMs - Double(chunk.samples.count) / 16)
+                       sink.systemSamples += chunk.samples.count
+                   },
                    closeSystem: { sink.systemCloses += 1 },
                    flush: { runs in
                        sink.flushed.append(runs.map(\.startMs))
@@ -204,6 +228,28 @@ final class CallRouterTests: XCTestCase {
         router.stop()
         XCTAssertEqual(sink.flushed.count, 1)
         XCTAssertEqual(events(sink), ["callHeld", "callReleased"])
+    }
+
+    // Codex 4a r2 P1: a chunk straddling a boundary was routed whole by its start, so up to
+    // 10 ms of call audio reached a sys- file.
+    func testAChunkStraddlingTheHoldIsSplitAtTheBoundary() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.deliver(chunk(995), sourceRate: 16_000)
+        router.release(at: 2_000)
+        router.settle(frontier: 2_000)
+        XCTAssertEqual(sink.systemSamples, 80, "only the 5 ms before the hold is system audio")
+        XCTAssertEqual(sink.flushed, [[1_000]], "the 5 ms after it starts the call")
+    }
+
+    func testAChunkStraddlingADiscardDropsOnlyTheCallPart() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.discard(at: 1_005)
+        router.deliver(chunk(1_000), sourceRate: 16_000)
+        router.settle(frontier: 1_010)
+        XCTAssertEqual(sink.systemSamples, 80)
+        XCTAssertEqual(sink.system, [1_005])
     }
 
     func testOutOfOrderCommandsAreRefused() {
