@@ -43,7 +43,13 @@ export type TranscribeResult =
 
 export function transcribeFile(
   options: { input: string; model?: WhisperModel },
-  onProgress?: (p: { phase: "model" | "transcribing"; pct: number }) => void
+  onProgress?: (p: { phase: "model" | "transcribing"; pct: number }) => void,
+  /** Tests only: the tool and model checks. */
+  deps?: {
+    toolStatus?: () => Promise<MeetingToolStatus>;
+    modelVerified?: (model: WhisperModel) => Promise<boolean>;
+    ensureModel?: (onProgress: (pct: number) => void, model: WhisperModel) => Promise<boolean>;
+  }
 ): Promise<TranscribeResult>;
 export function checkOllama(
   url?: string

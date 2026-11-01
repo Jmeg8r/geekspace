@@ -215,11 +215,13 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     async stop() {
       unsubscribe();
       unsubscribePending();
-      // The segment being transcribed finishes; its row needs the backend, like the others.
-      await transcription.stop();
+      // Capture stops first and now; the segment being transcribed finishes meanwhile, and the
+      // backend stays up for its row (Codex review of PR 5: a slow write kept capture going).
+      const transcribing = transcription.stop();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();
       await service.shutdown();
+      await transcribing;
       // Only now: the menu bar says Recording for as long as anything is still capturing.
       indicator.stop();
       view.stop();

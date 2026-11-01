@@ -178,7 +178,8 @@ const MAX_PENDING = 100;
 export const pendingSegments = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, { limit }) => {
-    const n = Math.max(1, Math.min(MAX_PENDING, Math.floor(limit ?? 20)));
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new Error(`Invalid limit: ${limit}`);
+    const n = Math.min(MAX_PENDING, limit ?? 20);
     const rows = await ctx.db
       .query("captureSegments")
       .withIndex("by_status_start", (q) => q.eq("status", "closed"))

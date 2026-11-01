@@ -400,8 +400,10 @@ export async function notesFromTranscript(transcript, meetingType, ollamaUrl, ol
  * Meetings and the Day Recorder (plan PR 5). A missing tool or model is a ToolMissingError;
  * silence and no speech are results, not errors, because a quiet stretch of a day is normal.
  */
-export async function transcribeFile({ input, model = MEETINGS_MODEL }, onProgress) {
-  const status = await toolStatus();
+export async function transcribeFile({ input, model = MEETINGS_MODEL }, onProgress, deps = {}) {
+  // Overridable for tests only: the tool and model checks.
+  const d = { toolStatus, modelVerified, ensureModel, ...deps };
+  const status = await d.toolStatus();
   if (!status.ffmpeg) {
     throw new ToolMissingError(
       process.platform === "win32"
@@ -416,9 +418,16 @@ export async function transcribeFile({ input, model = MEETINGS_MODEL }, onProgre
         : "whisper.cpp not found — `brew install whisper-cpp`"
     );
   }
-  if (!(await modelVerified(model))) {
+  if (!(await d.modelVerified(model))) {
     onProgress?.({ phase: "model", pct: 0 });
-    await ensureModel((pct) => onProgress?.({ phase: "model", pct }), model);
+    try {
+      await d.ensureModel((pct) => onProgress?.({ phase: "model", pct }), model);
+    } catch (err) {
+      // Offline, an HTTP error, an interrupted download: the model is missing, not the audio
+      // at fault, so the Day Recorder retries later instead of failing (Codex review of PR 5).
+      // The message is the download's own, as Meetings showed before.
+      throw new ToolMissingError(err?.message ?? String(err));
+    }
   }
   const ffmpeg = await findTool(["ffmpeg"]);
   const whisper = await findTool(["whisper-cli", "whisper-cpp"]);

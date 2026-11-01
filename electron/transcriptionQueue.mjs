@@ -6,82 +6,109 @@
 // the Mac unusable; small.en runs at 0.03x realtime (spike Q6), so one keeps up easily.
 // WHY no text in the log: transcripts are captured content (protocol.md), so a failure is
 // logged with the segment id and the error's name only.
+// WHY it retries on its own (Codex review of PR 5): the backend lists what is waiting by
+// subscription, which says nothing new while the list is unchanged. A missing tool and a
+// backend that was down are both retried on a timer, and a result already made is kept, not
+// transcribed again.
 import { ToolMissingError } from "./meetingProcessor.mjs";
 
-// After a missing tool or model, wait this long before trying again.
+// After a missing tool or model, or a failed row write, wait this long before trying again.
 export const RETRY_AFTER_MS = 5 * 60_000;
 
 export function createTranscriptionQueue({ transcribe, resolvePath, addTranscript, setSegmentStatus, log }) {
-  // Segment ids taken this run (in progress or done), so a re-offered row is not redone.
-  const taken = new Set();
+  // Every segment id this run has taken: waiting, in progress, or done.
+  const known = new Set();
+  /** Oldest first: { segment, result? }; `result` is kept when its write failed. */
   const waiting = [];
   let pausedUntil = 0;
   let stopped = false;
   let running = null;
+  let retryTimer = null;
 
-  async function take(segment) {
-    let file;
-    try {
-      file = resolvePath(segment.path);
-    } catch (err) {
-      log(`transcription: segment ${segment._id} refused (${err?.name ?? "Error"}: its path is not in the media root)`);
-      await setSegmentStatus(segment._id, "failed");
-      return;
-    }
-    let result;
-    try {
-      result = await transcribe(file);
-    } catch (err) {
-      if (err instanceof ToolMissingError) {
-        pausedUntil = Date.now() + RETRY_AFTER_MS;
-        log(`transcription paused: ${err.message}`);
-        taken.delete(segment._id);
-        return;
+  function scheduleRetry() {
+    if (retryTimer || stopped) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      kick();
+    }, RETRY_AFTER_MS);
+  }
+
+  function kick() {
+    if (running || stopped || waiting.length === 0 || Date.now() < pausedUntil) return;
+    running = pump().finally(() => {
+      running = null;
+    });
+  }
+
+  /** What became of the segment: transcribe it unless it already has a result, then store. */
+  async function take(item) {
+    const { segment } = item;
+    if (!item.result) {
+      let file;
+      try {
+        file = resolvePath(segment.path);
+      } catch (err) {
+        log(`transcription: segment ${segment._id} refused (${err?.name ?? "Error"}: its path is not in the media root)`);
+        item.result = { status: "failed" };
       }
-      log(`transcription failed for segment ${segment._id} (${err?.name ?? "Error"})`);
-      await setSegmentStatus(segment._id, "failed");
-      return;
+      if (file) {
+        try {
+          item.result = await transcribe(file);
+        } catch (err) {
+          if (err instanceof ToolMissingError) {
+            log(`transcription paused: ${err.message}`);
+            return "pause";
+          }
+          log(`transcription failed for segment ${segment._id} (${err?.name ?? "Error"})`);
+          item.result = { status: "failed" };
+        }
+      }
     }
-    if ("transcript" in result) {
-      await addTranscript({ segmentId: segment._id, start: segment.start, end: segment.end, text: result.transcript });
-    } else {
-      await setSegmentStatus(segment._id, "transcribed");
+    try {
+      if ("transcript" in item.result) {
+        await addTranscript({ segmentId: segment._id, start: segment.start, end: segment.end, text: item.result.transcript });
+      } else {
+        await setSegmentStatus(segment._id, item.result.status ?? "transcribed");
+      }
+    } catch (err) {
+      log(`transcription: could not store the result for segment ${segment._id} (${err?.name ?? "Error"}); trying again later`);
+      return "retry";
     }
+    return "done";
   }
 
   async function pump() {
     while (!stopped && waiting.length > 0 && Date.now() >= pausedUntil) {
-      const segment = waiting.shift();
-      try {
-        await take(segment);
-      } catch (err) {
-        // A row write failed (the backend is down): offered again next time, not lost.
-        log(`transcription: could not store the result for segment ${segment._id} (${err?.name ?? "Error"})`);
-        taken.delete(segment._id);
+      const outcome = await take(waiting[0]);
+      if (outcome === "done") {
+        waiting.shift();
+        continue;
       }
+      if (outcome === "pause") pausedUntil = Date.now() + RETRY_AFTER_MS;
+      scheduleRetry();
+      return;
     }
-    // A pause leaves the rest waiting; they are offered again by the next update.
-    if (Date.now() < pausedUntil) {
-      for (const segment of waiting.splice(0)) taken.delete(segment._id);
-    }
-    running = null;
   }
 
   return {
-    /** Closed segments as the backend lists them; new ones join the queue oldest first. */
+    /** Closed segments as the backend lists them; new ones join the queue, oldest first. */
     offer(segments) {
-      if (stopped || Date.now() < pausedUntil) return;
-      const fresh = segments.filter((s) => !taken.has(s._id));
-      for (const s of fresh) taken.add(s._id);
-      waiting.push(...fresh);
-      waiting.sort((a, b) => a.start - b.start);
-      if (!running) running = pump();
+      if (stopped) return;
+      for (const segment of segments) {
+        if (known.has(segment._id)) continue;
+        known.add(segment._id);
+        waiting.push({ segment });
+      }
+      waiting.sort((a, b) => a.segment.start - b.segment.start);
+      kick();
     },
     /** Resolves when nothing is running. */
     idle: () => running ?? Promise.resolve(),
     /** Start nothing new; the segment in progress finishes. */
     stop() {
       stopped = true;
+      clearTimeout(retryTimer);
+      retryTimer = null;
       waiting.length = 0;
       return running ?? Promise.resolve();
     },
