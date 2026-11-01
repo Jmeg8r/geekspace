@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { ONBOARDING, UNSUPPORTED, addBundleId, createListEditor, removeBundleId, shotSecError } from "../src/lib/dayRecorderSettings";
+import {
+  ONBOARDING,
+  UNSUPPORTED,
+  addBundleId,
+  createListEditor,
+  recorderSupported,
+  removeBundleId,
+  shotSecError,
+} from "../src/lib/dayRecorderSettings";
 
 // WHAT: the Day Recorder Settings section's rules (plan PR 3e-2). WHY tested: the denylist
 // decides which apps are never captured (R4), so the editor must refuse what the server would
@@ -78,12 +86,35 @@ describe("createListEditor", () => {
     await second;
   });
 
-  it("rebases on the saved list once nothing is pending", async () => {
+  // Codex 3e-2 r2 P1: a save had finished, but the page had not re-rendered the saved list
+  // yet, so the next edit started from the stale one and saved [] again.
+  it("keeps the edited list until the saved list it renders has caught up", async () => {
+    const saved: string[][] = [];
+    const editor = createListEditor(async (list) => void saved.push(list));
+    await editor.edit(["com.apple.Mail"], (list) => [...list, "com.apple.TextEdit"]);
+    await editor.edit(["com.apple.Mail"], (list) => list.filter((id) => id !== "com.apple.Mail"));
+    expect(saved).toEqual([["com.apple.Mail", "com.apple.TextEdit"], ["com.apple.TextEdit"]]);
+  });
+
+  it("rebases on the saved list once it has caught up", async () => {
     const saved: string[][] = [];
     const editor = createListEditor(async (list) => void saved.push(list));
     await editor.edit(["a.b"], (list) => [...list, "c.d"]);
+    editor.sync(["a.b", "c.d"]);
+    // Changed elsewhere (another window) after this one's edit was saved and shown.
     await editor.edit(["x.y"], (list) => [...list, "e.f"]);
     expect(saved).toEqual([["a.b", "c.d"], ["x.y", "e.f"]]);
+  });
+
+  it("turns a save that throws at once into a rejection, and recovers", async () => {
+    let fail = true;
+    const editor = createListEditor((list) => {
+      if (fail) throw new Error("bridge gone");
+      return Promise.resolve(void list);
+    });
+    await expect(editor.edit(["a.b"], (list) => [...list, "c.d"])).rejects.toThrow("bridge gone");
+    fail = false;
+    await expect(editor.edit(["a.b"], (list) => list)).resolves.toBeUndefined();
   });
 
   it("passes a failed save on, and recovers for the next edit", async () => {
@@ -101,5 +132,16 @@ describe("createListEditor", () => {
 describe("UNSUPPORTED", () => {
   it("says the recorder needs macOS", () => {
     expect(UNSUPPORTED).toBe("Recording your day needs macOS. Geekspace on this computer can't capture.");
+  });
+});
+
+// Codex 3e-2 r2 P2: support was judged from the status, which is `off` on Windows too until
+// the recorder is turned on, so Windows offered the macOS onboarding.
+describe("recorderSupported", () => {
+  it("is decided by the platform, whatever the status says", () => {
+    expect(recorderSupported("MacIntel", { status: "off" })).toBe(true);
+    expect(recorderSupported("Win32", { status: "off" })).toBe(false);
+    expect(recorderSupported("MacIntel", { status: "unsupported" })).toBe(false);
+    expect(recorderSupported("MacIntel", null)).toBe(true);
   });
 });
