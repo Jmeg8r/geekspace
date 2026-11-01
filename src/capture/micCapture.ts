@@ -8,6 +8,9 @@
 // WHY one emit queue: MediaRecorder hands over a Blob, and reading its bytes is async. Each
 // chunk and each end marker is queued in order, so a segment's last chunk always reaches the
 // main process before its segmentEnd.
+// WHY a lost chunk drops its segment (Codex #89 r1): a chunk whose bytes cannot be read
+// leaves a hole, so chunkFailed tells the writer to keep no file and no row for it, and the
+// error says so out loud. A recorder that will not start is never announced as a segment.
 import { SILENCE_LEVEL, SILENCE_WARN_SEC } from "../lib/recorder";
 
 export type MicErrorKind = "denied" | "noDevice" | "unavailable" | "deviceLost" | "recorderError";
@@ -15,6 +18,7 @@ export type MicErrorKind = "denied" | "noDevice" | "unavailable" | "deviceLost" 
 export type MicEvent =
   | { type: "segmentStart"; segment: number; start: number }
   | { type: "chunk"; segment: number; bytes: ArrayBuffer }
+  | { type: "chunkFailed"; segment: number }
   | { type: "segmentEnd"; segment: number; end: number }
   | { type: "silent"; silentSec: number }
   | { type: "signal" }
@@ -91,28 +95,56 @@ export function startMicCapture({
     enqueue(resolveFinished);
   }
 
-  function open() {
-    const segment = nextSegment++;
-    const recorder = createRecorder(stream);
+  /** Hand a recorder's events to this segment: its chunks in order, its stop, its failure. */
+  function wire(recorder: RecorderLike, segment: number) {
     recorder.ondataavailable = (e) => {
       if (e.data.size === 0) return;
       const data = e.data;
-      enqueue(async () => emit({ type: "chunk", segment, bytes: await data.arrayBuffer() }));
+      enqueue(async () => {
+        let bytes: ArrayBuffer;
+        try {
+          bytes = await data.arrayBuffer();
+        } catch (err) {
+          console.error("Day Recorder mic: could not read a recorded chunk", err);
+          emit({ type: "chunkFailed", segment });
+          // Said even during a stop: the segment it belonged to is gone.
+          send({ type: "error", kind: "recorderError", message: "A recorded chunk could not be read." });
+          void stop();
+          return;
+        }
+        emit({ type: "chunk", segment, bytes });
+      });
     };
     recorder.onstop = () => finish(segment);
     recorder.onerror = (e) => {
       fail("recorderError", `The recorder failed (${e.error?.name ?? "Error"}).`);
     };
+  }
+
+  /** Start the next segment's recorder. False, and the failure reported, if it would not start. */
+  function open(): boolean {
+    const segment = nextSegment;
+    let recorder: RecorderLike;
+    try {
+      recorder = createRecorder(stream);
+      wire(recorder, segment);
+      recorder.start(timesliceMs);
+    } catch (err) {
+      const name = err instanceof Error ? err.name : "Error";
+      fail("recorderError", `The recorder could not start (${name}).`);
+      return false;
+    }
+    nextSegment++;
     send({ type: "segmentStart", segment, start: Date.now() });
-    recorder.start(timesliceMs);
     current = { recorder, segment };
+    return true;
   }
 
   function rollOver() {
     if (stopping || !current) return;
     const old = current.recorder;
-    open();
-    old.stop();
+    // A failed open has already stopped the capture, which finishes the old segment.
+    if (open()) old.stop();
   }
 
   function fail(kind: MicErrorKind, message: string) {

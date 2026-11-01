@@ -1,23 +1,13 @@
-// WHAT: entry for the hidden mic capture window (capture.html, plan PR 3d-2). Opens the
-// default input, runs micCapture.ts on it, and passes every event to the main process
-// through the window's own preload (electron/capturePreload.cjs).
+// WHAT: entry for the hidden mic capture window (capture.html, plan PR 3d-2). Supplies the DOM
+// parts (getUserMedia, MediaRecorder, the level meter) to micWindow.ts, which runs startup and
+// stop, and passes every event to the main process through the window's own preload
+// (electron/capturePreload.cjs).
 import { openStream, rmsLevel } from "../lib/recorder";
-import { micErrorKind, startMicCapture, type MicEvent, type RecorderLike } from "./micCapture";
-
-type CaptureBridge = {
-  config: () => Promise<{ ok: true; data: { segmentSec: number; timesliceMs: number } } | { ok: false; error: string }>;
-  event: (event: MicEvent) => void;
-  onStop: (cb: () => void) => void;
-};
-
-const COPY = {
-  denied: "Microphone access is off for Geekspace. Turn it on in System Settings > Privacy & Security > Microphone.",
-  noDevice: "No microphone is connected.",
-  unavailable: "The microphone is in use or not responding.",
-};
+import { startMicCapture, type RecorderLike } from "./micCapture";
+import { runMicWindow, type CaptureBridge, type OpenedMic } from "./micWindow";
 
 function bridge(): CaptureBridge | undefined {
-  // SAFETY: gsCapture is optional in this type, and run() only starts when it is present;
+  // SAFETY: gsCapture is optional in this type, and runMicWindow() only starts when it is present;
   // electron/capturePreload.cjs is the one place that defines it, with exactly this shape.
   return (window as { gsCapture?: CaptureBridge }).gsCapture;
 }
@@ -40,46 +30,36 @@ function adapt(recorder: MediaRecorder): RecorderLike {
   return like;
 }
 
-async function run(api: CaptureBridge) {
-  const cfg = await api.config();
-  if (!cfg.ok) {
-    api.event({ type: "error", kind: "unavailable", message: cfg.error });
-    api.event({ type: "stopped" });
-    return;
-  }
-  let stream: MediaStream;
-  try {
-    stream = await openStream();
-  } catch (err) {
-    const kind = micErrorKind(err instanceof Error ? err : {});
-    api.event({ type: "error", kind, message: kind === "denied" || kind === "noDevice" ? COPY[kind] : COPY.unavailable });
-    api.event({ type: "stopped" });
-    return;
-  }
-  const audio = new AudioContext();
-  const analyser = audio.createAnalyser();
-  analyser.fftSize = 512;
-  audio.createMediaStreamSource(stream).connect(analyser);
-  const frame = new Uint8Array(analyser.fftSize);
-  const capture = startMicCapture({
-    stream,
-    createRecorder: () => adapt(new MediaRecorder(stream, { mimeType: MIME })),
-    segmentSec: cfg.data.segmentSec,
-    timesliceMs: cfg.data.timesliceMs,
-    readLevel: () => {
-      analyser.getByteTimeDomainData(frame);
-      return rmsLevel(frame);
+/** Open the default input; capture starts on it only when micWindow.ts says so. */
+async function openMic(api: CaptureBridge): Promise<OpenedMic> {
+  const stream = await openStream();
+  let audio: AudioContext | null = null;
+  return {
+    start: (cfg) => {
+      audio = new AudioContext();
+      const analyser = audio.createAnalyser();
+      analyser.fftSize = 512;
+      audio.createMediaStreamSource(stream).connect(analyser);
+      const frame = new Uint8Array(analyser.fftSize);
+      return startMicCapture({
+        stream,
+        createRecorder: () => adapt(new MediaRecorder(stream, { mimeType: MIME })),
+        segmentSec: cfg.segmentSec,
+        timesliceMs: cfg.timesliceMs,
+        readLevel: () => {
+          analyser.getByteTimeDomainData(frame);
+          return rmsLevel(frame);
+        },
+        emit: api.event,
+      });
     },
-    emit: api.event,
-  });
-  api.onStop(() => {
-    void capture.stop().finally(() => {
+    release: () => {
       stream.getTracks().forEach((t) => t.stop());
-      void audio.close();
-    });
-  });
+      void audio?.close();
+    },
+  };
 }
 
 const api = bridge();
-if (api) void run(api);
+if (api) void runMicWindow(api, () => openMic(api));
 else console.error("Day Recorder mic: the capture bridge is missing; this page only runs in the capture window");

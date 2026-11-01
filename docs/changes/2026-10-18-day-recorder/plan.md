@@ -1509,3 +1509,30 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **The verification trap this time:** the first wait-for-segments script reported "0
     finished" because `touch -t` read a UTC time as local and set a marker about 4 hours in
     the future. A file listing showed the segments were there.
+- **2026-10-31, PR 3d-2, Codex round 1: FAIL, 5 × P1 and 2 × P2.** All seven are fixed test-first
+  (red commits `e1de53e` and `ea6dc36`).
+  - **The controller works toward the latest request, not what happens to be open.** A
+    `wanted` flag: a stop while macOS is asking for permission cancels the start; a start
+    during a stop runs once the stop is done; two starts during one ask share it, so they
+    open one window, not two. A later stop waits for a teardown the window began itself
+    (device lost), so a quit can't close the backend before the last row is in. A failure
+    keeps the mic down until the next stop and start, because the runtime calls start on
+    every Recording status.
+  - **A window that says stopped unasked, with no error first, is a failure** (`windowGone`),
+    not a quiet mic off.
+  - **A broken segment is dropped.** A refused chunk, a failed or short write, or a chunk the
+    window could not read (`chunkFailed`) leaves the segment with no file and no row.
+    Writes loop until every byte has landed.
+  - **A recorder that will not start is never announced.** `segmentStart` goes out only after
+    `start()` returns. A failure at a boundary still finishes the old segment.
+  - **The capture window's startup is now `src/capture/micWindow.ts`**, split out of
+    `main.ts` so it can be tested without a DOM. The stop listener is registered first; a
+    stop during config or getUserMedia starts nothing, lets go of the mic, and still says
+    stopped.
+  - **A silent mic records one capError per episode** (`mic: no signal for N s`).
+  - **The decode probe now fails a boundary gap past 250 ms.** It passed after the fix, with a
+    gap of about -1 ms.
+  - **Two sessions worked on this round at once.** The handoff's author was still running, so
+    two sessions shared the worktree. The fix was splitting the work by hunk, not by file:
+    the controller and writer fixes were written in one session, the capture side and probe
+    in the other.

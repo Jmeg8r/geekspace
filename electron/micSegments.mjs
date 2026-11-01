@@ -5,6 +5,8 @@
 // the media root. A message that fails a check is refused before anything touches the disk.
 // WHY a partial file: a crash leaves only `.partial-*`, which no row names and which the
 // retention sweep removes (dayRecorderMedia.mjs); a finished name always means a whole file.
+// WHY a broken segment is dropped (Codex #89 r1): once one of its chunks is refused, short or
+// lost, the rest can still arrive, but the file has a hole in it. It gets no file and no row.
 // WHY synchronous writes: chunks are about a second of Opus each (a few KB), and appending
 // them in arrival order is what keeps the file a valid WebM.
 import fs from "node:fs";
@@ -48,6 +50,7 @@ export function createMicSegmentWriter({
   maxChunkBytes = MAX_CHUNK_BYTES,
   maxSegmentBytes = MAX_SEGMENT_BYTES,
   now = Date.now,
+  writeSync = fs.writeSync,
 }) {
   const open = new Map();
   const pending = new Set();
@@ -71,19 +74,51 @@ export function createMicSegmentWriter({
     const partial = path.join(dir, `.partial-${name}`);
     const fd = fs.openSync(partial, "wx", 0o600);
     highest = segment;
-    open.set(segment, { fd, partial, final: path.join(dir, name), day, name, start, bytes: 0 });
+    open.set(segment, { fd, partial, final: path.join(dir, name), day, name, start, bytes: 0, broken: false });
     return { ok: true };
+  }
+
+  /** Write every byte, across short writes; a write that takes nothing is a disk error. */
+  function writeAll(fd, bytes) {
+    let off = 0;
+    while (off < bytes.byteLength) {
+      const n = writeSync(fd, bytes, off, bytes.byteLength - off);
+      if (!(n > 0)) throw Object.assign(new Error("the disk took no bytes"), { code: "ESHORTWRITE" });
+      off += n;
+    }
   }
 
   function append(segment, raw) {
     const s = open.get(segment);
     if (!s) return refuse(`segment ${segment} was not started`);
+    if (s.broken) return { ok: true };
     const bytes = asBytes(raw);
-    if (!bytes) return refuse("chunk bytes must be binary");
-    if (bytes.byteLength > maxChunkBytes) return refuse(`chunk of ${bytes.byteLength} bytes is over the ${maxChunkBytes}-byte cap`);
-    if (s.bytes + bytes.byteLength > maxSegmentBytes) return refuse(`segment ${segment} would pass the ${maxSegmentBytes}-byte cap`);
-    fs.writeSync(s.fd, bytes);
+    const why = !bytes
+      ? "chunk bytes must be binary"
+      : bytes.byteLength > maxChunkBytes
+        ? `chunk of ${bytes.byteLength} bytes is over the ${maxChunkBytes}-byte cap`
+        : s.bytes + bytes.byteLength > maxSegmentBytes
+          ? `segment ${segment} would pass the ${maxSegmentBytes}-byte cap`
+          : null;
+    if (why) {
+      s.broken = true;
+      return refuse(why);
+    }
+    try {
+      writeAll(s.fd, bytes);
+    } catch (err) {
+      s.broken = true;
+      return refuse(`could not write mic audio (${err?.code ?? err?.name ?? "Error"})`);
+    }
     s.bytes += bytes.byteLength;
+    return { ok: true };
+  }
+
+  /** The window could not read one of this segment's chunks. */
+  function lost(segment) {
+    const s = open.get(segment);
+    if (!s) return refuse(`segment ${segment} was not started`);
+    s.broken = true;
     return { ok: true };
   }
 
@@ -93,6 +128,11 @@ export function createMicSegmentWriter({
     if (!isNum(endAt) || endAt < s.start) return refuse("segmentEnd needs an end time after the start");
     open.delete(segment);
     fs.closeSync(s.fd);
+    if (s.broken) {
+      // Already reported when it broke; a file with a hole in it is not kept.
+      fs.rmSync(s.partial, { force: true });
+      return { ok: true, dropped: true };
+    }
     if (s.bytes === 0) {
       // No row and no file. Whether that is a dead mic or a stop just after a boundary is the
       // caller's call (micController.mjs).
@@ -121,6 +161,8 @@ export function createMicSegmentWriter({
           return begin(message.segment, message.start);
         case "chunk":
           return append(message.segment, message.bytes);
+        case "chunkFailed":
+          return lost(message.segment);
         case "segmentEnd":
           return end(message.segment, message.end);
         default:

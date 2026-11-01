@@ -20,6 +20,10 @@ const SEGMENT_SEC = 3;
 // The decoded length may differ from the segment's wall-clock length by container rounding
 // and the restart gap; more than this means the file is truncated or padded.
 const LENGTH_TOLERANCE_SEC = 0.5;
+// The next recorder starts on the same stream before the old one stops, so the measured gap
+// at a boundary is about 0 ms (plan PR 3d-2's proof). Past this, a restart is losing audio,
+// even when each file decodes alone and matches its own row (Codex #89 r1).
+const MAX_BOUNDARY_GAP_MS = 250;
 // 16 kHz, mono, 16-bit PCM, after a 44-byte header.
 const WAV_BYTES_PER_SEC = 16_000 * 2;
 const WAV_HEADER = 44;
@@ -88,6 +92,9 @@ try {
   }
   const span = (second.end - first.start) / 1000;
   const gapMs = Math.round((span - decoded[0].sec - decoded[1].sec) * 1000);
+  if (Math.abs(gapMs) > MAX_BOUNDARY_GAP_MS) {
+    fail(`the boundary between segments 1 and 2 is off by ${gapMs} ms, past the ${MAX_BOUNDARY_GAP_MS} ms limit`);
+  }
   console.log(
     `probe:segment-decode PASSED: segment 2 (${second.path}) decoded alone to ${decoded[1].sec.toFixed(2)} s ` +
       `of 16 kHz wav, peak ${decoded[1].level.peakDb.toFixed(1)} dB; segment 1 ${decoded[0].sec.toFixed(2)} s; ` +
