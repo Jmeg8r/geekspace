@@ -48,9 +48,12 @@ One JSON object per line on **stdout**, keys sorted. Every line has `"v": 1` and
 
 More detail on the fields:
 
-- **`shot.path`** is `<day>/shot-HHmmss-SSS.heic`, relative to the media root. That is the
-  shape `dayRecorder.addScreenshot` accepts. Files are written atomically, so a path is never
-  announced for a partial file.
+- **`shot.path`** is `<day>/shot-HHmmss-SSS-<epochMs>.heic`, relative to the media root. That
+  is the shape `dayRecorder.addScreenshot` accepts. The local time is for people; the epoch
+  milliseconds keep the name unique when local time repeats in the DST fall-back hour. A shot
+  is written whole under a hidden name and then linked into place, so a path is never
+  announced for a partial file and an existing file is never replaced (the helper fails
+  instead).
 - **`shot.appBundleId`** is the app that owns the menu bar, sampled before and after the
   capture. It is `null` when either sample is denylisted (when a work app was in use is
   information too), when the two samples differ, or when no app owns the menu bar. The
@@ -73,8 +76,9 @@ More detail on the fields:
 - **`segment`** is system audio from the CoreAudio tap, with the denylist excluded by bundle
   ID (each entry plus `<id>.helper`) and by live process object.
   - `kind` is always `"system"` from the helper. Mic segments come from the renderer (PR 3d).
-  - `path` is `<day>/sys-HHmmss-SSS.m4a`: mono AAC, 32 kbps, at the tap's sample rate. It
-    is the shape `dayRecorder.addSegment` accepts. `day` is the local day the segment
+  - `path` is `<day>/sys-HHmmss-SSS-<epochMs>.m4a`: mono AAC, 32 kbps, at the tap's sample
+    rate, named for the segment's start as shots are, and placed the same way: never over an
+    existing file. It is the shape `dayRecorder.addSegment` accepts. `day` is the local day the segment
     *started*. A segment closes at `--segment-sec`, at local midnight, at a tap rebuild, at
     stop, and when delivery resumes more than 500 ms away from where the segment's samples
     end (sleep and wake, a clock step). One file never mixes sample rates.

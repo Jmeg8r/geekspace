@@ -108,7 +108,10 @@ enum Run {
         formatter.dateFormat = "yyyy-MM-dd"
         let day = formatter.string(from: date)
         formatter.dateFormat = "HHmmss-SSS"
-        return (day, "\(prefix)-\(formatter.string(from: date)).\(ext)")
+        // The local part is for people; the epoch makes the name unique, because local time
+        // repeats in the DST fall-back hour. Truncated, as SSS is.
+        let epochMs = Int64((date.timeIntervalSince1970 * 1000).rounded(.down))
+        return (day, "\(prefix)-\(formatter.string(from: date))-\(epochMs).\(ext)")
     }
 
     static func run(_ args: Args) async {
@@ -201,7 +204,8 @@ enum Run {
                 let dir = "\(root)/\(day)"
                 do {
                     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-                    // Atomic: a kill mid-write must never leave a truncated image behind.
+                    // A kill mid-write must never leave a truncated image behind, and a
+                    // repeated name must never replace an earlier shot.
                     try writeWithoutReplacing(Screen.encode(image, heic: true, quality: heicQuality),
                                               to: URL(fileURLWithPath: "\(dir)/\(file)"))
                 } catch {

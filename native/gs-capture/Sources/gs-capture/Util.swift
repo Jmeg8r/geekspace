@@ -27,12 +27,33 @@ func emit(_ object: [String: Any], terminal: Bool = false) {
     }
 }
 
+/// Moves a finished `partial` to `final`, never replacing a file already there.
+/// WHY link(2), not rename: rename replaces, and a check-then-rename can race. link fails
+/// with EEXIST, so a name collision (local time repeats in the DST fall-back hour) fails
+/// loud instead of overwriting a finished recording. The mic does the same (PR #89).
 func placeWithoutReplacing(_ partial: URL, at final: URL) throws {
-    try FileManager.default.moveItem(at: partial, to: final)
+    guard link(partial.path, final.path) == 0 else {
+        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    // Already placed, so not a failure: a leftover hidden partial is removed by the
+    // retention sweep (electron/dayRecorderMedia.mjs). Said, never silent.
+    if unlink(partial.path) != 0 {
+        FileHandle.standardError.write("gs-capture: placed \(final.lastPathComponent) but could not remove its partial (errno \(errno))\n".data(using: .utf8)!)
+    }
 }
 
+/// Writes `data` as `final`, never replacing a file already there and never leaving a
+/// truncated file under the final name: written whole under a hidden name, then placed.
 func writeWithoutReplacing(_ data: Data, to final: URL) throws {
-    try data.write(to: final, options: .atomic)
+    let partial = final.deletingLastPathComponent().appendingPathComponent(".partial-\(final.lastPathComponent)")
+    try data.write(to: partial, options: .atomic)
+    do {
+        try placeWithoutReplacing(partial, at: final)
+    } catch {
+        // The placing error is the one to report; a partial this cannot remove is swept.
+        try? FileManager.default.removeItem(at: partial)
+        throw error
+    }
 }
 
 func fail(_ message: String) -> Never {
