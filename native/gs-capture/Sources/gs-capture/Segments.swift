@@ -289,6 +289,9 @@ final class SystemAudioRecorder {
     // The PR 3a proven pair: poll every 100 ms, hold 500 ms (at least two polls).
     static let rebuildMs = 100.0
     static let holdMs = 500.0
+    /// How far back the helper's own call hold reaches: twice the poll's detection lag, inside
+    /// the hold-back, so the call's first samples have not been delivered yet (CallHoldTests).
+    static let callLookbackMs = 2 * AudioUse.detectionLagMs
 
     private let queue = DispatchQueue(label: "gs-capture.audio-control")
     private var timer: DispatchSourceTimer?
@@ -306,7 +309,8 @@ final class SystemAudioRecorder {
     /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped`,
     /// `sessionUnverified`, `sampleRateChanged` and `audioUse`.
     init(root: String, denylist: [String], segmentSec: Double, maxCallSec: Double = CallHold.defaultMaxSec,
-         startHeld: Bool = false, report: @escaping (String, [String: Any]) -> Void) {
+         startHeld: Bool = false, calls: AudioUse.CallTracker = AudioUse.CallTracker(apps: [], browsers: []),
+         report: @escaping (String, [String: Any]) -> Void) {
         self.root = root
         self.segmentSec = segmentSec
         self.maxCallSec = maxCallSec
@@ -351,7 +355,11 @@ final class SystemAudioRecorder {
             // On this queue too, so it reads the tap's exclusion (sticky, orphans included)
             // without a lock: F2's "a denylisted app is using audio" and the tap's exclusion
             // can never disagree (plan PR 3b-3).
-            let watcher = AudioUseWatcher(denylist: denylist, report: report)
+            // On this queue as well, so a call app's start holds its audio before the next
+            // release: the call is held without a round trip through the supervisor.
+            let watcher = AudioUseWatcher(denylist: denylist, calls: calls, startHeld: startHeld,
+                                          onCallStart: { [unowned self] app, t in self.router.hold(at: t, app: app) },
+                                          report: report)
             self.watcher = watcher
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(Int(Tap.releaseTickMs)))

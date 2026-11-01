@@ -17,6 +17,13 @@
 // WHY a list of calls: a call can start while an earlier one is still being answered. Each is
 // held apart and answered on its own; the helper resolves held calls oldest first, so each
 // call's command waits for the one before it.
+// WHY the helper holds, not this module (Codex review of PR 4b, round 3): detection here comes
+// a poll and a round trip after the call began, and its opening audio reached a sys- file. The
+// helper holds each call app as its poll sees it start, reaching back past the poll's lag, and
+// says so (callHeld). Each such hold is a call of its own unless the newest call is still
+// unanswered or declined, which it joins; an answer covers every hold of its call. So an app
+// that starts after "I told them" (even while it is being saved), or leaves and comes back, is
+// asked about again.
 
 const MIN = 60_000;
 // Spec: NOTICE_TIMEOUT_MIN = 15, with one extension (2.2.1); the helper's hold cap matches.
@@ -25,9 +32,12 @@ export const EXTEND_MS = 15 * MIN;
 
 // Calls whose audio the helper is holding: waiting for an answer, being answered, or declined.
 const HELD = new Set(["asking", "giving", "declining", "dropping"]);
+// Calls a new hold joins: not answered yet, or declined. "giving" is answered: a hold that
+// lands while the yes is being saved is a new call.
+const JOINS = new Set(["asking", "declining", "dropping"]);
 
 export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log }) {
-  /** Oldest first: { callId, gen, apps, kind, ended, deadline, canExtend, timer, ready, done, finished } */
+  /** Oldest first: { callId, gen, app, holds, kind, ended, deadline, canExtend, timer, ready, done, finished } */
   let calls = [];
   // Which helper the calls belong to; bumped when one goes and when one starts.
   let gen = 0;
@@ -53,10 +63,12 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
   }
 
   function refresh() {
-    const held = phase !== "running" || calls.some((c) => HELD.has(c.kind));
+    const byCall = calls.some((c) => HELD.has(c.kind));
+    const held = phase !== "running" || byCall;
     if (held !== micHeld) {
       micHeld = held;
-      onMicHeld(held);
+      // `byCall`: a call is why, so the mic's open segment may hold some of it.
+      onMicHeld(held, byCall);
     }
     const asking = [...calls].reverse().find((c) => c.kind === "asking");
     const next = asking
@@ -78,13 +90,13 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
   }
 
   /**
-   * Run this call's resolving command once every earlier call has issued its own, so the
-   * helper (which resolves the oldest held call) applies it to this call. A call from an
-   * earlier helper has nothing in this one to resolve.
+   * Run this call's resolving command, once for each of its holds, after every earlier call
+   * has issued its own, so the helper (which resolves the oldest held call) applies it to this
+   * call. A call from an earlier helper has nothing in this one to resolve.
    */
   function resolveInHelper(call, name, ...args) {
     const run = () => {
-      if (live(call)) command(name, ...args);
+      if (live(call)) for (let i = 0; i < call.holds; i += 1) command(name, ...args);
       call.done();
     };
     // Nothing ahead of it: now. Otherwise once the call before it has issued its own.
@@ -131,9 +143,8 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
     call.kind = "dropping";
   }
 
-  function newCall(app, { holdCommand }) {
+  function newCall(app) {
     const before = [...calls].reverse().find((c) => HELD.has(c.kind)) ?? null;
-    if (holdCommand) command("hold");
     let done;
     const finished = new Promise((resolve) => {
       done = resolve;
@@ -143,7 +154,8 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
       callId: `call-${seq}-${Date.now()}`,
       gen,
       app,
-      apps: new Set([app]),
+      // The helper's holds this call owns: the startup hold, or the helper's own holds.
+      holds: 1,
       kind: "asking",
       ended: false,
       deadline: Date.now() + NOTICE_TIMEOUT_MS,
@@ -194,24 +206,29 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
       refresh();
     },
 
+    /**
+     * A call app the detector saw. Before the helper's first report, a call going on when it
+     * started: the startup hold already holds it (and any other app in it). After that the
+     * helper's own holds start calls (callHeld), so this does nothing.
+     */
     callAppStarted(app) {
+      if (phase !== "starting" || !startupHold) return;
+      startupHold = false;
+      newCall(app);
+      refresh();
+    },
+
+    /** The helper held a call app's audio on its own, from before its poll saw it start. */
+    callHeld(app) {
       if (phase === "stopped") return;
-      // A call going on when the helper started: the startup hold is already holding it.
-      if (startupHold) {
-        startupHold = false;
-        newCall(app, { holdCommand: false });
-        refresh();
-        return;
-      }
       const current = [...calls].reverse().find((c) => !c.ended) ?? null;
-      if (current && current.kind !== "told") {
-        // Joining a call that is unanswered, being answered, or declined: already held.
-        current.apps.add(app);
+      if (current && JOINS.has(current.kind)) {
+        // Unanswered or declined: this hold shares that call's answer.
+        current.holds += 1;
         return;
       }
-      if (current && current.apps.has(app)) return;
-      // A new call, or a new app joining a told one: held apart and asked about on its own.
-      const { before } = newCall(app, { holdCommand: true });
+      // A new call, or a new app after a yes (saved or being saved): asked about on its own.
+      const { before } = newCall(app);
       // An earlier call nobody answered is dropped: its answer can't cover this one.
       if (before?.kind === "asking") {
         before.ended = true;

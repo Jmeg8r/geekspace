@@ -22,7 +22,6 @@ function harness(opts: { logFails?: boolean; slowLog?: boolean } = {}) {
   const pendingLogs: (() => void)[] = [];
   const notice = createCallNotice({
     helper: {
-      hold: () => void calls.push("hold"),
       release: (id: string) => void calls.push(`release ${id}`),
       discard: () => void calls.push("discard"),
       clear: () => void calls.push("clear"),
@@ -240,7 +239,6 @@ describe("createCallNotice, a call", () => {
     const prompts: (CallPrompt | null)[] = [];
     const notice = createCallNotice({
       helper: {
-        hold: () => {},
         release: () => {
           throw new Error("The capture helper is not running");
         },

@@ -5,6 +5,7 @@ export const PROTOCOL_VERSION: 1;
 export const SILENT_LIMIT_MS: number;
 export const STOP_GRACE_MS: number;
 export const DRAIN_MS: number;
+export const AUDIO_USE_READY_LIMIT_MS: number;
 
 /** The Convex client's logger shape. */
 export type ClientLogger = {
@@ -25,7 +26,7 @@ export type HelperMessage =
   | { v: 1; event: "heartbeat"; t: number }
   | { v: 1; event: "shot"; day: string; path: string; takenAt: number; appBundleId: string | null; ocrText: string }
   | { v: 1; event: "segment"; kind: "system" | "call"; day: string; path: string; start: number; end: number }
-  | { v: 1; event: "callHeld"; t: number }
+  | { v: 1; event: "callHeld"; t: number; app?: string }
   | { v: 1; event: "callReleased"; segments: number; heldSec: number; overflowed: boolean }
   | { v: 1; event: "callDiscarded"; heldSec: number; reason: "command" | "stop" }
   | { v: 1; event: "callCleared"; segments: number; heldSec: number }
@@ -70,11 +71,17 @@ export type SupervisorOptions = {
   onAudioUse?: (message: Extract<HelperMessage, { event: "audioUse" }>) => void;
   /** The helper's first audio-use report is in (plan PR 4b). */
   onAudioUseReady?: () => void;
+  /** The helper held a call app's audio on its own: the app it saw start. */
+  onCallHeld?: (app: string) => void;
+  /** The apps the helper treats as calls; callDetector.mjs's lists by default. */
+  calls?: { apps: string[]; browsers: string[] };
   env?: NodeJS.ProcessEnv;
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   silentLimitMs?: number;
   stopGraceMs?: number;
   drainMs?: number;
+  /** How long after ready the first audio-use report may take. */
+  audioUseReadyLimitMs?: number;
 };
 
 /** `startHeld`: the helper holds call audio from its first sample (plan PR 4b). */

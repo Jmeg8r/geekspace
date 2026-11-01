@@ -19,6 +19,8 @@ export type ConfigReply = { ok: true; data: MicConfig } | { ok: false; cancelled
 export type MicController = {
   start: () => Promise<void>;
   stop: () => Promise<void>;
+  /** A call started: drop the open segment unfinished, then stop. */
+  discard: () => Promise<void>;
   receive: (sender: { id: number } | null | undefined, message: IncomingMessage) => void;
   ownsSender: (sender: { id: number } | null | undefined) => boolean;
   /** The capture page's config: cancelled when a stop came first; null for another sender. */

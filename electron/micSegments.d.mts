@@ -18,6 +18,8 @@ export type MicSegmentWriter = {
   handle: (message: IncomingMessage) => Handled;
   drain: () => Promise<void>;
   close: () => Promise<void>;
+  /** A call started: delete the open segments and those in their quarantine, with no row. */
+  discardOpen: () => void;
 };
 
 export function createMicSegmentWriter(options: {
@@ -30,4 +32,6 @@ export function createMicSegmentWriter(options: {
   now?: () => number;
   /** fs.writeSync, replaceable so tests can make writes short. */
   writeSync?: (fd: number, buf: Uint8Array, offset: number, length: number) => number;
+  /** How long a finished segment waits before its name and row; 0 (the default) is at once. */
+  quarantineMs?: number;
 }): MicSegmentWriter;

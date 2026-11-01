@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { BROWSERS, DEDICATED_CALL_APPS } from "../electron/callDetector.mjs";
 import {
   contentFreeLogger,
   createFileLog,
@@ -170,6 +171,11 @@ describe("Day Recorder supervisor", () => {
       "30",
       "--segment-sec",
       "300",
+      // The helper holds calls itself (Codex 4b r3).
+      "--call-apps",
+      [...DEDICATED_CALL_APPS].join(","),
+      "--browsers",
+      [...BROWSERS].join(","),
     ]);
   });
 

@@ -8,7 +8,8 @@ and a change here bumps `v`.
 
 ```
 gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segment-sec 300]
-               [--call-hold-max-sec 1800] [--start-held yes] [--duration s]
+               [--call-hold-max-sec 1800] [--start-held yes] [--call-apps id,id] [--browsers id,id]
+               [--duration s]
 ```
 
 - `--media-root` must be an existing absolute directory. Files go under `<media-root>/<day>/`.
@@ -32,6 +33,15 @@ gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segm
   came before any audio. The supervisor passes it to **every** helper it starts: until the first
   audio-use report (`audioUseReady`), no one can tell whether a call is going on, so nothing is
   written as system audio before it. Any other value fails the helper.
+- `--call-apps` and `--browsers` (plan PR 4b, Codex review round 3) take bundle IDs, refused
+  like the denylist's. The helper holds a call **itself**: when its audio-use poll sees a call
+  app start (a `--call-apps` app using audio in or out, a `--browsers` app holding the mic),
+  everything captured from 250 ms before that poll on is the call's (`callHeld` with `app`).
+  250 ms is twice the poll's detection lag (spike Q3) and inside the 500 ms hold-back, so none
+  of it has been written yet. System audio that resumed after that point (an earlier call's
+  release) is the new call's instead; a call held earlier keeps what it held. Calls already
+  going on at a `--start-held` helper's first poll are the startup hold's. A call ends when
+  its app uses neither input nor output; it starts again if the app comes back.
 - `--call-hold-max-sec` caps how much call audio is held (default 1800: the 15-minute notice
   timeout plus its one extension). Audio past the cap is not held; `callReleased` says so.
 
@@ -147,11 +157,15 @@ More detail on the fields:
     started (Electron's renderer records the mic).
   - At start, every app already using audio is reported once. After that, only changes
     are reported. `input: false, output: false` means the app stopped.
-- **`callHeld`** (`t`), **`callReleased`** (`segments`, `heldSec`, `overflowed`),
+- **`callHeld`** (`t`; `app` when the helper held on its own, a `--call-apps` or
+  `--browsers` id, never a denylisted one), **`callReleased`** (`segments`, `heldSec`, `overflowed`),
   **`callDiscarded`** (`heldSec`, `reason`: `command` or `stop`) and **`callCleared`**
   (`segments`, `heldSec`) report the call hold with counts only, never audio.
 - **`audioUseReady`** (`t`, `apps`, plan PR 4b) comes once, right after the first audio-use
-  poll has reported every app already using audio. It carries a count only.
+  poll has reported every app already using audio. It carries a count only. The supervisor
+  treats no `audioUseReady` within 10 s of `ready` as a failure (Not recording, the helper is
+  stopped): until it comes the mic stays off and system audio stays held, and heartbeats
+  don't count for it.
 - **`tapRebuilt` / `tailDropped`** carry only counts, levels and bundle IDs, never audio.
   **Their bundle fields can name a denylisted app** (`addedBundles`, `arrivedBundles`).
   They are diagnostics. The supervisor must not store or log them, or `audioUse`'s and

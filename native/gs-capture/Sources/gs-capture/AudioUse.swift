@@ -15,6 +15,8 @@ enum AudioUse {
     // Our own capture shows up as audio use: replayd reports input while an SCK audio stream
     // is open, and avconferenced reported input for a whole session with no call (Q3, Q4).
     static let ignoredBundles: Set<String> = ["com.apple.replayd", "com.apple.avconferenced"]
+    /// The most a poll lags the start of audio use: detection took -26 to +125 ms (spike Q3).
+    static let detectionLagMs = 125.0
 
     struct State: Equatable {
         var input = false
@@ -96,6 +98,36 @@ enum AudioUse {
         }
     }
 
+    /// Which call apps are in a call, by the supervisor's rule (electron/callDetector.mjs): a
+    /// dedicated call app using audio in or out, a browser once it holds the mic. A call ends
+    /// when the app uses neither. Never-record apps are folded into `.denylisted`, so they are
+    /// no call (spec F2 pauses the mic for them instead).
+    struct CallTracker {
+        let apps: Set<String>
+        let browsers: Set<String>
+        private(set) var inCall: Set<String> = []
+
+        init(apps: Set<String>, browsers: Set<String>) {
+            self.apps = apps
+            self.browsers = browsers
+        }
+
+        /// The apps that started a call since the last poll, sorted.
+        mutating func update(_ current: [Key: State]) -> [String] {
+            var started: [String] = []
+            var now: Set<String> = []
+            for (key, state) in current {
+                guard case .app(let app) = key, apps.contains(app) || browsers.contains(app) else { continue }
+                if inCall.contains(app) ? state.active : (state.input || (state.output && apps.contains(app))) {
+                    now.insert(app)
+                    if !inCall.contains(app) { started.append(app) }
+                }
+            }
+            inCall = now
+            return started.sorted()
+        }
+    }
+
     static func describe(_ key: Key) -> String {
         switch key {
         case .app(let app): return "app:\(app)"
@@ -157,9 +189,19 @@ final class AudioUseWatcher {
     private var last: [AudioUse.Key: AudioUse.State] = [:]
     private var nextPoll = 0.0
     private var announcedReady = false
+    private var calls: AudioUse.CallTracker
+    private let startHeld: Bool
+    private let onCallStart: (String, Double) -> Void
 
-    init(denylist: [String], report: @escaping (String, [String: Any]) -> Void) {
+    /// `onCallStart(app, t)`: a call app started using audio at or after `t` (plan PR 4b).
+    /// With `startHeld`, calls already going on at the first poll are the startup hold's.
+    init(denylist: [String], calls: AudioUse.CallTracker = AudioUse.CallTracker(apps: [], browsers: []),
+         startHeld: Bool = false, onCallStart: @escaping (String, Double) -> Void = { _, _ in },
+         report: @escaping (String, [String: Any]) -> Void) {
         self.denylist = denylist
+        self.calls = calls
+        self.startHeld = startHeld
+        self.onCallStart = onCallStart
         self.report = report
     }
 
@@ -175,6 +217,12 @@ final class AudioUseWatcher {
             report("audioUse", AudioUse.fields(change.key, change.state, t: now))
         }
         last = current
+        // Held from before this poll saw the app, so none of the call's opening audio is
+        // system audio (Codex review of PR 4b, round 3).
+        let started = calls.update(current)
+        if announcedReady || !startHeld {
+            for app in started { onCallStart(app, now - SystemAudioRecorder.callLookbackMs) }
+        }
         // Once: everything using audio at start has now been reported. Until this line the
         // supervisor treats any app as possibly in a call (plan PR 4b), so it is a count only.
         if !announcedReady {

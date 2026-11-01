@@ -166,9 +166,18 @@ final class CallRouter {
     var canDiscard: Bool { oldestPending != nil }
     var canClear: Bool { oldestPending != nil }
 
-    func hold(at t: Double) {
-        spans.append(Span(fromMs: t, call: Call(maxSec: maxSec)))
-        report("callHeld", ["t": t.isFinite ? round3(t) : 0])
+    /// Audio captured from `t` on is a new call's. `t` may be in the past (the helper's own
+    /// holds look back past its poll's detection lag, Codex review of PR 4b, round 3): system
+    /// audio that resumed after `t` is the new call's instead, but a call held before it keeps
+    /// what it held. `app` is the call app the helper saw start, when it held on its own.
+    func hold(at t: Double, app: String? = nil) {
+        let floor = spans.last { $0.call != nil }?.fromMs ?? -.infinity
+        let from = max(t, floor)
+        while spans.count > 1, let last = spans.last, last.call == nil, last.fromMs > from { spans.removeLast() }
+        spans.append(Span(fromMs: from, call: Call(maxSec: maxSec)))
+        var fields: [String: Any] = ["t": from.isFinite ? round3(from) : 0]
+        if let app { fields["app"] = app }
+        report("callHeld", fields)
     }
 
     func release(at t: Double) { resolve(.release, at: t) }

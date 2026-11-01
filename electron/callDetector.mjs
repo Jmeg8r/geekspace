@@ -9,7 +9,7 @@
 // WHY a reset per helper (Codex review of PR 4b, round 2): a new helper reports every app using
 // audio once, at start, and calls belong to one helper; the call notice asks again.
 
-const BROWSERS = new Set([
+export const BROWSERS = new Set([
   "com.google.Chrome",
   "com.apple.Safari",
   "org.mozilla.firefox",
@@ -22,15 +22,17 @@ const BROWSERS = new Set([
 
 // Spike Q4 and spec: FaceTime, Zoom, Teams, Slack, plus any browser holding the mic. The
 // helper maps a browser's helper process to the browser's own bundle id.
-export const CALL_APPS = new Set([
+// The helper holds a call itself, by the same rule, so it is given both lists (Codex review of
+// PR 4b, round 3).
+export const DEDICATED_CALL_APPS = new Set([
   "com.apple.FaceTime",
   "us.zoom.xos",
   "com.microsoft.teams",
   "com.microsoft.teams2",
   "com.tinyspeck.slackmacgap",
   "Cisco-Systems.Spark",
-  ...BROWSERS,
 ]);
+export const CALL_APPS = new Set([...DEDICATED_CALL_APPS, ...BROWSERS]);
 
 export function createCallDetector({ onAppStarted, onCallEnded, onDenylistedAudio }) {
   // Call apps in a call now.

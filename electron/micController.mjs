@@ -116,6 +116,15 @@ export function createMicController({
     return Promise.resolve();
   }
 
+  /**
+   * A call started (plan PR 4b): the open segment may hold the call's opening audio, so it is
+   * dropped, not finished (Codex review of PR 4b, round 3); then the mic stops as usual.
+   */
+  function discard() {
+    writer?.discardOpen();
+    return stop();
+  }
+
   function settleOff() {
     // The runtime calls stop on every status but Recording; only a change is news.
     if (!wanted && state.state !== "error" && state.state !== "off") setState({ state: "off" });
@@ -244,6 +253,7 @@ export function createMicController({
   return {
     start,
     stop,
+    discard,
     shutdown,
     receive,
     ownsSender,

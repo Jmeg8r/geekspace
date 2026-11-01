@@ -7,6 +7,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import readline from "node:readline";
+import { BROWSERS, DEDICATED_CALL_APPS } from "./callDetector.mjs";
 
 export const PROTOCOL_VERSION = 1;
 // protocol.md "Failure": no line at all (heartbeats come every 5 s) for more than 10 s.
@@ -17,6 +18,10 @@ export const STOP_GRACE_MS = 8_000;
 // How long a stop waits for row writes still in flight (the final segment's, mostly) before
 // the caller closes the Convex client and the backend.
 export const DRAIN_MS = 5_000;
+// The helper's first audio-use report comes from its first poll, 100 ms in. Without it the mic
+// stays off and system audio stays held, so no report this long after ready is a failure, and
+// heartbeats don't count for it (Codex review of PR 4b, round 3).
+export const AUDIO_USE_READY_LIMIT_MS = 10_000;
 const MAX_STDERR_CHARS = 500;
 const BUNDLE_ID_RE = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 
@@ -33,7 +38,8 @@ const SHAPES = {
     isStr(m.day) && isStr(m.path) && isNum(m.takenAt) && isStr(m.ocrText) && (m.appBundleId === null || isStr(m.appBundleId)),
   segment: (m) => (m.kind === "system" || m.kind === "call") && isStr(m.day) && isStr(m.path) && isNum(m.start) && isNum(m.end),
   // The call hold (plan PR 4a): counts and a fixed reason only, never audio.
-  callHeld: (m) => isNum(m.t),
+  // `app`: the call app the helper saw start, when it held on its own (Codex #4b r3).
+  callHeld: (m) => isNum(m.t) && (m.app === undefined || isStr(m.app)),
   callReleased: (m) => isNum(m.segments) && isNum(m.heldSec) && isBool(m.overflowed),
   callDiscarded: (m) => isNum(m.heldSec) && (m.reason === "command" || m.reason === "stop"),
   // Plan PR 4b: the first audio-use report is in; a startup hold cleared into system audio.
@@ -142,11 +148,16 @@ export function createSupervisor({
   onAudioUse = () => {},
   // The first audio-use report is in (plan PR 4b): until then any app may be in a call.
   onAudioUseReady = () => {},
+  // The helper held a call app's audio on its own (plan PR 4b): the app it saw start.
+  onCallHeld = () => {},
+  // The apps the helper treats as calls, by callDetector.mjs's rule.
+  calls = { apps: [...DEDICATED_CALL_APPS], browsers: [...BROWSERS] },
   env = process.env,
   spawnImpl = spawn,
   silentLimitMs = SILENT_LIMIT_MS,
   stopGraceMs = STOP_GRACE_MS,
   drainMs = DRAIN_MS,
+  audioUseReadyLimitMs = AUDIO_USE_READY_LIMIT_MS,
 }) {
   let state = { status: "off" };
   let child = null;
@@ -158,6 +169,7 @@ export function createSupervisor({
   let releasing = [];
   let lastStderr = "";
   let silenceTimer = null;
+  let readyTimer = null;
   const pending = new Set();
 
   function setState(next) {
@@ -179,8 +191,21 @@ export function createSupervisor({
     }, silentLimitMs);
   }
 
+  function armReadiness(proc) {
+    clearTimeout(readyTimer);
+    readyTimer = setTimeout(() => {
+      if (child !== proc || stopRequested) return;
+      fail({
+        reason: "protocol",
+        message: `gs-capture sent no audio-use report within ${Math.round(audioUseReadyLimitMs / 1000)} s of starting`,
+      });
+      terminate(proc);
+    }, audioUseReadyLimitMs);
+  }
+
   function fail(error) {
     clearSilence();
+    clearTimeout(readyTimer);
     if (stopRequested || state.status === "notRecording") return;
     log(`Not recording: ${error.reason}: ${error.message}`);
     setState({ status: "notRecording", error });
@@ -241,6 +266,7 @@ export function createSupervisor({
       case "ready":
         log(`gs-capture ready (pid ${m.pid})`);
         if (state.status === "starting") setState({ status: "recording" });
+        armReadiness(proc);
         return;
       case "shot":
         store("screenshot", sink.addScreenshot, {
@@ -279,7 +305,12 @@ export function createSupervisor({
       case "audioUse":
         onAudioUse(m);
         return;
+      case "callHeld":
+        log(diagnostic(m));
+        if (m.app !== undefined) onCallHeld(m.app);
+        return;
       case "audioUseReady":
+        clearTimeout(readyTimer);
         log(`audio use reported: ${m.apps} app(s)`);
         onAudioUseReady();
         return;
@@ -294,6 +325,7 @@ export function createSupervisor({
     if (child !== proc) return;
     child = null;
     clearSilence();
+    clearTimeout(readyTimer);
     if (stopRequested) return;
     const why = lastStderr || `gs-capture ${sawStopped ? "stopped on its own" : "exited without saying why"} (code ${code}, signal ${signal})`;
     fail({ reason: "exited", message: why, code });
@@ -303,6 +335,9 @@ export function createSupervisor({
     if (child) throw new Error("A gs-capture helper is already running");
     for (const id of denylist) {
       if (!BUNDLE_ID_RE.test(id)) throw new Error(`Denylist entry is not a bundle id: ${JSON.stringify(id)}`);
+    }
+    for (const id of [...calls.apps, ...calls.browsers]) {
+      if (!BUNDLE_ID_RE.test(id)) throw new Error(`Call app is not a bundle id: ${JSON.stringify(id)}`);
     }
     const args = [
       ...prefixArgs,
@@ -316,6 +351,9 @@ export function createSupervisor({
       String(segmentSec),
       // A call waits for its notice or was declined: hold from the first sample (plan PR 4b).
       ...(startHeld ? ["--start-held", "yes"] : []),
+      // The helper holds a call itself, from before its poll saw the app (Codex #4b r3).
+      ...(calls.apps.length > 0 ? ["--call-apps", calls.apps.join(",")] : []),
+      ...(calls.browsers.length > 0 ? ["--browsers", calls.browsers.join(",")] : []),
     ];
     stopRequested = false;
     sawStopped = false;

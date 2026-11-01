@@ -327,8 +327,9 @@ final class CallRouterTests: XCTestCase {
         router.hold(at: 1_000)
         router.release(at: 1_100)
         router.hold(at: 1_050, app: "us.zoom.xos")
-        for start in stride(from: 1_000.0, to: 1_300, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
         router.release(at: 1_200)
+        // Delivered after the commands, as the 500 ms hold-back makes it.
+        for start in stride(from: 1_000.0, to: 1_300, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
         router.settle(frontier: 1_300)
         XCTAssertEqual(sink.flushed, [[1_000], [1_050]], "the second call from where it was looked back to")
         XCTAssertEqual(sink.system.first, 1_200)

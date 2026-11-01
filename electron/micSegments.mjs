@@ -7,6 +7,9 @@
 // retention sweep removes (dayRecorderMedia.mjs); a finished name always means a whole file.
 // WHY a broken segment is dropped (Codex #89 r1): once one of its chunks is refused, short or
 // lost, the rest can still arrive, but the file has a hole in it. It gets no file and no row.
+// WHY a call discards (Codex review of PR 4b, round 3): the call is detected up to a poll after
+// it began, so the open segment, and one that ended just now, can hold its opening audio. When a
+// call starts both are deleted, never finished; a finished segment waits out a quarantine first.
 // WHY synchronous writes: chunks are about a second of Opus each (a few KB), and appending
 // them in arrival order is what keeps the file a valid WebM.
 import fs from "node:fs";
@@ -55,8 +58,12 @@ export function createMicSegmentWriter({
   maxSegmentBytes = MAX_SEGMENT_BYTES,
   now = Date.now,
   writeSync = fs.writeSync,
+  // How long a finished segment waits before it gets its name and row; 0 finishes at once.
+  quarantineMs = 0,
 }) {
   const open = new Map();
+  // Finished segments waiting out the quarantine: segment -> { s, endAt, timer }.
+  const ending = new Map();
   const pending = new Set();
   let highest = -1;
   let closed = false;
@@ -78,7 +85,7 @@ export function createMicSegmentWriter({
     const partial = path.join(dir, `.partial-${name}`);
     const fd = fs.openSync(partial, "wx", 0o600);
     highest = segment;
-    open.set(segment, { fd, partial, final: path.join(dir, name), day, name, start, bytes: 0, broken: false });
+    open.set(segment, { segment, fd, partial, final: path.join(dir, name), day, name, start, bytes: 0, broken: false });
     return { ok: true };
   }
 
@@ -131,6 +138,8 @@ export function createMicSegmentWriter({
     if (!s) return refuse(`segment ${segment} was not started`);
     if (!isNum(endAt) || endAt < s.start) return refuse("segmentEnd needs an end time after the start");
     open.delete(segment);
+    // Discarded for a call: its file is already gone.
+    if (s.discarded) return { ok: true, dropped: true };
     fs.closeSync(s.fd);
     if (s.broken) {
       // Already reported when it broke; a file with a hole in it is not kept.
@@ -143,13 +152,27 @@ export function createMicSegmentWriter({
       fs.rmSync(s.partial, { force: true });
       return { ok: true, empty: true };
     }
+    if (quarantineMs > 0) {
+      const timer = setTimeout(() => {
+        ending.delete(segment);
+        const result = finish(s, endAt);
+        if (!result.ok) log(`mic segment ${segment} not kept: ${result.reason}`);
+      }, quarantineMs);
+      ending.set(segment, { s, endAt, timer });
+      return { ok: true };
+    }
+    return finish(s, endAt);
+  }
+
+  /** Give a whole segment its name and its row. */
+  function finish(s, endAt) {
     // A hard link, then unlinking the partial: unlike rename, linking fails when the name is
     // taken, so a finished recording can never be replaced. The partial stays for the sweep.
     try {
       fs.linkSync(s.partial, s.final);
     } catch (err) {
       if (err?.code !== "EEXIST") throw err;
-      return refuse(`segment ${segment}'s file name already exists; the earlier file is kept`);
+      return refuse(`segment ${s.segment}'s file name already exists; the earlier file is kept`);
     }
     fs.unlinkSync(s.partial);
     const row = { day: s.day, kind: "mic", path: `${s.day}/${s.name}`, start: s.start, end: endAt };
@@ -200,13 +223,44 @@ export function createMicSegmentWriter({
     if (!done) log(`${pending.size} mic segment row write(s) still pending after ${DRAIN_MS} ms`);
   }
 
-  /** Stop accepting messages. An unfinished segment stays a partial for the retention sweep. */
+  /**
+   * A call started: delete the open segments and any still in their quarantine, with no row.
+   * Their later chunks and ends write nothing. Up to one segment of audio from before the call
+   * is lost with them (plan.md Deviations, 4b).
+   */
+  function discardOpen() {
+    for (const s of open.values()) {
+      if (s.discarded) continue;
+      fs.closeSync(s.fd);
+      fs.rmSync(s.partial, { force: true });
+      s.broken = true;
+      s.discarded = true;
+    }
+    for (const { s, timer } of ending.values()) {
+      clearTimeout(timer);
+      fs.rmSync(s.partial, { force: true });
+    }
+    ending.clear();
+  }
+
+  /** Stop accepting messages. An unfinished segment stays a partial for the retention sweep;
+   * one in its quarantine is finished now (a stop is not a call). */
   async function close() {
     closed = true;
-    for (const s of open.values()) fs.closeSync(s.fd);
+    for (const s of open.values()) if (!s.discarded) fs.closeSync(s.fd);
     open.clear();
+    for (const [segment, { s, endAt, timer }] of ending) {
+      clearTimeout(timer);
+      try {
+        const result = finish(s, endAt);
+        if (!result.ok) log(`mic segment ${segment} not kept: ${result.reason}`);
+      } catch (err) {
+        log(`could not finish mic segment ${segment} (${err?.code ?? err?.name ?? "Error"}); it stays a partial for the retention sweep`);
+      }
+    }
+    ending.clear();
     await drain();
   }
 
-  return { handle, drain, close };
+  return { handle, drain, close, discardOpen };
 }

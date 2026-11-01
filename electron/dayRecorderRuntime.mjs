@@ -29,6 +29,10 @@ import { createMicSegmentWriter } from "./micSegments.mjs";
 const GEEKSPACE_DIR = path.join(app.getPath("appData"), "Geekspace");
 // MediaRecorder's timeslice: how often a chunk crosses to the main process.
 const MIC_TIMESLICE_MS = 1000;
+// A finished mic segment waits this long for its name and row, so a call that began before its
+// end and is seen a poll later is discarded with it (Codex review of PR 4b, round 3). Detection
+// takes at most a poll's lag (125 ms, spike Q3) plus a line through stdout.
+const MIC_QUARANTINE_MS = 2000;
 const REFUSED = { ok: false, error: "Refused: the request did not come from the mic capture window" };
 
 
@@ -94,7 +98,8 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     // macOS asks once, then answers from the saved choice; elsewhere there is no recorder.
     askMic: async () => process.platform !== "darwin" || systemPreferences.askForMediaAccess("microphone"),
     createWindow: ({ onGone }) => createCaptureWindow({ page: capturePage, onGone }),
-    createWriter: () => createMicSegmentWriter({ root: mediaRoot, addSegment: rows(api.dayRecorder.addSegment), log }),
+    createWriter: () =>
+      createMicSegmentWriter({ root: mediaRoot, addSegment: rows(api.dayRecorder.addSegment), log, quarantineMs: MIC_QUARANTINE_MS }),
     onState: (s) => {
       log(`mic: ${s.state}${s.state === "error" ? ` (${s.kind})` : ""}`);
       service.setMic(s);
@@ -129,7 +134,8 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
       log(`call notice: ${next ? next.state : "closed"}`);
       for (const cb of promptListeners) cb(next);
     },
-    onMicHeld: () => syncMic(),
+    // Held for a call: the open segment may hold its opening audio, so it is dropped.
+    onMicHeld: (held, byCall) => void (held && byCall ? mic.discard() : syncMic()),
     log,
   });
   const detector = createCallDetector({
@@ -142,6 +148,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     },
   });
   service.onAudioUse((use) => detector.receive(use));
+  service.onCallHeld((app) => notice.callHeld(app));
   service.onAudioUseReady(() => {
     audioReady = true;
     notice.audioReady();

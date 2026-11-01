@@ -177,8 +177,15 @@ enum Run {
         // A malformed value must never read as "don't hold" (the --rebuild-ms lesson, PR 3a).
         case let other?: fail("--start-held takes yes, got \(other)")
         }
+        // The call apps, from the supervisor: the helper holds a call itself, from before its
+        // poll saw the app start (Codex review of PR 4b, round 3).
+        let callApps = args.list("call-apps"), browsers = args.list("browsers")
+        for id in callApps + browsers where id.range(of: bundleIDPattern, options: .regularExpression) == nil {
+            fail("--call-apps / --browsers entry is not a bundle id: \(id)")
+        }
         let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec, maxCallSec: maxCallSec,
-                                        startHeld: startHeld) { event, fields in
+                                        startHeld: startHeld,
+                                        calls: AudioUse.CallTracker(apps: Set(callApps), browsers: Set(browsers))) { event, fields in
             line(event, fields)
         }
         adopt(audio)

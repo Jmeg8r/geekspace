@@ -1663,3 +1663,22 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-11-01, PR 4a, Codex: 3 rounds, ending PASS.** Round 1 FAIL (3 × P1), round 2 FAIL
   (2 × P1, 1 × P2), round 3 PASS ([P1] none, 1 × P2: released segments could overshoot a
   fractional `--segment-sec`, fixed in the commit after `3080b80`).
+- **2026-11-01, PR 4b, calls and the room-mic pause.** Built as planned (spec R5, F2, F3), with
+  these choices, most from Codex rounds 1-3:
+  - **The mic stops for a call instead of holding.** The helper holds system audio (PR 4a); the
+    mic's segments are cut by its page, and a hold there would mean splitting a live WebM. What
+    is lost is James's own voice before he answers.
+  - **The helper holds a call itself (round 3).** Detection in the supervisor came a poll and a
+    round trip late, so a call's opening audio reached a `sys-` file. The helper is given the
+    call apps (`--call-apps`, `--browsers`) and holds from 250 ms before the poll that saw the
+    app start (twice the poll's detection lag, inside the 500 ms hold-back).
+  - **A call discards the mic's open segment (round 3), and finished segments wait 2 s for
+    their name and row**, so a call that began before a segment's end is discarded with it.
+    **Up to one segment (5 minutes) of mic audio from just before a call is lost.** That is
+    the price of "nothing of a call on disk before its notice"; James can revisit it.
+  - **Every helper starts held** until its first audio-use report, and calls belong to one
+    helper: a restarted helper asks again (round 2). No report within 10 s of ready is Not
+    recording (round 3).
+  - **Each hold of the helper's is a call of its own** unless the newest call is unanswered or
+    declined, which it joins; an answer resolves every hold of its call. An app starting after
+    a yes (even one still being saved), or leaving and coming back, is asked about again.
