@@ -48,6 +48,7 @@ describe("preload dayRecorder namespace", () => {
   it("exposes only the recorder controls, the call notice answers and onEvent", () => {
     const { dayRecorder } = loadPreload();
     expect(Object.keys(dayRecorder).sort()).toEqual([
+      "callPrompt",
       "dismissCallWarning",
       "extendNotice",
       "noticeDeclined",
@@ -72,6 +73,7 @@ describe("preload dayRecorder namespace", () => {
     await dayRecorder.noticeDeclined("call-1");
     await dayRecorder.extendNotice("call-1");
     await dayRecorder.dismissCallWarning();
+    await dayRecorder.callPrompt();
     expect(ipcRenderer.invoke.mock.calls).toEqual([
       ["gs:dayRecorder:status", undefined],
       ["gs:dayRecorder:setEnabled", { enabled: true }],
@@ -81,6 +83,7 @@ describe("preload dayRecorder namespace", () => {
       ["gs:dayRecorder:noticeDeclined", { callId: "call-1" }],
       ["gs:dayRecorder:extendNotice", { callId: "call-1" }],
       ["gs:dayRecorder:dismissCallWarning", undefined],
+      ["gs:dayRecorder:callPrompt", undefined],
     ]);
   });
 
@@ -102,6 +105,6 @@ describe("preload dayRecorder namespace", () => {
   });
 
   it("is present off macOS too, where the recorder reports unsupported", () => {
-    expect(Object.keys(loadPreload("win32").dayRecorder)).toHaveLength(9);
+    expect(Object.keys(loadPreload("win32").dayRecorder)).toHaveLength(10);
   });
 });

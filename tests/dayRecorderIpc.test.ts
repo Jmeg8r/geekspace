@@ -26,6 +26,7 @@ function fakeRecorder(status: RecorderStatus = { status: "off" }) {
     setEnabled: vi.fn(async () => {}),
     pause: vi.fn(async () => {}),
     resume: vi.fn(async () => {}),
+    callPrompt: () => ({ state: "asking", callId: "call-1", app: "us.zoom.xos", deadline: 1, canExtend: true }),
     notice: {
       given: vi.fn(async (_callId: string) => {}),
       declined: vi.fn(async (_callId: string) => {}),
@@ -40,6 +41,7 @@ describe("registerDayRecorderIpc", () => {
     const h = fakeHandle();
     registerDayRecorderIpc({ handle: h.handle, recorder: () => fakeRecorder() });
     expect([...h.handlers.keys()].sort()).toEqual([
+      "gs:dayRecorder:callPrompt",
       "gs:dayRecorder:dismissCallWarning",
       "gs:dayRecorder:extendNotice",
       "gs:dayRecorder:noticeDeclined",
@@ -64,6 +66,7 @@ describe("registerDayRecorderIpc", () => {
     expect(r.notice.declined).toHaveBeenCalledWith("call-2");
     expect(r.notice.extend).toHaveBeenCalledWith("call-3");
     expect(r.notice.dismiss).toHaveBeenCalledOnce();
+    expect(await h.handlers.get("gs:dayRecorder:callPrompt")!({})).toMatchObject({ state: "asking", callId: "call-1" });
   });
 
   it.each([[{}], [{ callId: 3 }], [{ callId: "" }], [{ callId: "x".repeat(65) }]])(
