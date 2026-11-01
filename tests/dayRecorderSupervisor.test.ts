@@ -556,3 +556,25 @@ describe("Day Recorder supervisor, the helper's own call holds", () => {
     expect(parseLine('{"v":1,"event":"callHeld","t":1,"app":7}').ok).toBe(false);
   });
 });
+
+// Codex 4b r4 P1: the helper says how far its audio-use polls have classified, so the mic's
+// chunks wait for it; the line is passed on and never logged.
+describe("Day Recorder supervisor, classification", () => {
+  it("parses audioClassified", () => {
+    expect(parseLine('{"v":1,"event":"audioClassified","through":1.5}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioClassified","through":"soon"}').ok).toBe(false);
+  });
+
+  it("passes each classified time on", async () => {
+    const seen: number[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CLASSIFIED: "1" },
+        onAudioClassified: (through) => void seen.push(through),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([1_760_970_000_000]);
+    expect(h.logs.join("\n")).not.toMatch(/classif/i);
+  });
+});

@@ -35,11 +35,13 @@ function harness(
     failRows?: boolean;
     now?: number;
     writeSync?: WriteSync;
-    quarantineMs?: number;
+    clock?: () => number;
+    waitForClassification?: boolean;
   } = {}
 ) {
   const rows: MicSegmentRow[] = [];
   const logs: string[] = [];
+  const errors: string[] = [];
   const writer = createMicSegmentWriter({
     root,
     addSegment: async (row) => {
@@ -47,13 +49,14 @@ function harness(
       rows.push(row);
     },
     log: (m) => void logs.push(m),
-    now: () => opts.now ?? START,
+    now: opts.clock ?? (() => opts.now ?? START),
     ...(opts.writeSync && { writeSync: opts.writeSync }),
     ...(opts.maxChunkBytes !== undefined && { maxChunkBytes: opts.maxChunkBytes }),
     ...(opts.maxSegmentBytes !== undefined && { maxSegmentBytes: opts.maxSegmentBytes }),
-    ...(opts.quarantineMs !== undefined && { quarantineMs: opts.quarantineMs }),
+    ...(opts.waitForClassification && { waitForClassification: true }),
+    onError: (reason) => void errors.push(reason),
   });
-  return { writer, rows, logs };
+  return { writer, rows, logs, errors };
 }
 
 describe("createMicSegmentWriter", () => {
@@ -257,52 +260,88 @@ describe("createMicSegmentWriter", () => {
   });
 });
 
-// Codex 4b r3 P3: when a call starts, the mic's open segment holds the call's opening audio
-// (detection takes up to a poll), and a segment that just ended may too. Both are discarded,
-// never finished: nothing of a call reaches disk before its notice.
-describe("createMicSegmentWriter, a call starting", () => {
-  it("[P1] discards the open segment at once: no file, no row, and later chunks write nothing", async () => {
-    const h = harness();
-    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
-    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("before") });
-    h.writer.discardOpen();
+// Codex 4b r3-r4 P1: mic audio reached disk (a partial file) before the call it held was
+// detected, and a call's discard missed segments that started after it. Chunks now wait in
+// memory until the capture helper has classified their time; a discard lasts for the window.
+describe("createMicSegmentWriter, waiting for the helper's classification", () => {
+  function gated() {
+    let t = START;
+    const h = harness({ waitForClassification: true, clock: () => t });
     const partial = path.join(root, DAY, `.partial-${NAME}`);
-    expect(fs.existsSync(partial)).toBe(false);
-    expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("call") })).toEqual({ ok: true });
-    expect(h.writer.handle({ type: "segmentEnd", segment: 0, end: END })).toMatchObject({ ok: true, dropped: true });
+    const final = path.join(root, DAY, NAME);
+    return { ...h, partial, final, at: (ms: number) => void (t = ms) };
+  }
+
+  it("[P1] writes no chunk to disk until its time is classified", async () => {
+    const h = gated();
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.at(START + 1_000);
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("one-") });
+    expect(fs.existsSync(h.partial) ? fs.readFileSync(h.partial, "utf8") : "").toBe("");
+    h.writer.classified(START + 999);
+    expect(fs.existsSync(h.partial) ? fs.readFileSync(h.partial, "utf8") : "").toBe("");
+    h.writer.classified(START + 1_000);
+    expect(fs.readFileSync(h.partial, "utf8")).toBe("one-");
+  });
+
+  it("finishes a segment only once its end is classified", async () => {
+    const h = gated();
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.at(START + 1_000);
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("one") });
+    h.at(START + 2_000);
+    h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
+    h.writer.classified(START + 1_500);
     await h.writer.drain();
     expect(h.rows).toEqual([]);
-    expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
-  });
-
-  it("[P1] discards a segment that ended within the quarantine, too", async () => {
-    const h = harness({ quarantineMs: 60_000 });
-    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
-    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("tail") });
-    h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
-    expect(fs.existsSync(path.join(root, DAY, NAME))).toBe(false);
-    h.writer.discardOpen();
-    await h.writer.close();
-    expect(h.rows).toEqual([]);
-    expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
-  });
-
-  it("finishes a quarantined segment once its quarantine is over", async () => {
-    const h = harness({ quarantineMs: 30 });
-    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
-    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("tail") });
-    h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
-    await new Promise((r) => setTimeout(r, 80));
+    h.writer.classified(START + 2_000);
+    await h.writer.settled();
     await h.writer.drain();
     expect(h.rows).toEqual([{ day: DAY, kind: "mic", path: `${DAY}/${NAME}`, start: START, end: END }]);
+    expect(fs.readFileSync(h.final, "utf8")).toBe("one");
   });
 
-  it("finishes a quarantined segment at close: a stop is not a call", async () => {
-    const h = harness({ quarantineMs: 60_000 });
+  it("[P1] a discard drops what waits and lasts: a segment started after it writes nothing", async () => {
+    const h = gated();
     h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.at(START + 1_000);
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("call") });
+    h.writer.discardOpen();
+    h.writer.handle({ type: "segmentEnd", segment: 0, end: START + 1_000 });
+    expect(h.writer.handle({ type: "segmentStart", segment: 1, start: START + 1_000 })).toEqual({ ok: true });
+    h.writer.handle({ type: "chunk", segment: 1, bytes: bytes("more call") });
+    h.writer.handle({ type: "segmentEnd", segment: 1, end: START + 2_000 });
+    h.writer.classified(START + 10_000);
+    await h.writer.close();
+    expect(h.rows).toEqual([]);
+    expect(fs.existsSync(path.join(root, DAY)) ? fs.readdirSync(path.join(root, DAY)) : []).toEqual([]);
+  });
+
+  it("at close, drops what was never classified, and says so", async () => {
+    const h = gated();
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.at(START + 1_000);
     h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("tail") });
     h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
     await h.writer.close();
-    expect(h.rows).toHaveLength(1);
+    expect(h.rows).toEqual([]);
+    expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
+    expect(h.logs.join("\n")).toMatch(/not classified/);
+  });
+
+  it("[P1] a write that fails while catching up is reported, never thrown", () => {
+    let t = START;
+    const h = harness({
+      waitForClassification: true,
+      clock: () => t,
+      writeSync: () => {
+        throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+      },
+    });
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    t = START + 1_000;
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("one") });
+    expect(() => h.writer.classified(START + 1_000)).not.toThrow();
+    expect(h.errors.join("\n")).toMatch(/ENOSPC/);
   });
 });

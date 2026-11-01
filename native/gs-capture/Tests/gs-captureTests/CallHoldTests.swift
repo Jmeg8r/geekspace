@@ -355,11 +355,50 @@ final class CallRouterTests: XCTestCase {
         XCTAssertEqual(sink.reports.last?.1["app"] as? String, "us.zoom.xos")
     }
 
-    // The lookback must cover the poll's detection lag (spike Q3: up to 125 ms) and stay
-    // inside what PCMHold has not yet delivered.
-    func testTheLookbackCoversDetectionAndStaysInsideTheHoldBack() {
-        XCTAssertGreaterThanOrEqual(SystemAudioRecorder.callLookbackMs, AudioUse.detectionLagMs)
-        XCTAssertLessThan(SystemAudioRecorder.callLookbackMs + Tap.releaseTickMs, SystemAudioRecorder.holdMs)
+    // Codex 4b r4 P1: a poll delayed by a long flush let call audio older than a fixed
+    // lookback through as system audio. Audio is delivered only up to what the last poll has
+    // classified, and a call is held from there, however late the next poll comes.
+    func testTheWatcherHoldsFromWhereItLastClassifiedEvenAfterAStall() {
+        var t = 1_000.0
+        var processes: [AudioUse.Process] = []
+        var holds: [(String, Double)] = []
+        var reports: [(String, [String: Any])] = []
+        let watcher = AudioUseWatcher(denylist: [], calls: AudioUse.CallTracker(apps: ["us.zoom.xos"], browsers: []),
+                                      onCallStart: { holds.append(($0, $1)) }, now: { t }, readProcesses: { _ in processes },
+                                      report: { reports.append(($0, $1)) })
+        watcher.tick(known: [])
+        XCTAssertEqual(watcher.classifiedThrough, 1_000 - AudioUse.detectionLagMs)
+        t = 3_000
+        processes = [AudioUse.Process(pid: 4_242, parent: 1, bundle: "us.zoom.xos", app: "us.zoom.xos",
+                                      input: true, output: true, denylisted: false)]
+        watcher.tick(known: [])
+        XCTAssertEqual(holds.map(\.0), ["us.zoom.xos"])
+        XCTAssertEqual(holds.map(\.1), [1_000 - AudioUse.detectionLagMs], "from the last classified point, not 2 s back")
+        XCTAssertEqual(watcher.classifiedThrough, 3_000 - AudioUse.detectionLagMs)
+        let classified = reports.filter { $0.0 == "audioClassified" }.compactMap { $0.1["through"] as? Double }
+        XCTAssertEqual(classified, [875, 2_875])
+        let order = reports.map(\.0).filter { $0 != "audioUse" }
+        XCTAssertEqual(order.suffix(1), ["audioClassified"], "a poll's holds come before it says what it classified")
+    }
+
+    func testDeliveryWaitsForClassification() {
+        XCTAssertEqual(SystemAudioRecorder.releaseLimit(tap: 5_000, classifiedThrough: 1_000) - SystemAudioRecorder.holdMs, 1_000)
+        XCTAssertEqual(SystemAudioRecorder.releaseLimit(tap: 1_200, classifiedThrough: 1_000), 1_200, "the tap's own cap still holds")
+        XCTAssertEqual(SystemAudioRecorder.releaseLimit(tap: 5_000, classifiedThrough: -.infinity), -.infinity, "nothing before the first poll")
+    }
+
+    // At stop, audio after the last classified point is dropped: no poll can say whether a
+    // call began in it. A call's span ends there too.
+    func testACutoffDropsWhatWasNeverClassified() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.release(at: 1_100)
+        router.cutoff(at: 1_050)
+        for start in stride(from: 900.0, to: 1_200, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.stop()
+        XCTAssertEqual(sink.flushed, [[1_000]])
+        XCTAssertFalse(sink.system.contains { $0 >= 1_000 })
+        XCTAssertEqual(sink.system.first, 900)
     }
 
     func testTheCallTrackerStartsACallOncePerApp() {

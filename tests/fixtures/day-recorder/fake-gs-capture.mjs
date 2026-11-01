@@ -154,6 +154,7 @@ switch (scenario) {
     line("audioUseReady", { apps: process.env.FAKE_AUDIO_USE ? 1 : 0, t: Date.now() });
     // The helper held a call app's audio on its own (plan PR 4b, Codex 4b r3).
     if (process.env.FAKE_CALL_HELD) line("callHeld", { app: "us.zoom.xos", t: Date.now() });
+    if (process.env.FAKE_CLASSIFIED) line("audioClassified", { through: 1_760_970_000_000 });
     // A command channel that breaks while capture goes on: fd 0 itself is closed, so the
     // supervisor's next write fails with EPIPE (destroying the stream would not close it).
     if (process.env.FAKE_CLOSE_STDIN) {
