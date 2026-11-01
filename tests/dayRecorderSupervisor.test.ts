@@ -440,3 +440,19 @@ describe("Day Recorder supervisor, call hold under pressure", () => {
     expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
   });
 });
+
+// Plan PR 4b: audioUse feeds call detection and the room-mic pause.
+describe("Day Recorder supervisor, audioUse", () => {
+  it("passes each audioUse line on, as parsed", async () => {
+    const seen: { app: string | null; input: boolean }[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_AUDIO_USE: "1" },
+        onAudioUse: (m) => void seen.push({ app: m.app, input: m.input }),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([{ app: "us.zoom.xos", input: true }]);
+    expect(h.logs.join("\n")).not.toContain("us.zoom.xos");
+  });
+});
