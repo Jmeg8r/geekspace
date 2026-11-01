@@ -287,3 +287,18 @@ describe("dayRecorder denylist edits", () => {
     await expect(t.mutation(api.dayRecorder.removeFromDenylist, { id: "../x" })).rejects.toThrow("Invalid app bundle id");
   });
 });
+
+// Plan PR 5: the transcription queue reads closed segments, oldest first.
+describe("dayRecorder.pendingSegments", () => {
+  it("lists closed segments oldest first, up to the limit, and nothing else", async () => {
+    const t = convexTest(schema, modules);
+    const a = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 900_000, path: "2026-10-18/mic-a.webm" }));
+    const b = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 1_200_000, path: "2026-10-18/mic-b.webm" }));
+    const c = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 600_000, path: "2026-10-18/mic-c.webm" }));
+    await t.mutation(api.dayRecorder.setSegmentStatus, { segmentId: c, status: "transcribed" });
+    const rows = await t.query(api.dayRecorder.pendingSegments, { limit: 10 });
+    expect(rows.map((r) => r._id)).toEqual([b, a]);
+    expect(rows[0]).toEqual({ _id: b, path: "2026-10-18/mic-b.webm", start: NOW - 1_200_000, end: NOW - 900_000 });
+    expect((await t.query(api.dayRecorder.pendingSegments, { limit: 1 })).map((r) => r._id)).toEqual([b]);
+  });
+});
