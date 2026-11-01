@@ -156,6 +156,7 @@ final class AudioUseWatcher {
     private let report: (String, [String: Any]) -> Void
     private var last: [AudioUse.Key: AudioUse.State] = [:]
     private var nextPoll = 0.0
+    private var announcedReady = false
 
     init(denylist: [String], report: @escaping (String, [String: Any]) -> Void) {
         self.denylist = denylist
@@ -174,5 +175,11 @@ final class AudioUseWatcher {
             report("audioUse", AudioUse.fields(change.key, change.state, t: now))
         }
         last = current
+        // Once: everything using audio at start has now been reported. Until this line the
+        // supervisor treats any app as possibly in a call (plan PR 4b), so it is a count only.
+        if !announcedReady {
+            announcedReady = true
+            report("audioUseReady", ["t": round3(now), "apps": current.count])
+        }
     }
 }

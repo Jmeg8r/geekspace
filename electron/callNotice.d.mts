@@ -10,19 +10,23 @@ export type CallPrompt =
   | { state: "timedOut" | "failed"; callId: string };
 
 export type CallNotice = {
-  callStarted: (app: string) => void;
+  /** A new helper is starting: always true (it starts held); the old helper's calls are gone. */
+  helperStarting: () => boolean;
+  /** The helper stopped: its calls are gone with it. */
+  helperGone: () => void;
+  /** The helper's first audio-use report is in. */
+  audioReady: () => void;
+  callAppStarted: (app: string) => void;
   callEnded: () => void;
   given: (callId: string) => Promise<void>;
   declined: (callId: string) => Promise<void>;
   extend: (callId: string) => void;
   dismiss: () => void;
-  /** A new helper is starting: whether it must hold from its first sample. */
-  helperStarting: () => boolean;
   micHeld: () => boolean;
 };
 
 export function createCallNotice(options: {
-  helper: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void };
+  helper: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void; clear: () => void };
   logEvent: (event: { kind: "noticeGiven" | "noticeDeclined"; detail: string }) => Promise<string>;
   onPrompt: (prompt: CallPrompt | null) => void;
   onMicHeld: (held: boolean) => void;

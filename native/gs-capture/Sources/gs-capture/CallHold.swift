@@ -78,10 +78,11 @@ final class CallHold {
 
     /// Write released runs as `call-` segments of at most `segmentSec`, each a complete file
     /// (spec R2). Returns how many segments were written.
-    static func flush(_ runs: [Run], root: String, segmentSec: Double,
+    /// `prefix`/`kind`: `call` for a released call; `sys`/`system` for a cleared startup hold.
+    static func flush(_ runs: [Run], root: String, segmentSec: Double, prefix: String = "call", kind: String = "call",
                       report: @escaping (String, [String: Any]) -> Void) -> Int {
         var written = 0
-        let writer = SegmentWriter(root: root, segmentSec: segmentSec, sampleRate: rate, prefix: "call", kind: "call") { event, fields in
+        let writer = SegmentWriter(root: root, segmentSec: segmentSec, sampleRate: rate, prefix: prefix, kind: kind) { event, fields in
             if event == "segment" { written += 1 }
             report(event, fields)
         }
@@ -115,7 +116,8 @@ final class CallHold {
 /// everything captured before its end has been delivered.
 /// Used from the recorder's control queue only.
 final class CallRouter {
-    private enum Fate { case pending, release, discard(String) }
+    /// `clear`: there was no call (a helper's startup hold, plan PR 4b); written as system audio.
+    private enum Fate { case pending, release, discard(String), clear }
     private final class Call {
         let hold: CallHold
         var fate = Fate.pending
@@ -131,6 +133,7 @@ final class CallRouter {
     private let append: (PCMChunk) -> Void
     private let closeSystem: () -> Void
     private let flush: ([CallHold.Run]) -> Int
+    private let flushSystem: ([CallHold.Run]) -> Int
     private let report: (String, [String: Any]) -> Void
     private var spans = [Span(fromMs: -.infinity, call: nil)]
     private var routingCall = false
@@ -138,11 +141,13 @@ final class CallRouter {
     /// `startHeld`: everything from the first sample belongs to a held call, for a helper
     /// started while a call waits for its notice or was declined (Codex review of PR 4b).
     init(maxSec: Double, startHeld: Bool = false, append: @escaping (PCMChunk) -> Void, closeSystem: @escaping () -> Void,
-         flush: @escaping ([CallHold.Run]) -> Int, report: @escaping (String, [String: Any]) -> Void) {
+         flush: @escaping ([CallHold.Run]) -> Int, flushSystem: @escaping ([CallHold.Run]) -> Int = { _ in 0 },
+         report: @escaping (String, [String: Any]) -> Void) {
         self.maxSec = maxSec
         self.append = append
         self.closeSystem = closeSystem
         self.flush = flush
+        self.flushSystem = flushSystem
         self.report = report
         if startHeld { hold(at: -.infinity) }
     }
@@ -159,6 +164,7 @@ final class CallRouter {
     var canHold: Bool { true }
     var canRelease: Bool { oldestPending != nil }
     var canDiscard: Bool { oldestPending != nil }
+    var canClear: Bool { oldestPending != nil }
 
     func hold(at t: Double) {
         spans.append(Span(fromMs: t, call: Call(maxSec: maxSec)))
@@ -168,6 +174,9 @@ final class CallRouter {
     func release(at t: Double) { resolve(.release, at: t) }
 
     func discard(at t: Double, reason: String = "command") { resolve(.discard(reason), at: t) }
+
+    /// No call after all: what was held is ordinary system audio.
+    func clear(at t: Double) { resolve(.clear, at: t) }
 
     /// Resolve the oldest waiting call. If it is still the one being held, system audio
     /// resumes at `t`; otherwise it already ended where the next call began.
@@ -228,6 +237,10 @@ final class CallRouter {
                 let heldSec = call.hold.heldSec
                 _ = call.hold.take()
                 report("callDiscarded", ["heldSec": round3(heldSec), "reason": reason])
+            case .clear:
+                let heldSec = call.hold.heldSec
+                let segments = flushSystem(call.hold.take())
+                report("callCleared", ["segments": segments, "heldSec": round3(heldSec)])
             case .pending:
                 // Held apart by a later call, and not answered yet: it settles later, in order.
                 spans.insert(done, at: 0)

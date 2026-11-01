@@ -123,6 +123,7 @@ enum Run {
                 case "call hold": audio.holdCall()
                 case "call release": audio.releaseCall()
                 case "call discard": audio.discardCall()
+                case "call clear": audio.clearCall()
                 default: fail("unknown command on stdin: \(command.prefix(40))")
                 }
             }

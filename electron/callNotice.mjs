@@ -2,18 +2,21 @@
 // audio in memory and the mic stops; James is asked to tell everyone it is being recorded.
 // "I told them" writes a noticeGiven event and only then releases the held audio, with that
 // event's id, after which the call is recorded as usual. "Don't record this call", no answer
-// within the deadline, or a notice that can't be written drop the held audio, and the rest of
-// that call stays unrecorded until it ends.
+// within the deadline, or a notice that can't be written keep it held, unwritten, and drop it
+// when the call ends.
 // WHY the mic stops instead of holding: the helper holds system audio (PR 4a); the mic's own
 // segments are cut by its page, and a hold there would mean splitting a live WebM. Stopping
 // keeps the same guarantee (nothing of the call on disk before the notice); what is lost is
 // James's own voice before he answers (plan.md Deviations, 4b).
-// WHY a list of calls (Codex review of PR 4b): a call can start while an earlier one is still
-// being answered. Each is held apart and answered on its own; the helper resolves held calls
-// oldest first, so each call's command waits for the one before it.
-// WHY decisions survive the helper: a retry, a pause or a restart replaces the helper, not the
-// call. A helper started while the newest call is unanswered or declined starts held, and only
-// that call carries into it; older calls' audio went with the old helper.
+// WHY every helper starts held, and calls belong to one helper (Codex review of PR 4b, rounds 1
+// and 2): a helper can't know whether a call is going on until its first audio-use report, and
+// a call seen by a new helper can't be proven to be the one answered before. So each helper
+// holds from its first sample until that report; a call already going on keeps that hold as
+// its own and is asked about again; with none, the hold is cleared into ordinary system audio.
+// An old helper's calls, and answers that arrive for them late, do nothing.
+// WHY a list of calls: a call can start while an earlier one is still being answered. Each is
+// held apart and answered on its own; the helper resolves held calls oldest first, so each
+// call's command waits for the one before it.
 
 const MIN = 60_000;
 // Spec: NOTICE_TIMEOUT_MIN = 15, with one extension (2.2.1); the helper's hold cap matches.
@@ -24,15 +27,22 @@ export const EXTEND_MS = 15 * MIN;
 const HELD = new Set(["asking", "giving", "declining", "dropping"]);
 
 export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log }) {
-  /** Oldest first: { callId, app, kind, ended, deadline, canExtend, timer, inHelper, ready, done } */
+  /** Oldest first: { callId, gen, apps, kind, ended, deadline, canExtend, timer, ready, done, finished } */
   let calls = [];
+  // Which helper the calls belong to; bumped when one goes and when one starts.
+  let gen = 0;
+  // "stopped" | "starting" (held until the first report) | "running"
+  let phase = "stopped";
+  // The startup hold is still waiting: no call has taken it as its own yet.
+  let startupHold = false;
   let warning = null;
   let seq = 0;
-  let micHeld = false;
+  let micHeld = true;
   let prompt = null;
 
+  const live = (call) => call.gen === gen;
   const newest = () => calls.at(-1) ?? null;
-  const find = (callId) => calls.find((c) => c.callId === callId) ?? null;
+  const find = (callId) => calls.find((c) => c.callId === callId && live(c)) ?? null;
 
   function command(name, ...args) {
     try {
@@ -43,7 +53,7 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
   }
 
   function refresh() {
-    const held = calls.some((c) => HELD.has(c.kind));
+    const held = phase !== "running" || calls.some((c) => HELD.has(c.kind));
     if (held !== micHeld) {
       micHeld = held;
       onMicHeld(held);
@@ -69,18 +79,25 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
 
   /**
    * Run this call's resolving command once every earlier call has issued its own, so the
-   * helper (which resolves the oldest held call) applies it to this call. A call that is not
-   * in the current helper has nothing there to resolve.
+   * helper (which resolves the oldest held call) applies it to this call. A call from an
+   * earlier helper has nothing in this one to resolve.
    */
-  async function resolveInHelper(call, name, ...args) {
-    await call.ready;
-    if (call.inHelper) command(name, ...args);
-    call.done();
+  function resolveInHelper(call, name, ...args) {
+    const run = () => {
+      if (live(call)) command(name, ...args);
+      call.done();
+    };
+    // Nothing ahead of it: now. Otherwise once the call before it has issued its own.
+    if (call.readyNow) {
+      run();
+      return Promise.resolve();
+    }
+    return call.ready.then(run);
   }
 
-  /** Drop what is held; keep holding to drop the rest while the call goes on. */
+  /** Declined, timed out, or a notice that couldn't be written: held, unwritten, until it ends. */
   async function drop(call, why) {
-    if (call.kind !== "asking") return;
+    if (call.kind !== "asking" || !live(call)) return;
     clearTimeout(call.timer);
     call.kind = "declining";
     const detail =
@@ -94,68 +111,121 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
     } catch (err) {
       log(`call notice: could not record that the notice was declined (${err?.message ?? err})`);
     }
-    await settleDropped(call);
+    if (!live(call)) return;
+    settleDropped(call);
     if (why === "timedOut") warning = { state: "timedOut", callId: call.callId };
     refresh();
   }
 
-  async function settleDropped(call) {
-    await resolveInHelper(call, "discard");
+  function settleDropped(call) {
+    // Ended (or superseded): drop it now. Going on: keep holding; it is dropped when it ends.
     if (call.ended || call !== newest()) {
-      remove(call);
+      void resolveInHelper(call, "discard").then(() => {
+        remove(call);
+        refresh();
+      });
+      // Resolved now when nothing was ahead of it.
+      if (call.readyNow) remove(call);
       return;
     }
-    // The call goes on: hold again, so the rest of it is dropped too when it ends.
-    if (call.inHelper) command("hold");
     call.kind = "dropping";
-    call.ready = Promise.resolve();
-    call.done = () => {};
+  }
+
+  function newCall(app, { holdCommand }) {
+    const before = [...calls].reverse().find((c) => HELD.has(c.kind)) ?? null;
+    if (holdCommand) command("hold");
+    let done;
+    const finished = new Promise((resolve) => {
+      done = resolve;
+    });
+    seq += 1;
+    const call = {
+      callId: `call-${seq}-${Date.now()}`,
+      gen,
+      app,
+      apps: new Set([app]),
+      kind: "asking",
+      ended: false,
+      deadline: Date.now() + NOTICE_TIMEOUT_MS,
+      canExtend: true,
+      timer: null,
+      ready: before ? before.finished : Promise.resolve(),
+      readyNow: !before,
+      done,
+      finished,
+    };
+    if (before) before.finished.then(() => void (call.readyNow = true));
+    calls.push(call);
+    warning = null;
+    arm(call);
+    return { call, before };
   }
 
   return {
-    callStarted(app) {
-      const current = newest();
-      // The same call going on: the detector reports a call once, until it ends.
-      if (current && !current.ended) return;
-      // Hold the new call apart first, so not a sample of it is in an earlier call's hold.
-      command("hold");
-      const before = current && HELD.has(current.kind) ? current : null;
-      let done;
-      const finished = new Promise((resolve) => {
-        done = resolve;
-      });
-      seq += 1;
-      const call = {
-        callId: `call-${seq}-${Date.now()}`,
-        app,
-        kind: "asking",
-        ended: false,
-        deadline: Date.now() + NOTICE_TIMEOUT_MS,
-        canExtend: true,
-        timer: null,
-        inHelper: true,
-        ready: before ? before.finished : Promise.resolve(),
-        done,
-        finished,
-      };
-      calls.push(call);
-      warning = null;
-      arm(call);
+    /** A new helper is starting: it always starts held, and the old helper's calls are gone. */
+    helperStarting() {
+      gen += 1;
+      for (const c of calls) clearTimeout(c.timer);
+      calls = [];
+      phase = "starting";
+      startupHold = true;
+      refresh();
+      return true;
+    },
+
+    /** The helper stopped: its held audio went with it, and so do its calls. */
+    helperGone() {
+      gen += 1;
+      for (const c of calls) clearTimeout(c.timer);
+      calls = [];
+      phase = "stopped";
+      startupHold = false;
+      refresh();
+    },
+
+    /** The helper's first audio-use report is in. With no call, the startup hold is ordinary audio. */
+    audioReady() {
+      if (phase !== "starting") return;
+      phase = "running";
+      if (startupHold) {
+        startupHold = false;
+        command("clear");
+      }
+      refresh();
+    },
+
+    callAppStarted(app) {
+      if (phase === "stopped") return;
+      // A call going on when the helper started: the startup hold is already holding it.
+      if (startupHold) {
+        startupHold = false;
+        newCall(app, { holdCommand: false });
+        refresh();
+        return;
+      }
+      const current = [...calls].reverse().find((c) => !c.ended) ?? null;
+      if (current && current.kind !== "told") {
+        // Joining a call that is unanswered, being answered, or declined: already held.
+        current.apps.add(app);
+        return;
+      }
+      if (current && current.apps.has(app)) return;
+      // A new call, or a new app joining a told one: held apart and asked about on its own.
+      const { before } = newCall(app, { holdCommand: true });
       // An earlier call nobody answered is dropped: its answer can't cover this one.
-      if (before?.kind === "asking") void drop(before, "superseded");
+      if (before?.kind === "asking") {
+        before.ended = true;
+        void drop(before, "superseded");
+      }
       refresh();
     },
 
     callEnded() {
-      const call = newest();
-      if (!call || call.ended) return;
-      call.ended = true;
-      if (call.kind === "told") {
-        remove(call);
-      } else if (call.kind === "dropping") {
-        // Nothing is ahead of a dropping call: it waited its turn when it was declined.
-        if (call.inHelper) command("discard");
-        remove(call);
+      for (const call of [...calls]) {
+        if (call.ended) continue;
+        call.ended = true;
+        if (call.kind === "told") remove(call);
+        else if (call.kind === "dropping") settleDropped(call);
       }
       refresh();
     },
@@ -170,13 +240,16 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
         noticeId = await logEvent({ kind: "noticeGiven", detail: "James told everyone on the call it is being recorded" });
       } catch (err) {
         log(`call notice: could not record the notice, so the call is not recorded (${err?.message ?? err})`);
+        if (!live(call)) return;
         call.kind = "declining";
-        await settleDropped(call);
+        settleDropped(call);
         warning = { state: "failed", callId };
         refresh();
         return;
       }
+      if (!live(call)) return;
       await resolveInHelper(call, "release", noticeId);
+      if (!live(call)) return;
       if (call.ended || call !== newest()) remove(call);
       else call.kind = "told";
       refresh();
@@ -200,19 +273,6 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
     dismiss() {
       warning = null;
       refresh();
-    },
-
-    /**
-     * A new helper is starting. Returns whether it must start held: the newest call is still
-     * held (unanswered, being answered, or declined). Only that call carries into it.
-     */
-    helperStarting() {
-      const call = newest();
-      for (const c of calls) c.inHelper = false;
-      if (!call || !HELD.has(call.kind)) return false;
-      call.inHelper = true;
-      call.ready = Promise.resolve();
-      return true;
     },
 
     micHeld: () => micHeld,

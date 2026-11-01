@@ -29,8 +29,6 @@ import { createMicSegmentWriter } from "./micSegments.mjs";
 const GEEKSPACE_DIR = path.join(app.getPath("appData"), "Geekspace");
 // MediaRecorder's timeslice: how often a chunk crosses to the main process.
 const MIC_TIMESLICE_MS = 1000;
-// A new helper reports every app using audio within its first poll (100 ms); this is ample.
-const SNAPSHOT_MS = 1000;
 const REFUSED = { ok: false, error: "Refused: the request did not come from the mic capture window" };
 
 
@@ -65,7 +63,9 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     // Each new helper: what it reports first says which calls are still going on, and it
     // holds from its first sample if the newest call is unanswered or declined (plan PR 4b).
     callHeldAtStart: () => {
-      detector.beginSnapshot();
+      detector.reset();
+      denylistedAudio = false;
+      audioReady = false;
       return notice.helperStarting();
     },
     platform: process.platform,
@@ -110,12 +110,15 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   // Calls and the room-mic pause (plan PR 4b). The mic records while the recorder records,
   // except while a never-record app uses audio (F2) and while a call waits for its notice or
   // was declined (F3): it stops, so nothing of the call reaches disk before the notice.
+  // Every helper starts held, and the mic waits, until its first audio-use report says which
+  // apps are using audio (Codex review of PR 4b, round 2).
   let denylistedAudio = false;
+  let audioReady = false;
   let prompt = null;
   const promptListeners = new Set();
   const syncMic = () => {
     const recording = service.status().status === "recording";
-    void (recording && !denylistedAudio && !notice.micHeld() ? mic.start() : mic.stop());
+    void (recording && audioReady && !denylistedAudio && !notice.micHeld() ? mic.start() : mic.stop());
   };
   const notice = createCallNotice({
     helper: service.calls,
@@ -130,7 +133,8 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     log,
   });
   const detector = createCallDetector({
-    onCall: (call) => (call.active ? notice.callStarted(call.app) : notice.callEnded()),
+    onAppStarted: (app) => notice.callAppStarted(app),
+    onCallEnded: () => notice.callEnded(),
     onDenylistedAudio: (active) => {
       denylistedAudio = active;
       log(active ? "room mic paused: a never-record app is using audio" : "room mic back: no never-record app is using audio");
@@ -138,15 +142,17 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     },
   });
   service.onAudioUse((use) => detector.receive(use));
-  // Decisions outlive helpers (Codex review of PR 4b): a stop, a pause or a retry replaces the
-  // helper, not the call. Once a new helper is recording, its first report has had time to
-  // arrive; apps it did not mention have stopped.
+  service.onAudioUseReady(() => {
+    audioReady = true;
+    notice.audioReady();
+    syncMic();
+  });
+  // Calls belong to one helper: when it stops recording, its held audio and its calls go with it.
   let lastStatus = null;
-  let snapshotTimer = null;
   service.onStatus((s) => {
-    if (s.status === "recording" && lastStatus !== "recording") {
-      clearTimeout(snapshotTimer);
-      snapshotTimer = setTimeout(() => detector.endSnapshot(), SNAPSHOT_MS);
+    if (s.status !== "recording" && lastStatus === "recording") {
+      audioReady = false;
+      notice.helperGone();
     }
     lastStatus = s.status;
     syncMic();
@@ -208,7 +214,6 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     ...controls,
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
-      clearTimeout(snapshotTimer);
       unsubscribe();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();

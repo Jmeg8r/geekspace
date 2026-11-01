@@ -28,6 +28,8 @@ export type HelperMessage =
   | { v: 1; event: "callHeld"; t: number }
   | { v: 1; event: "callReleased"; segments: number; heldSec: number; overflowed: boolean }
   | { v: 1; event: "callDiscarded"; heldSec: number; reason: "command" | "stop" }
+  | { v: 1; event: "callCleared"; segments: number; heldSec: number }
+  | { v: 1; event: "audioUseReady"; t: number; apps: number }
   | { v: 1; event: "audioUse"; app: string | null; denylisted: boolean; input: boolean; output: boolean }
   | { v: 1; event: "stopped"; reason: string }
   | { v: 1; event: "tapRebuilt" | "tailDropped" | "sampleRateChanged" | "sessionUnverified" };
@@ -66,6 +68,8 @@ export type SupervisorOptions = {
   onState: (state: SupervisorState) => void;
   /** Each audioUse line, as parsed (plan PR 4b). */
   onAudioUse?: (message: Extract<HelperMessage, { event: "audioUse" }>) => void;
+  /** The helper's first audio-use report is in (plan PR 4b). */
+  onAudioUseReady?: () => void;
   env?: NodeJS.ProcessEnv;
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   silentLimitMs?: number;
@@ -83,6 +87,7 @@ export type Supervisor = {
   holdCall: () => void;
   releaseCall: (noticeEventId: string) => void;
   discardCall: () => void;
+  clearCall: () => void;
   state: () => SupervisorState;
   running: () => boolean;
   killSync: () => void;

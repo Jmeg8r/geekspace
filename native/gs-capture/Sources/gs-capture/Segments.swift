@@ -315,6 +315,9 @@ final class SystemAudioRecorder {
                             append: { [unowned self] in self.writer?.append($0) },
                             closeSystem: { [unowned self] in self.writer?.close() },
                             flush: { [unowned self] runs in CallHold.flush(runs, root: self.root, segmentSec: self.segmentSec, report: self.report) },
+                            flushSystem: { [unowned self] runs in
+                                CallHold.flush(runs, root: self.root, segmentSec: self.segmentSec, prefix: "sys", kind: "system", report: self.report)
+                            },
                             report: report)
         queue.sync {
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
@@ -391,6 +394,14 @@ final class SystemAudioRecorder {
         queue.sync {
             guard router.canRelease else { fail("call release: no call is held") }
             router.release(at: nowMs())
+        }
+    }
+
+    /// There was no call (a helper's startup hold): what was held is written as system audio.
+    func clearCall() {
+        queue.sync {
+            guard router.canClear else { fail("call clear: no call is held") }
+            router.clear(at: nowMs())
         }
     }
 

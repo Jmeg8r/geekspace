@@ -36,6 +36,9 @@ const SHAPES = {
   callHeld: (m) => isNum(m.t),
   callReleased: (m) => isNum(m.segments) && isNum(m.heldSec) && isBool(m.overflowed),
   callDiscarded: (m) => isNum(m.heldSec) && (m.reason === "command" || m.reason === "stop"),
+  // Plan PR 4b: the first audio-use report is in; a startup hold cleared into system audio.
+  audioUseReady: (m) => isNum(m.t) && isNum(m.apps),
+  callCleared: (m) => isNum(m.segments) && isNum(m.heldSec),
   // These are only logged, but what is logged is validated too (Codex #80 r2): counts must
   // be numbers and `trigger` one of its two values, so no line can smuggle text into a log.
   tapRebuilt: (m) =>
@@ -86,6 +89,8 @@ function diagnostic(m) {
       return `call audio released: ${m.segments} segment(s), ${m.heldSec} s${m.overflowed ? ", the hold was full" : ""}`;
     case "callDiscarded":
       return `call audio discarded: ${m.heldSec} s (${m.reason})`;
+    case "callCleared":
+      return `startup hold cleared: ${m.segments} segment(s), ${m.heldSec} s`;
     default:
       return null;
   }
@@ -135,6 +140,8 @@ export function createSupervisor({
   onState,
   // audioUse lines, for call detection and the room-mic pause (plan PR 4b).
   onAudioUse = () => {},
+  // The first audio-use report is in (plan PR 4b): until then any app may be in a call.
+  onAudioUseReady = () => {},
   env = process.env,
   spawnImpl = spawn,
   silentLimitMs = SILENT_LIMIT_MS,
@@ -272,6 +279,10 @@ export function createSupervisor({
       case "audioUse":
         onAudioUse(m);
         return;
+      case "audioUseReady":
+        log(`audio use reported: ${m.apps} app(s)`);
+        onAudioUseReady();
+        return;
       default: {
         const line = diagnostic(m);
         if (line) log(line);
@@ -403,6 +414,8 @@ export function createSupervisor({
     },
     /** Declined or timed out: the held audio is dropped unwritten. */
     discardCall: () => sendCommand("call discard"),
+    /** No call after all: the helper's startup hold is written as system audio. */
+    clearCall: () => sendCommand("call clear"),
     state: () => state,
     running: () => child !== null,
     /** Last resort for process exit: no time to finalize the open segment. */

@@ -6,9 +6,8 @@
 // audio is treated as a call; a browser only once it holds the mic, or every video would be.
 // WHY a denylisted call app is no call: its audio is already excluded, and F2 pauses the mic
 // for it, so there is nothing to give notice for.
-// WHY a snapshot on restart: a new helper reports every app using audio once, at start. What
-// it reports again is the same call; what it doesn't has stopped. Forgetting everything would
-// turn a declined call into a new one.
+// WHY a reset per helper (Codex review of PR 4b, round 2): a new helper reports every app using
+// audio once, at start, and calls belong to one helper; the call notice asks again.
 
 const BROWSERS = new Set([
   "com.google.Chrome",
@@ -33,12 +32,10 @@ export const CALL_APPS = new Set([
   ...BROWSERS,
 ]);
 
-export function createCallDetector({ onCall, onDenylistedAudio }) {
+export function createCallDetector({ onAppStarted, onCallEnded, onDenylistedAudio }) {
   // Call apps in a call now.
   const inCall = new Set();
   let denylisted = false;
-  // While a new helper's first report is coming in: what it reported.
-  let snapshot = null;
 
   function setDenylisted(active) {
     if (active === denylisted) return;
@@ -46,43 +43,29 @@ export function createCallDetector({ onCall, onDenylistedAudio }) {
     onDenylistedAudio(active);
   }
 
-  function update(app, change) {
-    const before = inCall.size;
-    change();
-    if (before === 0 && inCall.size > 0) onCall({ active: true, app });
-    else if (before > 0 && inCall.size === 0) onCall({ active: false, app: null });
-  }
-
   return {
     receive(use) {
       if (use.denylisted) {
-        if (snapshot) snapshot.denylisted = use.input || use.output;
         setDenylisted(use.input || use.output);
         return;
       }
       if (!use.app || !CALL_APPS.has(use.app)) return;
       const app = use.app;
-      snapshot?.apps.add(app);
-      update(app, () => {
-        if (!use.input && !use.output) inCall.delete(app);
-        else if (use.input || !BROWSERS.has(app)) inCall.add(app);
-      });
-    },
-
-    /** A new helper is starting: its first report says what is still going on. */
-    beginSnapshot() {
-      snapshot = { apps: new Set(), denylisted: false };
-    },
-
-    /** The first report is in: apps it did not mention have stopped. */
-    endSnapshot() {
-      if (!snapshot) return;
-      const seen = snapshot;
-      snapshot = null;
-      for (const app of [...inCall]) {
-        if (!seen.apps.has(app)) update(null, () => inCall.delete(app));
+      if (!use.input && !use.output) {
+        if (inCall.delete(app) && inCall.size === 0) onCallEnded();
+        return;
       }
-      if (!seen.denylisted) setDenylisted(false);
+      // Each app that joins is reported: a new app can't ride on an earlier answer.
+      if (!inCall.has(app) && (use.input || !BROWSERS.has(app))) {
+        inCall.add(app);
+        onAppStarted(app);
+      }
+    },
+
+    /** A new helper reports every app using audio afresh; nothing is announced for the old. */
+    reset() {
+      inCall.clear();
+      denylisted = false;
     },
   };
 }

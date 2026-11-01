@@ -59,6 +59,7 @@ export function createDayRecorderService({
   let mic = null;
   const listeners = new Set();
   const audioUseListeners = new Set();
+  const audioReadyListeners = new Set();
 
   function live() {
     if (!supervisor) throw new Error("The capture helper is not running");
@@ -193,6 +194,10 @@ export function createDayRecorderService({
         if (owner !== supervisor) return;
         for (const cb of audioUseListeners) cb(m);
       },
+      onAudioUseReady: () => {
+        if (owner !== supervisor) return;
+        for (const cb of audioReadyListeners) cb();
+      },
     });
     supervisor = owner;
     runningKey = key;
@@ -253,11 +258,16 @@ export function createDayRecorderService({
       audioUseListeners.add(cb);
       return () => audioUseListeners.delete(cb);
     },
+    onAudioUseReady(cb) {
+      audioReadyListeners.add(cb);
+      return () => audioReadyListeners.delete(cb);
+    },
     /** The call hold, on the live helper (plan PR 4b). Throws when none is running. */
     calls: {
       hold: () => live().holdCall(),
       release: (noticeEventId) => live().releaseCall(noticeEventId),
       discard: () => live().discardCall(),
+      clear: () => live().clearCall(),
     },
     running: () => supervisor?.running() ?? false,
     killSync() {

@@ -49,7 +49,8 @@ export type DayRecorderService = {
   onStatus: (cb: (status: RecorderStatus) => void) => () => void;
   onAudioUse: (cb: (message: Extract<HelperMessage, { event: "audioUse" }>) => void) => () => void;
   /** The call hold on the live helper; each throws when no helper is running. */
-  calls: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void };
+  calls: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void; clear: () => void };
+  onAudioUseReady: (cb: () => void) => () => void;
   running: () => boolean;
   killSync: () => void;
 };
