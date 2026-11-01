@@ -10,10 +10,17 @@
 // subscription, which says nothing new while the list is unchanged. A missing tool and a
 // backend that was down are both retried on a timer, and a result already made is kept, not
 // transcribed again.
+// WHY stop waits only so long (Codex review of PR 5, round 3): a disconnected Convex client
+// keeps a mutation pending instead of failing it, so a row write could hold quit forever. The
+// segment is still closed in the backend until its row is in, so the next start takes it again;
+// and a write that did land is not added twice (dayRecorder.addTranscript).
 import { ToolMissingError } from "./meetingProcessor.mjs";
 
 // After a missing tool or model, or a failed row write, wait this long before trying again.
 export const RETRY_AFTER_MS = 5 * 60_000;
+// How long stop waits for the segment in progress: longer than small.en takes for one segment
+// (about 9 s for 5 minutes of audio, spike Q6) plus its row write.
+export const STOP_GRACE_MS = 30_000;
 
 export function createTranscriptionQueue({ transcribe, resolvePath, addTranscript, setSegmentStatus, log }) {
   // Every segment id this run has taken: waiting, in progress, or done.
@@ -23,6 +30,8 @@ export function createTranscriptionQueue({ transcribe, resolvePath, addTranscrip
   let pausedUntil = 0;
   let stopped = false;
   let running = null;
+  // The item being worked on, for the log when stop gives up on it.
+  let active = null;
   let retryTimer = null;
 
   function scheduleRetry() {
@@ -82,7 +91,9 @@ export function createTranscriptionQueue({ transcribe, resolvePath, addTranscrip
       // Out of the list while it runs, so an offer that re-sorts the list can't displace it
       // (Codex review of PR 5, round 2).
       const item = waiting.shift();
+      active = item;
       const outcome = await take(item);
+      active = null;
       if (outcome === "done") continue;
       // Back in its place, to be tried again.
       waiting.push(item);
@@ -107,13 +118,24 @@ export function createTranscriptionQueue({ transcribe, resolvePath, addTranscrip
     },
     /** Resolves when nothing is running. */
     idle: () => running ?? Promise.resolve(),
-    /** Start nothing new; the segment in progress finishes. */
+    /** Start nothing new; the segment in progress gets STOP_GRACE_MS to finish. */
     stop() {
       stopped = true;
       clearTimeout(retryTimer);
       retryTimer = null;
       waiting.length = 0;
-      return running ?? Promise.resolve();
+      const current = running;
+      if (!current) return Promise.resolve();
+      return new Promise((resolve) => {
+        const grace = setTimeout(() => {
+          log(`transcription: segment ${active?.segment._id ?? "(unknown)"} was not finished at stop; it stays closed and is taken again at the next start`);
+          resolve();
+        }, STOP_GRACE_MS);
+        void current.finally(() => {
+          clearTimeout(grace);
+          resolve();
+        });
+      });
     },
   };
 }

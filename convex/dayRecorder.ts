@@ -203,8 +203,11 @@ export const addTranscript = mutation({
     if (!segment) throw new Error(`Segment ${args.segmentId} does not exist`);
     assertSpan(args.start, args.end);
     assertText("Transcript", args.text);
+    // Already has its result (a write sent again after its answer was lost), or purged: a
+    // second row would duplicate the text (Codex review of PR 5, round 3).
+    if (segment.status !== "closed") return null;
     const id = await ctx.db.insert("transcripts", args);
-    if (segment.status === "closed") await ctx.db.patch(args.segmentId, { status: "transcribed" });
+    await ctx.db.patch(args.segmentId, { status: "transcribed" });
     return id;
   },
 });

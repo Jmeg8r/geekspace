@@ -1,6 +1,7 @@
 // WHAT: types for the transcription queue, so tests/ can import it.
 
 export const RETRY_AFTER_MS: number;
+export const STOP_GRACE_MS: number;
 
 /** A closed segment, as dayRecorder.pendingSegments lists it. */
 export type PendingSegment = { _id: string; path: string; start: number; end: number };
