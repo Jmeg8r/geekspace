@@ -246,6 +246,10 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
   let capNoticeDay = null;
   // A settle whose write failed: written before anything else (Codex review of PR 6a, round 1).
   let unsettled = null;
+  // Where an exhausted scan stopped: the next batch goes on from there, so rows past ten pages
+  // of ones too long for the cap are reached (Codex review of PR 6a, round 5). Back to the top
+  // once a batch has packed something or reached the end, so rows that arrived late are read.
+  let scanFrom = {};
 
   async function capPaused(day, detail) {
     if (capNoticeDay === day) return;
@@ -313,7 +317,8 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
     let bytes = utf8Bytes(material(input, now).text);
     let skipped = 0;
     let seen = 0;
-    let cursor = {};
+    let cursor = scanFrom;
+    let packedOrDone = false;
     for (let pageNo = 0; pageNo < MAX_SCAN_PAGES; pageNo += 1) {
       const all = await convex.unread({ since, limit: MAX_INPUT_ROWS, ...cursor });
       seen += all.transcripts.length + all.screenshots.length;
@@ -330,12 +335,17 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
         }
       }
       const done = (all.transcriptsDone ?? true) && (all.screenshotsDone ?? true);
-      if (input.transcripts.length + input.screenshots.length > 0 || done) break;
+      if (input.transcripts.length + input.screenshots.length > 0 || done) {
+        packedOrDone = true;
+        break;
+      }
       cursor = {
+        ...cursor,
         ...(all.transcriptAfter && { transcriptAfter: all.transcriptAfter }),
         ...(all.screenshotAfter && { screenshotAfter: all.screenshotAfter }),
       };
     }
+    scanFrom = packedOrDone ? {} : cursor;
     if (seen === 0) return;
     if (skipped) log(`assistant: ${skipped} item(s) too long for what is left of the cap wait for a later batch`);
     const made = material(input, now);

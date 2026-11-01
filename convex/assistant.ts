@@ -543,6 +543,9 @@ export const settleRequest = mutation({
       if (row) await ctx.db.patch(id, readPatch(row.ocrText.length, row.readChars, req.screenshotEnds?.[i], now));
     }
     await ctx.db.patch(args.requestId, {
+      costUsd: args.costUsd,
+      inputTokens: args.inputTokens,
+      outputTokens: args.outputTokens,
       status: args.proposals.length > 0 ? "settled" : "done",
       proposals: args.proposals.map((p) => ({ proposal: p, state: "pending" as const })),
     });

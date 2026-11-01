@@ -322,6 +322,10 @@ export default defineSchema({
     reservedUsd: v.number(),
     transcriptIds: v.array(v.id("transcripts")),
     screenshotIds: v.array(v.id("screenshots")),
+    // The call's own usage once settled (spec R8: every call logged with tokens and cost).
+    costUsd: v.optional(v.number()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
     // Where each item's part ends, in characters; absent: the whole item.
     transcriptEnds: v.optional(v.array(v.number())),
     screenshotEnds: v.optional(v.array(v.number())),
