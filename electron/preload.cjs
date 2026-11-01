@@ -87,6 +87,14 @@ const api = {
     clearApiKey: () => invoke("gs:assistant:clearApiKey"),
     hasApiKey: () => invoke("gs:assistant:hasApiKey"),
   },
+  // Linear drafts (plan PR 6b, spec R12): the key is write-only as the assistant's is, and a
+  // draft is sent only by approving it, by id.
+  linear: {
+    setApiKey: (key) => invoke("gs:linear:setApiKey", { key }),
+    clearApiKey: () => invoke("gs:linear:clearApiKey"),
+    hasApiKey: () => invoke("gs:linear:hasApiKey"),
+    approve: (draftId) => invoke("gs:linear:approve", { draftId }),
+  },
   chrome: {
     setOverlay: (color, symbolColor) => invoke("gs:chrome:setOverlay", { color, symbolColor }),
   },

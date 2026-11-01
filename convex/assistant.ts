@@ -297,10 +297,12 @@ export const listActions = query({
 
 const draftStatus = v.union(v.literal("pending"), v.literal("approved"), v.literal("sent"), v.literal("discarded"));
 type DraftStatus = Doc<"externalDrafts">["status"];
-// Drafts only move forward. "sent" is final: nothing that left Geekspace can be unsent.
+// "sent" and "discarded" are final: nothing that left Geekspace can be unsent. The one step
+// back is a failed send, approved to pending.
 const NEXT = {
   pending: ["approved", "discarded"],
-  approved: ["sent", "discarded"],
+  // Back to pending: the send to Linear failed (plan PR 6b), so it waits to be approved again.
+  approved: ["sent", "discarded", "pending"],
   sent: [],
   discarded: [],
 } satisfies Record<DraftStatus, readonly DraftStatus[]>;
@@ -314,6 +316,12 @@ export const listDrafts = query({
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .paginate(args.paginationOpts);
   },
+});
+
+/** One draft, for the Linear send that claimed it (electron/linearDrafts.mjs). */
+export const draft = query({
+  args: { draftId: v.id("externalDrafts") },
+  handler: async (ctx, args) => ctx.db.get(args.draftId),
 });
 
 export const setDraftStatus = mutation({

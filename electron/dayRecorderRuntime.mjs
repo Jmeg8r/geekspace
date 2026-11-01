@@ -21,6 +21,7 @@ import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMedia.mjs";
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
+import { createLinearDrafts } from "./linearDrafts.mjs";
 import { createDayAssistant } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
@@ -49,7 +50,7 @@ function helperPath() {
  * `capturePage` is where the mic window's page is: the dev server, or dist/capture.html.
  * `showApp` brings the app window forward, for the menu bar's "Open Geekspace".
  */
-export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) {
+export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, linearKeyStore }) {
   const logDir = path.join(GEEKSPACE_DIR, "logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = createFileLog(path.join(logDir, "day-recorder.log"));
@@ -183,6 +184,16 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
     },
     log,
   });
+  // Linear drafts (plan PR 6b, spec R12): sent only when James approves one.
+  const linear = createLinearDrafts({
+    keyStore: { get: () => linearKeyStore?.get() ?? null },
+    fetch: globalThis.fetch,
+    convex: {
+      draft: (draftId) => client.query(api.assistant.draft, { draftId }),
+      setStatus: (draftId, status) => client.mutation(api.assistant.setDraftStatus, { draftId, status }),
+    },
+    log,
+  });
   let batchTimer = null;
   let batchMs = 0;
   const scheduleAssistant = (enabled, batchMin) => {
@@ -231,6 +242,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
   });
 
   return {
+    linear,
     service,
     view,
     notice: {

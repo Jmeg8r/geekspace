@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { LINEAR_API, createLinearDrafts, registerLinearIpc } from "../electron/linearDrafts.mjs";
+import { LINEAR_API, createLinearDrafts, registerLinearIpc, type LinearIpcArgs, type LinearIpcReply } from "../electron/linearDrafts.mjs";
 
 // WHAT: Linear drafts leave Geekspace only when James approves one (plan PR 6b, spec R12).
 // WHY tested: approval is the only code path that calls Linear; the key and the draft's text
@@ -85,7 +85,7 @@ describe("createLinearDrafts", () => {
 
 describe("registerLinearIpc", () => {
   function channels(drafts = { approve: vi.fn(async () => {}) }) {
-    const handlers = new Map<string, (args: Record<string, unknown>) => unknown>();
+    const handlers = new Map<string, (args: LinearIpcArgs) => LinearIpcReply>();
     const store = { has: vi.fn(() => true), set: vi.fn(), clear: vi.fn() };
     registerLinearIpc({ handle: (name, fn) => void handlers.set(name, fn), keyStore: store, drafts: () => drafts });
     return { handlers, store, drafts };
@@ -106,7 +106,7 @@ describe("registerLinearIpc", () => {
   });
 
   it("says so when the recorder has not started", () => {
-    const handlers = new Map<string, (args: Record<string, unknown>) => unknown>();
+    const handlers = new Map<string, (args: LinearIpcArgs) => LinearIpcReply>();
     registerLinearIpc({ handle: (name, fn) => void handlers.set(name, fn), keyStore: { has: () => false, set: () => {}, clear: () => {} }, drafts: () => null });
     expect(() => handlers.get("gs:linear:approve")?.({ draftId: "draft-1" })).toThrow(/not running/);
   });

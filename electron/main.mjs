@@ -41,6 +41,7 @@ import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import { forwardCallPrompt, forwardStatus, registerDayRecorderIpc } from "./dayRecorderIpc.mjs";
 import { createKeyStore, registerAssistantIpc } from "./assistantKey.mjs";
+import { registerLinearIpc } from "./linearDrafts.mjs";
 import { startDayRecorder } from "./dayRecorderRuntime.mjs";
 import { createQuitHold } from "./dayRecorderService.mjs";
 import {
@@ -514,6 +515,7 @@ app.whenReady().then(async () => {
       // On macOS the app outlives its windows, so the menu bar may have none to bring up.
       showApp: () => void (focusAppWindow() || createWindow()),
       keyStore: assistantKeys,
+      linearKeyStore: linearKeys,
     });
     dayRecorder = recorder;
     // The view, not the service: the windows must not flash the passing `off` either.
@@ -565,6 +567,13 @@ const assistantKeys = createKeyStore({
   fs,
 });
 registerAssistantIpc({ handle, keyStore: assistantKeys });
+// The Linear key (plan PR 6b), kept the same way; a draft is sent only by approving it.
+const linearKeys = createKeyStore({
+  file: path.join(app.getPath("appData"), "Geekspace", "linear-key.bin"),
+  safeStorage,
+  fs,
+});
+registerLinearIpc({ handle, keyStore: linearKeys, drafts: () => dayRecorder?.linear ?? null });
 app.on("before-quit", (event) => {
   // The recording guard runs first: saving needs the backend still up. While the save
   // handshake runs, a second quit is held back too (the recorder is idle by then).
