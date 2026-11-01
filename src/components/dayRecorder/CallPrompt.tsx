@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { remainingLabel } from "../../lib/callPrompt";
+import { promptAfterFetch, remainingLabel } from "../../lib/callPrompt";
 import {
   answerCall,
   currentCallPrompt,
@@ -24,17 +24,20 @@ export function CallPrompt() {
   // Busy for one call only: a slow answer for an earlier call never locks a newer prompt.
   const [busyFor, setBusyFor] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  // Whether an event has come in: then the first fetch's answer is older than it.
+  const heard = useRef(false);
 
   useEffect(() => {
     let live = true;
     const off = onCallPrompt((p) => {
+      heard.current = true;
       setPrompt(p);
       setError(null);
     });
     void currentCallPrompt().then((r) => {
       if (!live) return;
       // An event that arrived first is newer than this answer.
-      if (r.ok) setPrompt((current) => current ?? r.data);
+      if (r.ok) setPrompt((current) => promptAfterFetch({ heard: heard.current, current }, r.data));
       else if (dayRecorderAvailable()) setError(r.error);
     });
     return () => {

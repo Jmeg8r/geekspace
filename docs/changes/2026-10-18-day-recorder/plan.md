@@ -1694,8 +1694,10 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     out on the control queue is what makes polls late, so **a few seconds of ordinary audio
     around each long released call can be lost.** Moving that write off the queue would avoid
     it; it is a larger change.
-  - **Codex: rounds 5 to 7, by James's decision** after round 4 failed with five P1s (the L42
-    cap), round 5 with four, and round 6 with one.
+  - **A late first poll is a gap from capture start, and the startup hold drops gaps (round
+    7)**, so a `call clear` never writes unchecked startup audio as system audio.
+  - **Codex: rounds 5 to 8, by James's decision** after round 4 failed with five P1s (the L42
+    cap), round 5 with four, round 6 with one, and round 7 with two.
   - **Each hold of the helper's is a call of its own** unless the newest call is unanswered or
     declined, which it joins; an answer resolves every hold of its call. An app starting after
     a yes (even one still being saved), or leaving and coming back, is asked about again.

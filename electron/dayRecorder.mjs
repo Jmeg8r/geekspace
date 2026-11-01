@@ -318,7 +318,8 @@ export function createSupervisor({
         if (m.app !== undefined) onCallHeld(m.app);
         return;
       case "audioGap":
-        log(`audio-use poll gap: ${Math.round(m.to - m.from)} ms unchecked, its audio dropped`);
+        // `from` 0: everything since the helper started was unchecked.
+        log(`audio-use poll gap: ${m.from === 0 ? "since start" : `${Math.round(m.to - m.from)} ms`} unchecked, its audio dropped`);
         onAudioGap(m.from, m.to);
         return;
       case "audioClassified":

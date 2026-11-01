@@ -123,6 +123,10 @@ final class CallRouter {
         var fate = Fate.pending
         /// The stop's unclassified tail: dropped without a callDiscarded line of its own.
         var silent = false
+        /// The startup hold (`startHeld`): it may be cleared into system audio, so time no poll
+        /// checked is dropped from it, never kept (Codex review of PR 4b, round 7).
+        var startup = false
+        var drops: [(from: Double, to: Double)] = []
         init(maxSec: Double) { hold = CallHold(maxSec: maxSec) }
     }
     /// From `fromMs` on, audio belongs to `call` (nil: system audio).
@@ -151,7 +155,10 @@ final class CallRouter {
         self.flush = flush
         self.flushSystem = flushSystem
         self.report = report
-        if startHeld { hold(at: -.infinity) }
+        if startHeld {
+            hold(at: -.infinity)
+            spans.last?.call?.startup = true
+        }
     }
 
     /// The oldest call still waiting for a release or a discard: commands resolve calls in the
@@ -203,6 +210,9 @@ final class CallRouter {
     /// dropped, and system audio resumes at `to`. A held call keeps what it holds: its audio is
     /// never written without a notice anyway (Codex review of PR 4b, round 6).
     func gap(from: Double, to: Double) {
+        for span in spans {
+            if let call = span.call, call.startup, case .pending = call.fate { call.drops.append((from, to)) }
+        }
         if let held = spans.last?.call, case .pending = held.fate { return }
         let dropped = Call(maxSec: maxSec)
         dropped.fate = .discard("gap")
@@ -259,6 +269,10 @@ final class CallRouter {
             routingCall = true
         }
         if case .discard = call.fate { return }
+        if !call.drops.isEmpty {
+            let start = piece.endMs - Double(piece.samples.count) / sourceRate * 1000
+            if call.drops.contains(where: { start < $0.to && piece.endMs > $0.from }) { return }
+        }
         call.hold.store(piece, sourceRate: sourceRate)
     }
 

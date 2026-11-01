@@ -198,6 +198,8 @@ final class AudioUseWatcher {
     private let onCallStart: (String, Double) -> Void
     private let onGap: (Double, Double) -> Void
     private var lastPollAt = -Double.infinity
+    /// When capture began: a first poll later than maxGapMs after it is a gap too.
+    private var startedAt = 0.0
     private let now: () -> Double
     private let readProcesses: (Set<AudioObjectID>) -> [AudioUse.Process]
     /// Everything captured before this has been looked at by a poll: no call app or
@@ -218,6 +220,7 @@ final class AudioUseWatcher {
         self.onCallStart = onCallStart
         self.onGap = onGap
         self.now = now
+        startedAt = now()
         self.readProcesses = readProcesses ?? { known in AudioUse.poll(denylist: denylist, known: known) }
         self.report = report
     }
@@ -244,11 +247,13 @@ final class AudioUseWatcher {
         // The poll's lag (spike Q3) is the margin: an app that started just before this poll
         // may not show yet.
         let through = now - AudioUse.detectionLagMs
-        if lastPollAt.isFinite && now - lastPollAt > AudioUseWatcher.maxGapMs && classifiedThrough.isFinite {
+        let previous = lastPollAt.isFinite ? lastPollAt : startedAt
+        if now - previous > AudioUseWatcher.maxGapMs {
             // Unchecked time: dropped, not classified. Reported before the classification, so
-            // the mic discards what waits from it first.
+            // the mic discards what waits from it first. Before the first poll, everything
+            // captured so far (from: -infinity, reported as 0).
             onGap(classifiedThrough, through)
-            report("audioGap", ["from": round3(classifiedThrough), "to": round3(through)])
+            report("audioGap", ["from": classifiedThrough.isFinite ? round3(classifiedThrough) : 0, "to": round3(through)])
         }
         lastPollAt = now
         classifiedThrough = through
