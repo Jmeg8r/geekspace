@@ -1448,3 +1448,64 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **For 3e:** pause emits `stopping`, then `off`, then `paused`, because the supervisor's
     own `off` is passed through first. The UI should not flash Off on pause.
   - Evidence: `~/gs-part2-evidence/pr3d1-ipc-2026-10-31/status.log` (status lines only).
+- **2026-10-31, PR 3d-2, mic capture.** Built as planned, with these changes from plan.md:
+  - **`capture.html` is at the repo root, not under `electron/`.** It's a second Vite page
+    next to `index.html`, so `src/capture/main.ts` builds into `dist/capture.html`.
+  - **The capture window has its own module, `electron/captureWindow.mjs`,** so the app and
+    `probe:segment-decode` open the same window. It's hidden, sandboxed, and denies popups
+    and navigation. `backgroundThrottling` is off, because a hidden window's timers would
+    otherwise slow the segment clock and the silence meter.
+  - **`main.mjs` gains `appWindows()`.** Five lookups took "the first window" as the app
+    window: the meeting quit guard, second instance, activate, the title-bar overlay, and the
+    status push. The hidden window would have broken each of them.
+  - **The next recorder starts before the old one stops**, at every boundary, so the gap is
+    zero or a slight overlap rather than lost audio. One emit queue keeps a segment's last
+    chunk ahead of its `segmentEnd`.
+  - **An empty segment is the controller's call, not the writer's.** The probe's first run
+    flagged a clean stop as a mic failure: a stop just after a boundary leaves a final segment
+    with no audio yet. The writer now drops an empty segment (no file, no row) and reports it.
+    Mid-recording that is a dead mic (`noAudio`); at a stop it is not.
+  - **The mic degrades loudly (James, 2026-10-31).** A denied, missing, lost, silent or
+    misbehaving mic becomes the mic's own state on Recording plus a `capError`. Screens and
+    system audio carry on.
+  - **Sender check.** `micController` accepts `gs:mic:event` and `gs:mic:config` only from
+    its own window's `webContents`. `micSegments` checks every message before it touches the
+    disk: sizes are capped, start times must be near now, segments must be in order, and at
+    most two may be open.
+  - **Shared code.** `recorder.ts` exports `SILENCE_LEVEL` and `rmsLevel` (the same math,
+    moved). `meetingProcessor.mjs` exports `convertToWhisperWav` (the same ffmpeg command,
+    which `processMeeting` now calls), `findFfmpeg` and `measureVolume`. GitNexus rated this
+    HIGH because Meetings flows are touched; the Meetings suites pass unchanged (43 tests).
+  - **Opus averages about 129 kbps, so a 5-minute segment is about 4.8 MB,** not the 2 MB
+    estimated. The 64 MB per-segment cap still leaves room.
+  - **The mic prompt (`NSMicrophoneUsageDescription`) now names the Day Recorder.**
+- **2026-10-31, PR 3d-2, proofs.**
+  - **`probe:segment-decode`** (Chromium's fake device, 3 s segments): segment 2, copied
+    alone into an empty folder, decoded to 3.00 s of 16 kHz wav through
+    `convertToWhisperWav`, and was not silent. The boundary gap was about 0 ms. It passed 3
+    runs out of 3.
+    - **Check of the check:** the same path decodes a whole segment but refuses that segment
+      cut at its second Matroska Cluster, which is what a timeslice continuation is. So
+      PR #70's failure class is caught.
+    - A mutation that split one continuous recorder also failed the probe, but at the writer
+      ("segment 0 was not started"), so that run did not test the decode step.
+  - **Signed `npm run package` from `33aad2a`, real mic, real 300 s segments:**
+    - `setEnabled(true)` gave `mic: starting` then `ok` 448 ms later, and the status was
+      `{ status: "recording", mic: { state: "ok" } }`.
+    - Four segments landed exactly on the 5-minute boundaries, mode 600. Each decoded **alone**
+      to 299.94 or 300.00 s and was not silent.
+    - `pause()` finalized the open segment (70.44 s, decodes alone). The hidden window closed,
+      the helper stopped, and no partial was left.
+    - Each of the five files has exactly one `kind: "mic"` row in the backend store, checked
+      read-only by count.
+    - Evidence: `~/gs-part2-evidence/pr3d2-mic-2026-10-31/` (`decode.txt`, `status.log`).
+      Lengths and levels only; no audio left the machine.
+  - **The run found log noise:** `mic: off` on every non-recording status, and a repeated
+    `status: recording`. Fixed in `d2137ff`, which changes logging only.
+  - **Security review: no findings.** Two rejected candidates were closed anyway: a start far
+    off the clock (an Invalid Date day folder) and an unchecked `silentSec`.
+  - **Still to prove live, with James at the Mac:** a denied mic (revoke it in System
+    Settings) and an unplugged input. Unit tests cover both.
+  - **The verification trap this time:** the first wait-for-segments script reported "0
+    finished" because `touch -t` read a UTC time as local and set a marker about 4 hours in
+    the future. A file listing showed the segments were there.
