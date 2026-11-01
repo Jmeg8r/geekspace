@@ -605,3 +605,46 @@ describe("Day Recorder service, the first report", () => {
     expect(ready).toBe(1);
   });
 });
+
+// Codex 4b r5 P1: the helper was detached before its stop, so its last classification never
+// reached the mic, and a replacement helper's could flush the old helper's mic audio. The mic
+// now finishes first, while the helper that classifies it is still the current one.
+describe("Day Recorder service, before a helper stops", () => {
+  it.each([
+    ["a pause", PAUSED],
+    ["off", OFF],
+    ["a denylist change", on(["com.example.secret"])],
+  ])("[P1] %s runs beforeHelperStop first, with the old helper still current", async (_name, next) => {
+    const order: string[] = [];
+    const seen: number[] = [];
+    let h: ReturnType<typeof harness> | null = null;
+    h = harness({
+      beforeHelperStop: async () => {
+        order.push("beforeHelperStop");
+        // The old helper still classifies while the mic finishes.
+        h?.sup.options()?.onAudioClassified?.(42);
+      },
+    });
+    h.service.onAudioClassified((t) => void seen.push(t));
+    await h.service.apply(on());
+    h.sup.calls.length = 0;
+    await h.service.apply(next);
+    order.push(...h.sup.calls.map((c) => c.op));
+    expect(order.slice(0, 2)).toEqual(["beforeHelperStop", "stop"]);
+    expect(seen).toEqual([42]);
+  });
+
+  it("a failing hook is logged and the helper still stops", async () => {
+    const logs: string[] = [];
+    const h = harness({
+      log: (m) => void logs.push(m),
+      beforeHelperStop: async () => {
+        throw new Error("mic window gone");
+      },
+    });
+    await h.service.apply(on());
+    await h.service.apply(OFF);
+    expect(h.sup.calls.some((c) => c.op === "stop")).toBe(true);
+    expect(logs.join("\n")).toMatch(/mic window gone/);
+  });
+});

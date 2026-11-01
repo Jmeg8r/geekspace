@@ -37,6 +37,9 @@ function harness(
     writeSync?: WriteSync;
     clock?: () => number;
     waitForClassification?: boolean;
+    maxWaitingBytes?: number;
+    classifyStallMs?: number;
+    rmSync?: (p: string, o: { force: boolean }) => void;
   } = {}
 ) {
   const rows: MicSegmentRow[] = [];
@@ -54,6 +57,9 @@ function harness(
     ...(opts.maxChunkBytes !== undefined && { maxChunkBytes: opts.maxChunkBytes }),
     ...(opts.maxSegmentBytes !== undefined && { maxSegmentBytes: opts.maxSegmentBytes }),
     ...(opts.waitForClassification && { waitForClassification: true }),
+    ...(opts.maxWaitingBytes !== undefined && { maxWaitingBytes: opts.maxWaitingBytes }),
+    ...(opts.classifyStallMs !== undefined && { classifyStallMs: opts.classifyStallMs }),
+    ...(opts.rmSync && { rmSync: opts.rmSync }),
     onError: (reason) => void errors.push(reason),
   });
   return { writer, rows, logs, errors };
@@ -343,5 +349,60 @@ describe("createMicSegmentWriter, waiting for the helper's classification", () =
     h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("one") });
     expect(() => h.writer.classified(START + 1_000)).not.toThrow();
     expect(h.errors.join("\n")).toMatch(/ENOSPC/);
+  });
+});
+
+// Codex 4b r5 P1: with classification stalled, waiting audio and open files had no bound, and
+// a cleanup error escaped the classification callback.
+describe("createMicSegmentWriter, bounds and failures", () => {
+  it("[P1] fails loudly, keeping nothing, once too much audio waits", () => {
+    const h = harness({ waitForClassification: true, maxWaitingBytes: 8 });
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("12345") });
+    expect(h.errors).toEqual([]);
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("67890") });
+    expect(h.errors.join("\n")).toMatch(/waited/);
+    expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
+  });
+
+  it("[P1] fails loudly when nothing is classified for too long", async () => {
+    const h = harness({ waitForClassification: true, classifyStallMs: 30 });
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("one") });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(h.errors.join("\n")).toMatch(/classif/);
+    expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
+  });
+
+  it("[P1] keeps at most two finished segments waiting", () => {
+    let t = START;
+    const h = harness({ waitForClassification: true, clock: () => t });
+    for (let i = 0; i < 3; i += 1) {
+      t = START + i * 1_000;
+      h.writer.handle({ type: "segmentStart", segment: i, start: t });
+      h.writer.handle({ type: "chunk", segment: i, bytes: bytes("x") });
+      h.writer.handle({ type: "segmentEnd", segment: i, end: t + 500 });
+    }
+    expect(h.errors.join("\n")).toMatch(/waited/);
+  });
+
+  it("[P1] a cleanup that fails while catching up is reported, never thrown", () => {
+    let t = START;
+    const h = harness({
+      waitForClassification: true,
+      clock: () => t,
+      writeSync: () => {
+        throw Object.assign(new Error("read-only"), { code: "EROFS" });
+      },
+      rmSync: () => {
+        throw Object.assign(new Error("read-only"), { code: "EROFS" });
+      },
+    });
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    t = START + 1_000;
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("one") });
+    h.writer.handle({ type: "segmentEnd", segment: 0, end: START + 1_000 });
+    expect(() => h.writer.classified(START + 1_000)).not.toThrow();
+    expect(h.errors.length).toBeGreaterThanOrEqual(2);
   });
 });

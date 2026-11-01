@@ -412,3 +412,16 @@ describe("createMicController, the helper's classification", () => {
     expect(h.windows[0].sent).toEqual(["gs:mic:stop"]);
   });
 });
+
+// Codex 4b r5 P1: classification from a different helper than the one the writer was opened
+// under must never reach it.
+describe("createMicController, the helper that owns the writer", () => {
+  it("[P1] passes on classification only from the helper the mic was started for", async () => {
+    const h = harness();
+    await h.controller.start(1);
+    h.controller.classified(100, 2);
+    expect(h.writer.classified).not.toHaveBeenCalled();
+    h.controller.classified(100, 1);
+    expect(h.writer.classified).toHaveBeenCalledWith(100);
+  });
+});
