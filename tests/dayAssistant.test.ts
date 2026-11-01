@@ -182,8 +182,9 @@ describe("createDayAssistant.runBatch", () => {
     await h.assistant.runBatch();
     expect(h.begun).toHaveLength(1);
     expect(h.begun[0].reservedUsd).toBeLessThanOrEqual(0.3 + 1e-9);
-    const dearestOut = Math.max(...Object.values(PRICES).map((p) => p.output)) / 1_000_000;
-    expect(h.requests[0].max_tokens * dearestOut).toBeLessThan(h.begun[0].reservedUsd + 1e-9);
+    // Priced at the model asked for: with no fallback, it is the one that answers.
+    const out = PRICES[MODEL].output / 1_000_000;
+    expect(h.requests[0].max_tokens * out).toBeLessThan(h.begun[0].reservedUsd + 1e-9);
   });
 
   it("[P1] makes no call when what is left can't cover one, and says so", async () => {

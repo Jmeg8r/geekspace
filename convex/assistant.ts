@@ -389,16 +389,38 @@ export const unread = query({
       .withIndex("by_read_takenAt", (q) => q.eq("readAt", undefined).gte("takenAt", since))
       .take(limit);
     return {
-      transcripts: transcripts.map((r) => ({ _id: r._id, segmentId: r.segmentId, start: r.start, end: r.end, text: r.text })),
+      transcripts: transcripts.map((r) => ({
+        _id: r._id,
+        segmentId: r.segmentId,
+        start: r.start,
+        end: r.end,
+        text: r.text,
+        ...(r.readChars !== undefined && { readChars: r.readChars }),
+      })),
       screenshots: screenshots.map((r) => ({
         _id: r._id,
         takenAt: r.takenAt,
         ocrText: r.ocrText,
         ...(r.appBundleId !== undefined && { appBundleId: r.appBundleId }),
+        ...(r.readChars !== undefined && { readChars: r.readChars }),
       })),
     };
   },
 });
+
+function assertEnds(name: string, ends: number[] | undefined, count: number) {
+  if (ends === undefined) return;
+  if (ends.length !== count) throw new Error(`${name} ends must match its items: ${ends.length} for ${count}`);
+  for (const end of ends) {
+    if (!Number.isInteger(end) || end < 0) throw new Error(`${name} ends must be whole character counts, got ${end}`);
+  }
+}
+
+/** How far an item has now been read: done (readAt) once its part reaches the end. */
+function readPatch(length: number, readChars: number | undefined, end: number | undefined, now: number) {
+  if (end === undefined || end >= length) return { readAt: now };
+  return { readChars: Math.max(readChars ?? 0, end) };
+}
 
 /** Where the assistant starts reading: the first value given is kept. */
 export const ensureStart = mutation({
@@ -424,10 +446,14 @@ export const beginRequest = mutation({
     reservedUsd: v.number(),
     transcriptIds: v.array(v.id("transcripts")),
     screenshotIds: v.array(v.id("screenshots")),
+    transcriptEnds: v.optional(v.array(v.number())),
+    screenshotEnds: v.optional(v.array(v.number())),
   },
   handler: async (ctx, args) => {
     assertDay(args.day);
     assertCost(args.reservedUsd);
+    assertEnds("Transcript", args.transcriptEnds, args.transcriptIds.length);
+    assertEnds("Screenshot", args.screenshotEnds, args.screenshotIds.length);
     if (args.transcriptIds.length > MAX_INPUT_ROWS || args.screenshotIds.length > MAX_INPUT_ROWS) {
       throw new Error(`At most ${MAX_INPUT_ROWS} items of each kind per call`);
     }
@@ -472,8 +498,14 @@ export const settleRequest = mutation({
     if (req.status !== "inFlight") return;
     await addUsage(ctx, req.day, args.inputTokens, args.outputTokens, args.costUsd);
     const now = Date.now();
-    for (const id of req.transcriptIds) if (await ctx.db.get(id)) await ctx.db.patch(id, { readAt: now });
-    for (const id of req.screenshotIds) if (await ctx.db.get(id)) await ctx.db.patch(id, { readAt: now });
+    for (const [i, id] of req.transcriptIds.entries()) {
+      const row = await ctx.db.get(id);
+      if (row) await ctx.db.patch(id, readPatch(row.text.length, row.readChars, req.transcriptEnds?.[i], now));
+    }
+    for (const [i, id] of req.screenshotIds.entries()) {
+      const row = await ctx.db.get(id);
+      if (row) await ctx.db.patch(id, readPatch(row.ocrText.length, row.readChars, req.screenshotEnds?.[i], now));
+    }
     await ctx.db.patch(args.requestId, {
       status: args.proposals.length > 0 ? "settled" : "done",
       proposals: args.proposals.map((p) => ({ proposal: p, state: "pending" as const })),
@@ -481,12 +513,27 @@ export const settleRequest = mutation({
   },
 });
 
-/** The call failed before any answer: nothing was paid, its items are read again. */
+/** The API refused the call before doing any work: nothing was paid, its items are read again. */
 export const failRequest = mutation({
   args: { requestId: v.id("assistantRequests") },
   handler: async (ctx, { requestId }) => {
     const req = await ctx.db.get(requestId);
     if (req?.status === "inFlight") await ctx.db.patch(requestId, { status: "done" });
+  },
+});
+
+/**
+ * The call failed in a way that doesn't prove nothing was done (a dropped connection, a
+ * timeout, a server error): it stays charged at its reservation, and its items are read again
+ * (Codex review of PR 6a, round 2).
+ */
+export const abandonRequest = mutation({
+  args: { requestId: v.id("assistantRequests") },
+  handler: async (ctx, { requestId }) => {
+    const req = await ctx.db.get(requestId);
+    if (req?.status !== "inFlight") return;
+    await addUsage(ctx, req.day, 0, 0, req.reservedUsd);
+    await ctx.db.patch(requestId, { status: "done" });
   },
 });
 

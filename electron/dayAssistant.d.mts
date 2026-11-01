@@ -16,8 +16,8 @@ export const STOP_GRACE_MS: number;
 
 /** What assistant.unread returns: the batch's material. */
 export type AssistantInput = {
-  transcripts: { _id: string; segmentId: string; start: number; end: number; text: string }[];
-  screenshots: { _id: string; takenAt: number; appBundleId?: string; ocrText: string }[];
+  transcripts: { _id: string; segmentId: string; start: number; end: number; text: string; readChars?: number }[];
+  screenshots: { _id: string; takenAt: number; appBundleId?: string; ocrText: string; readChars?: number }[];
 };
 
 /** What the assistant sends (the fields it sets on client.messages.create). */
@@ -35,7 +35,7 @@ type Reply = { content: { type: string; text?: string }[]; stop_reason: string; 
 export type AssistantClient = { messages: { create: (params: AssistantRequest) => Promise<Reply> } };
 
 /** The SDK client for a key, with logging off whatever ANTHROPIC_LOG says. */
-export function assistantClient(apiKey: string): AssistantClient & { logLevel: string | undefined };
+export function assistantClient(apiKey: string): AssistantClient & { logLevel: string | undefined; maxRetries: number };
 
 export type DayAssistant = { runBatch: () => Promise<void>; stop: () => Promise<void> };
 
@@ -53,9 +53,17 @@ export function createDayAssistant(options: {
     ensureStart: (args: { at: number }) => Promise<number>;
     unread: (args: { since: number; limit: number }) => Promise<AssistantInput>;
     capStatus: (day: string) => Promise<{ capUsd: number | null; spentUsd: number; reached: boolean }>;
-    beginRequest: (args: { day: string; reservedUsd: number; transcriptIds: string[]; screenshotIds: string[] }) => Promise<string | null>;
+    beginRequest: (args: {
+      day: string;
+      reservedUsd: number;
+      transcriptIds: string[];
+      screenshotIds: string[];
+      transcriptEnds?: number[];
+      screenshotEnds?: number[];
+    }) => Promise<string | null>;
     settleRequest: (args: { requestId: string; costUsd: number; inputTokens: number; outputTokens: number; proposals: Proposal[] }) => Promise<void>;
     failRequest: (args: { requestId: string }) => Promise<void>;
+    abandonRequest: (args: { requestId: string }) => Promise<void>;
     openRequests: () => Promise<OpenRequest[]>;
     applyProposal: (args: { requestId: string; index: number; tzOffsetMin?: number }) => Promise<void>;
     refuseProposal: (args: { requestId: string; index: number }) => Promise<void>;

@@ -30,6 +30,13 @@ const MAX_INPUT_ROWS = 200;
 const INPUT_OVERHEAD_TOKENS = 2000;
 // The SDK's own deadline for one request (convex/assistant.ts abandons a call after 30 min).
 const REQUEST_TIMEOUT_MS = 10 * 60_000;
+// A long text goes in parts of at most this many characters, each recorded as read, so one
+// huge item never blocks the rest (Codex review of PR 6a, round 2); never smaller than this.
+const MAX_PART_CHARS = 8_000;
+const MIN_PART_CHARS = 500;
+// API answers that come before any billable work: only these free a call's reservation. A
+// dropped connection, a timeout or a server error may have been paid for (Codex #6a r2).
+const REFUSED_BEFORE_WORK = new Set([400, 401, 403, 404, 413, 422, 429, 529]);
 // How long a quit waits for a batch in flight.
 export const STOP_GRACE_MS = 15_000;
 
@@ -101,23 +108,38 @@ function escape(text) {
 }
 
 /** The batch as labelled items, and the map from each item's key to its row ids. */
-function material(input, now) {
+/** The next part of a text: from where it was last read, at most `partChars` long. */
+function part(text, readChars, partChars) {
+  const from = Math.min(readChars ?? 0, text.length);
+  const to = Math.min(text.length, from + partChars);
+  return { text: text.slice(from, to), from, to, length: text.length };
+}
+
+const partAttr = (p) => (p.from > 0 || p.to < p.length ? ` part="${p.from}-${p.to} of ${p.length}"` : "");
+
+function material(input, now, partChars) {
   const sources = new Map();
   const lines = [];
+  const transcriptEnds = [];
+  const screenshotEnds = [];
   input.transcripts.forEach((t, i) => {
     const key = `t${i + 1}`;
+    const p = part(t.text, t.readChars, partChars);
+    transcriptEnds.push(p.to);
     sources.set(key, { sourceSegmentId: t.segmentId });
-    lines.push(`<transcript key="${key}" start="${new Date(t.start).toISOString()}" end="${new Date(t.end).toISOString()}">${escape(t.text)}</transcript>`);
+    lines.push(`<transcript key="${key}" start="${new Date(t.start).toISOString()}" end="${new Date(t.end).toISOString()}"${partAttr(p)}>${escape(p.text)}</transcript>`);
   });
   input.screenshots.forEach((s, i) => {
     const key = `s${i + 1}`;
+    const p = part(s.ocrText, s.readChars, partChars);
+    screenshotEnds.push(p.to);
     sources.set(key, { sourceScreenshotId: s._id });
     const app = s.appBundleId ? ` app="${escape(s.appBundleId)}"` : "";
-    lines.push(`<screen key="${key}" at="${new Date(s.takenAt).toISOString()}"${app}>${escape(s.ocrText)}</screen>`);
+    lines.push(`<screen key="${key}" at="${new Date(s.takenAt).toISOString()}"${app}${partAttr(p)}>${escape(p.text)}</screen>`);
   });
   const offsetMin = -new Date(now).getTimezoneOffset();
   const header = `Now: ${new Date(now).toISOString()} (local offset ${offsetMin >= 0 ? "+" : "-"}${String(Math.floor(Math.abs(offsetMin) / 60)).padStart(2, "0")}:${String(Math.abs(offsetMin) % 60).padStart(2, "0")}).`;
-  return { text: `${header}\n\n${lines.join("\n")}`, sources };
+  return { text: `${header}\n\n${lines.join("\n")}`, sources, transcriptEnds, screenshotEnds };
 }
 
 /** One proposal from the model, as applyActions takes it, or null when it can't be used. */
@@ -147,7 +169,8 @@ const SILENT = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {
 
 /** The SDK client for a key: no logging, its own request deadline. */
 export function assistantClient(apiKey) {
-  return new Anthropic({ apiKey, logLevel: "off", logger: SILENT, timeout: REQUEST_TIMEOUT_MS });
+  // No retries: one reservation covers one attempt, and a retried request may be paid twice.
+  return new Anthropic({ apiKey, logLevel: "off", logger: SILENT, timeout: REQUEST_TIMEOUT_MS, maxRetries: 0 });
 }
 
 const utf8Bytes = (text) => Buffer.byteLength(text, "utf8");
@@ -162,12 +185,13 @@ function startOfLocalDay(now) {
 
 /**
  * The most a call with this text can cost, and the max_tokens that keeps it inside `leftUsd`:
- * every input token billed as a cache write at the dearest input price, every output token at
- * the dearest output price. Null when even a small reply wouldn't fit.
+ * every input token billed as a cache write, every output token at full price, at the model's
+ * price (the dearest known for an unknown model). Null when even a small reply wouldn't fit.
  */
-function fit(text, leftUsd) {
-  const inputUsd = (FIXED_INPUT_BYTES + utf8Bytes(text) + INPUT_OVERHEAD_TOKENS) * DEAREST.input * CACHE_WRITE * PER_TOKEN;
-  const perOutput = DEAREST.output * PER_TOKEN;
+function fit(text, leftUsd, model) {
+  const price = PRICES[model] ?? DEAREST;
+  const inputUsd = (FIXED_INPUT_BYTES + utf8Bytes(text) + INPUT_OVERHEAD_TOKENS) * price.input * CACHE_WRITE * PER_TOKEN;
+  const perOutput = price.output * PER_TOKEN;
   const maxTokens = Math.min(MAX_TOKENS, Math.floor((leftUsd - inputUsd) / perOutput));
   if (maxTokens < MIN_OUTPUT_TOKENS) return null;
   return { maxTokens, reservedUsd: inputUsd + maxTokens * perOutput };
@@ -255,16 +279,22 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
     const since = await convex.ensureStart({ at: startOfLocalDay(now) });
     const all = await convex.unread({ since, limit: MAX_INPUT_ROWS });
     let input = all;
-    let made = material(input, now);
-    let sized = fit(made.text, cap.capUsd - cap.spentUsd);
-    // Too much for what is left: fewer items, oldest first, until one call fits.
-    while (!sized && input.transcripts.length + input.screenshots.length > 1) {
-      input = {
-        transcripts: input.transcripts.slice(0, Math.ceil(input.transcripts.length / 2)),
-        screenshots: input.screenshots.slice(0, Math.floor(input.screenshots.length / 2)),
-      };
-      made = material(input, now);
-      sized = fit(made.text, cap.capUsd - cap.spentUsd);
+    let partChars = MAX_PART_CHARS;
+    const left = cap.capUsd - cap.spentUsd;
+    let made = material(input, now, partChars);
+    let sized = fit(made.text, left, model);
+    // Too much for what is left: fewer items, oldest first, then shorter parts, until one fits.
+    while (!sized && (input.transcripts.length + input.screenshots.length > 1 || partChars > MIN_PART_CHARS)) {
+      if (input.transcripts.length + input.screenshots.length > 1) {
+        input = {
+          transcripts: input.transcripts.slice(0, Math.ceil(input.transcripts.length / 2)),
+          screenshots: input.screenshots.slice(0, Math.floor(input.screenshots.length / 2)),
+        };
+      } else {
+        partChars = Math.max(MIN_PART_CHARS, Math.floor(partChars / 2));
+      }
+      made = material(input, now, partChars);
+      sized = fit(made.text, left, model);
     }
     if (input.transcripts.length + input.screenshots.length === 0) return;
     if (!sized) {
@@ -276,6 +306,8 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
       reservedUsd: sized.reservedUsd,
       transcriptIds: input.transcripts.map((r) => r._id),
       screenshotIds: input.screenshots.map((r) => r._id),
+      transcriptEnds: made.transcriptEnds,
+      screenshotEnds: made.screenshotEnds,
     });
     if (!requestId) {
       await capPaused(day, `the daily cap of $${cap.capUsd} has no room for another call`);
@@ -291,16 +323,23 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
         messages: [{ role: "user", content: made.text }],
       });
     } catch (err) {
-      // No answer: nothing to pay for, and the items are read again next time.
-      log(`assistant: the request failed (${err?.name ?? "Error"}${err?.status ? ` ${err.status}` : ""}); its items are tried again next batch`);
+      // The items are read again next time. Only a refusal that came before any work frees the
+      // reservation; anything else may have been paid for, and stays charged at it.
+      const refused = typeof err?.status === "number" && REFUSED_BEFORE_WORK.has(err.status);
+      log(
+        `assistant: the request failed (${err?.name ?? "Error"}${err?.status ? ` ${err.status}` : ""}); ` +
+          `${refused ? "nothing was paid" : "it stays charged at its reservation"}, and its items are tried again next batch`
+      );
       try {
-        await convex.failRequest({ requestId });
+        await (refused ? convex.failRequest({ requestId }) : convex.abandonRequest({ requestId }));
       } catch (failErr) {
-        log(`assistant: could not free the call's reservation (${failErr?.name ?? "Error"}); it stays counted`);
+        log(`assistant: could not close the failed call (${failErr?.name ?? "Error"}); it stays counted at its reservation`);
       }
       return;
     }
-    const costUsd = costOf(response.usage, response.model);
+    // Priced as it was reserved: with no fallback, the model asked for is the one that answered
+    // (a dated id in response.model would price at the dearest rate, past the reservation).
+    const costUsd = costOf(response.usage, model);
     const raw = response.stop_reason === "refusal" ? [] : replyActions(response);
     if (raw === null) log(`assistant: the reply was not valid output (${response.stop_reason}); it is paid for, and nothing is applied`);
     const proposals = (raw ?? []).map((a) => toProposal(a, made.sources)).filter(Boolean);

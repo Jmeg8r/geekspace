@@ -178,6 +178,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
       beginRequest: (args) => client.mutation(api.assistant.beginRequest, args),
       settleRequest: (args) => client.mutation(api.assistant.settleRequest, args),
       failRequest: (args) => client.mutation(api.assistant.failRequest, args),
+      abandonRequest: (args) => client.mutation(api.assistant.abandonRequest, args),
       openRequests: () => client.query(api.assistant.openRequests, {}),
       applyProposal: (args) => client.mutation(api.assistant.applyProposal, args),
       refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),

@@ -218,6 +218,8 @@ export default defineSchema({
     text: v.string(),
     // When the assistant read it: set in the same write that records the call's cost.
     readAt: v.optional(v.number()),
+    // How much of a long text has been read so far, in characters (Codex review of PR 6a).
+    readChars: v.optional(v.number()),
   })
     .index("by_segment", ["segmentId"])
     // What the assistant has not read yet, oldest first (plan PR 6a, Codex review round 1).
@@ -235,6 +237,7 @@ export default defineSchema({
     purgedAt: v.optional(v.number()), // image deleted; the OCR text is kept
     // When the assistant read its text (plan PR 6a); purged images' text is read too.
     readAt: v.optional(v.number()),
+    readChars: v.optional(v.number()),
   })
     .index("by_purged_takenAt", ["purgedAt", "takenAt"])
     .index("by_read_takenAt", ["readAt", "takenAt"])
@@ -319,6 +322,9 @@ export default defineSchema({
     reservedUsd: v.number(),
     transcriptIds: v.array(v.id("transcripts")),
     screenshotIds: v.array(v.id("screenshots")),
+    // Where each item's part ends, in characters; absent: the whole item.
+    transcriptEnds: v.optional(v.array(v.number())),
+    screenshotEnds: v.optional(v.array(v.number())),
     proposals: v.optional(
       v.array(
         v.object({
