@@ -1560,3 +1560,44 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Same weakness, outside this PR:** gs-capture names `shot-` and `sys-` files with local
     `HHmmss-SSS` (`Run.dayAndFile`), so a screenshot or system segment in the fall-back hour
     can collide too. That needs its own fix in the Swift helper.
+- **2026-10-31, PR 3e is split in two (James).** 3e-1 is the main process: the menu-bar
+  indicator, ⌥⌘R, and the status view. 3e-2 is the renderer: the app-chrome indicator, the
+  Settings section, the onboarding for both TCC prompts, and the a11y pass. The Call held
+  prompt, its notice timeout and the Assistant paused cap state stay with PR 4 and PR 6,
+  which build what they show.
+- **2026-10-31, PR 3e-1, menu bar and ⌥⌘R.** Built as planned, with these changes:
+  - **A status view, in the main process (`electron/dayRecorderTray.mjs`).** The tray, the
+    app windows and `gs:dayRecorder:status` all read it instead of the service. It holds an
+    `off` that comes straight after `stopping` or `notRecording` for 250 ms, and drops it
+    when the next status arrives first. The measured gaps are 0–1 ms (3c part 2 `r3-kill`
+    and 3d-1 `status.log`), so a real `off` shows at most 250 ms late. The mic still
+    follows the raw service.
+  - **The tray exists only while the recorder is on**, and owns ⌥⌘R for exactly that long,
+    so the shortcut is not taken from other apps while the recorder is off. macOS only.
+  - **Icons are drawn in code** (`dotPng`), so there are no binary assets and no packaging
+    change. Red `#D93036` and amber `#C27C0E` keep 3:1 on light and dark menu bars. Grey
+    (Not recording) and hollow (Paused, Starting, Stopping) are template images that macOS
+    tints.
+  - **Copy beyond the spec table:** Starting, Stopping, and "Recording without the mic" for a
+    mic error (screens and system audio carry on, per 3d). The mic's own error text is shown
+    as it is; polishing it is 3e-2's copy pass.
+  - **A taken ⌥⌘R is loud:** a log line, a notice in every tooltip, and no accelerator shown
+    on the menu item. The menu's pause and resume still work.
+  - **"Open Geekspace"** reuses the second-instance focus (`focusAppWindow`), and opens a new
+    window when none is left, because a macOS app keeps running without one.
+- **2026-10-31, PR 3e-1, proof on the signed build (`851d392`).** `codesign --verify` OK.
+  Driven through the app's own `dayRecorder` calls over CDP, with ⌥⌘R sent by System Events:
+  - On: the menu bar showed a red dot and **Recording**.
+  - ⌥⌘R paused: the tray showed a hollow dot and **Paused**. The log had
+    `stopping, off, paused`; the page's own listener saw `stopping, paused`. No Off.
+  - ⌥⌘R resumed to Recording. Off: the tray went away, and the page saw the real `off`.
+  - ⌥⌘R while off did nothing (the status stayed `off`), so the shortcut was released.
+  - Quit: no app process and no helper left. The recorder was left off.
+  - **Not exercised live:** clicking the tray menu itself (the unit tests cover its items),
+    and a taken ⌥⌘R.
+  - The P2 fix after this build (`43aaadf`) changes tooltip text only.
+  - Evidence: `~/gs-part2-evidence/pr3e1-tray-2026-10-31/` (status lines and three cropped
+    menu-bar shots).
+- **2026-10-31, PR 3e-1, Codex round 1: PASS ([P1] none, 1 × P2).** The ⌥⌘R notice was in
+  the Recording tooltip only. It is now added to every state's tooltip (`ae3d22f` tests,
+  `43aaadf` fix).

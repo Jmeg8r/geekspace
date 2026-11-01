@@ -13,7 +13,7 @@ export type DayRecorderControls = {
 
 export function createDayRecorderControls(updateSettings: (patch: SettingsPatch) => Promise<void>): DayRecorderControls;
 
-export type ControllableRecorder = DayRecorderControls & { service: { status: () => RecorderStatus } };
+export type ControllableRecorder = DayRecorderControls & { view: { status: () => RecorderStatus } };
 
 /** What a page can send. setEnabled checks `enabled` itself, so a wrong type is refused there. */
 export type ControlArgs = { enabled?: boolean | string | number | null | object };

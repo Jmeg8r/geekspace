@@ -81,14 +81,17 @@ try {
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 
-app.on("second-instance", () => {
+/** Bring the app window forward. Returns false when there is none to bring. */
+function focusAppWindow() {
   const w = appWindows()[0];
-  if (w) {
-    if (w.isMinimized()) w.restore();
-    w.show();
-    w.focus();
-  }
-});
+  if (!w) return false;
+  if (w.isMinimized()) w.restore();
+  w.show();
+  w.focus();
+  return true;
+}
+
+app.on("second-instance", () => void focusAppWindow());
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -507,9 +510,12 @@ app.whenReady().then(async () => {
     const recorder = startDayRecorder({
       convexUrl: convexUrl(),
       capturePage: { devServerUrl, file: CAPTURE_FILE },
+      // On macOS the app outlives its windows, so the menu bar may have none to bring up.
+      showApp: () => void (focusAppWindow() || createWindow()),
     });
     dayRecorder = recorder;
-    forwardStatus({ service: recorder.service, windows: appWindows });
+    // The view, not the service: the windows must not flash the passing `off` either.
+    forwardStatus({ service: recorder.view, windows: appWindows });
     holdQuitForDayRecorder = createQuitHold({
       stop: () => recorder.stop(),
       quit: () => app.quit(),

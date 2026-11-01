@@ -6,7 +6,8 @@
 // turning the recorder on, pausing it, or editing the denylist reaches the helper the same
 // way whether the change came from the renderer's controls (dayRecorderIpc.mjs) or not.
 // The mic runs in a hidden window of its own while the recorder is recording (plan PR 3d-2).
-import { app, ipcMain, systemPreferences } from "electron";
+// The menu bar shows the status view while the recorder is on, and ⌥⌘R pauses (plan PR 3e-1).
+import { app, globalShortcut, ipcMain, Menu, nativeImage, systemPreferences, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { ConvexClient } from "convex/browser";
@@ -19,6 +20,7 @@ import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired } from "./dayRecorderMedia.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
+import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
 import { createMicController } from "./micController.mjs";
 import { createMicSegmentWriter } from "./micSegments.mjs";
 
@@ -39,8 +41,9 @@ function helperPath() {
 /**
  * Start following the Day Recorder settings. Returns a handle main.mjs stops on quit.
  * `capturePage` is where the mic window's page is: the dev server, or dist/capture.html.
+ * `showApp` brings the app window forward, for the menu bar's "Open Geekspace".
  */
-export function startDayRecorder({ convexUrl, capturePage }) {
+export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   const logDir = path.join(GEEKSPACE_DIR, "logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = createFileLog(path.join(logDir, "day-recorder.log"));
@@ -109,15 +112,33 @@ export function startDayRecorder({ convexUrl, capturePage }) {
     (err) => log(`could not read Day Recorder settings: ${err?.message ?? err}`)
   );
 
+  const controls = createDayRecorderControls(rows(api.dayRecorder.updateSettings));
+  const view = createStatusView(service);
+  const indicator = startRecorderIndicator({
+    view,
+    platform: process.platform,
+    createTray: (image) => new Tray(image),
+    buildMenu: (items) => Menu.buildFromTemplate(items),
+    createImage: (tone) => trayImage(nativeImage, tone),
+    globalShortcut,
+    controls,
+    showApp,
+    log,
+  });
+
   return {
     service,
-    ...createDayRecorderControls(rows(api.dayRecorder.updateSettings)),
+    view,
+    ...controls,
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
       unsubscribe();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();
       await service.shutdown();
+      // Only now: the menu bar says Recording for as long as anything is still capturing.
+      indicator.stop();
+      view.stop();
       ipcMain.removeAllListeners("gs:mic:event");
       ipcMain.removeHandler("gs:mic:config");
       await client.close();
