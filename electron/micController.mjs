@@ -22,6 +22,7 @@ const COPY = {
   denied: "Microphone access is off for Geekspace. Turn it on in System Settings > Privacy & Security > Microphone.",
   windowGone: "The mic capture window stopped unexpectedly.",
   noAudio: "The microphone delivered no audio for a whole segment.",
+  cancelled: "The recorder stopped before the mic window started.",
 };
 
 export function createMicController({
@@ -31,8 +32,12 @@ export function createMicController({
   onState,
   recordError,
   log,
+  micConfig,
   stopTimeoutMs = STOP_TIMEOUT_MS,
 }) {
+  // Set by shutdown (quit): nothing starts again. WHY (Codex #89 r2): at quit the service is
+  // still Recording, so the mic's own "off" re-emits Recording and the runtime calls start.
+  let shutDown = false;
   let wanted = false;
   // Set by any failure, cleared by the next start after a stop: a failed mic stays down for
   // the rest of this recording, even when its own close finishes.
@@ -90,7 +95,7 @@ export function createMicController({
 
   /** The recorder is Recording: run the mic, unless it already runs or failed this recording. */
   function start() {
-    if (wanted) return Promise.resolve();
+    if (wanted || shutDown) return Promise.resolve();
     wanted = true;
     failed = false;
     // A start whose permission ask is still out opens the window once it is answered.
@@ -172,7 +177,12 @@ export function createMicController({
     }
   }
 
+  /**
+   * Close the window and its writer. One teardown at a time: a second call while one is still
+   * writing its last row joins it, never replaces it (Codex #89 r2: a crash during a stop).
+   */
   function teardown() {
+    if (!win && !writer && tearingDown) return tearingDown;
     const w = win;
     const wr = writer;
     win = null;
@@ -201,7 +211,8 @@ export function createMicController({
       if (!(await stopped)) log(`the mic capture window did not stop within ${stopTimeoutMs} ms; closing it`);
       clearTimeout(timer);
       onStopped = null;
-      // The writer's own drain waits for the last segment's row.
+      // The writer's own drain waits for the last segment's row. A window that crashed during
+      // this stop has already started its teardown; that one is awaited, not skipped.
       await writer?.drain();
       await teardown();
     })().finally(() => {
@@ -213,11 +224,30 @@ export function createMicController({
     return closing;
   }
 
+  /**
+   * The capture page's config request, which it makes after registering for stop and before
+   * anything else. A stop sent before the page listened was lost, so it is answered here
+   * (Codex #89 r2). Null for any other sender.
+   */
+  function configFor(sender) {
+    if (!ownsSender(sender)) return null;
+    if (!wanted || closing) return { ok: false, cancelled: true, error: COPY.cancelled };
+    return { ok: true, data: micConfig };
+  }
+
+  /** Quit: stop for good. */
+  function shutdown() {
+    shutDown = true;
+    return stop();
+  }
+
   return {
     start,
     stop,
+    shutdown,
     receive,
     ownsSender,
+    configFor,
     state: () => state,
     isCaptureWindow: (w) => win !== null && w === win,
   };

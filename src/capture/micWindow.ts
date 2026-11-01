@@ -8,7 +8,7 @@ import { micErrorKind, type MicErrorKind, type MicEvent } from "./micCapture";
 export type MicConfig = { segmentSec: number; timesliceMs: number };
 
 export type CaptureBridge = {
-  config: () => Promise<{ ok: true; data: MicConfig } | { ok: false; error: string }>;
+  config: () => Promise<{ ok: true; data: MicConfig } | { ok: false; error: string; cancelled?: true }>;
   event: (event: MicEvent) => void;
   onStop: (cb: () => void) => void;
 };
@@ -49,6 +49,8 @@ export async function runMicWindow(api: CaptureBridge, openMic: () => Promise<Op
   };
 
   const cfg = await api.config();
+  // A stop sent before this page listened is answered here (Codex #89 r2): not a failure.
+  if (!cfg.ok && cfg.cancelled) return stoppedDuringStartup();
   if (!cfg.ok) return failStartup("unavailable", cfg.error);
   if (stopAsked) return stoppedDuringStartup();
 

@@ -86,14 +86,13 @@ export function startDayRecorder({ convexUrl, capturePage }) {
       log(`mic: ${s.state}${s.state === "error" ? ` (${s.kind})` : ""}`);
       service.setMic(s);
     },
+    micConfig: { segmentSec: SEGMENT_SEC, timesliceMs: MIC_TIMESLICE_MS },
     recordError: (detail) =>
       logEvent({ kind: "capError", detail }).catch((err) => log(`could not record a capError event (${err?.name ?? "Error"})`)),
     log,
   });
   ipcMain.on("gs:mic:event", (event, message) => mic.receive(event.sender, message));
-  ipcMain.handle("gs:mic:config", (event) =>
-    mic.ownsSender(event.sender) ? { ok: true, data: { segmentSec: SEGMENT_SEC, timesliceMs: MIC_TIMESLICE_MS } } : REFUSED
-  );
+  ipcMain.handle("gs:mic:config", (event) => mic.configFor(event.sender) ?? REFUSED);
   // The mic follows the recorder: on while Recording, finished and closed otherwise.
   service.onStatus((s) => void (s.status === "recording" ? mic.start() : mic.stop()));
 
@@ -117,7 +116,7 @@ export function startDayRecorder({ convexUrl, capturePage }) {
     async stop() {
       unsubscribe();
       // The mic first: its last segment's row needs the backend, like the helper's.
-      await mic.stop();
+      await mic.shutdown();
       await service.shutdown();
       ipcMain.removeAllListeners("gs:mic:event");
       ipcMain.removeHandler("gs:mic:config");

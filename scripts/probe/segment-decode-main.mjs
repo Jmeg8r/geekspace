@@ -47,13 +47,10 @@ app.whenReady().then(async () => {
     onState: (s) => states.push(s),
     recordError: (d) => logs.push(`capError: ${d}`),
     log: (m) => logs.push(m),
+    micConfig: { segmentSec: SEGMENT_SEC, timesliceMs: 1000 },
   });
   ipcMain.on("gs:mic:event", (event, message) => mic.receive(event.sender, message));
-  ipcMain.handle("gs:mic:config", (event) =>
-    mic.ownsSender(event.sender)
-      ? { ok: true, data: { segmentSec: SEGMENT_SEC, timesliceMs: 1000 } }
-      : { ok: false, error: "Refused" }
-  );
+  ipcMain.handle("gs:mic:config", (event) => mic.configFor(event.sender) ?? { ok: false, error: "Refused" });
   const timer = setTimeout(() => finish(2, `fewer than ${WANT} segments in ${DEADLINE_MS} ms`), DEADLINE_MS);
   await mic.start();
   await two;

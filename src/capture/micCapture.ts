@@ -107,8 +107,9 @@ export function startMicCapture({
         } catch (err) {
           console.error("Day Recorder mic: could not read a recorded chunk", err);
           emit({ type: "chunkFailed", segment });
-          // Said even during a stop: the segment it belonged to is gone.
-          send({ type: "error", kind: "recorderError", message: "A recorded chunk could not be read." });
+          // Said in this step, ahead of any end marker already queued, and even during a stop:
+          // the main process tears down on stopped, so a later error is never heard (Codex #89 r2).
+          emit({ type: "error", kind: "recorderError", message: "A recorded chunk could not be read." });
           void stop();
           return;
         }
