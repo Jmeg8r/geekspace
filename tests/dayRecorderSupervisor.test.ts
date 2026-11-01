@@ -359,7 +359,7 @@ describe("Day Recorder supervisor", () => {
 describe("Day Recorder supervisor, call hold", () => {
   it("parses the call events and a call segment", () => {
     expect(parseLine('{"v":1,"event":"callHeld","t":1}').ok).toBe(true);
-    expect(parseLine('{"v":1,"event":"callReleased","segments":2,"heldSec":600}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callReleased","segments":2,"heldSec":600,"overflowed":false}').ok).toBe(true);
     expect(parseLine('{"v":1,"event":"callDiscarded","heldSec":42,"reason":"stop"}').ok).toBe(true);
     expect(
       parseLine('{"v":1,"event":"segment","kind":"call","day":"2026-10-20","path":"2026-10-20/call-a.m4a","start":1,"end":2}').ok

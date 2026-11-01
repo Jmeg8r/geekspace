@@ -136,13 +136,20 @@ final class SegmentWriter {
     private let root: String
     private let segmentSec: Double
     private(set) var sampleRate: Double
+    /// File prefix and protocol kind: `sys`/`system` for the tap, `call`/`call` for released
+    /// call audio (CallHold.swift).
+    private let prefix: String
+    private let kind: String
     private let report: (String, [String: Any]) -> Void
     private var open: Open?
 
-    init(root: String, segmentSec: Double, sampleRate: Double, report: @escaping (String, [String: Any]) -> Void) {
+    init(root: String, segmentSec: Double, sampleRate: Double, prefix: String = "sys", kind: String = "system",
+         report: @escaping (String, [String: Any]) -> Void) {
         self.root = root
         self.segmentSec = segmentSec
         self.sampleRate = sampleRate
+        self.prefix = prefix
+        self.kind = kind
         self.report = report
     }
 
@@ -169,7 +176,7 @@ final class SegmentWriter {
 
     func append(_ chunk: PCMChunk) {
         let startMs = chunk.endMs - Double(chunk.samples.count) / sampleRate * 1000
-        let (chunkDay, _) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: "sys", ext: "m4a")
+        let (chunkDay, _) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: prefix, ext: "m4a")
         if let current = open,
            SegmentWriter.shouldRoll(frames: current.frames, sampleRate: sampleRate, segmentSec: segmentSec,
                                     openDay: current.day, chunkDay: chunkDay)
@@ -212,12 +219,12 @@ final class SegmentWriter {
         } catch {
             fail("cannot finalize segment \(path): \(error.localizedDescription)")
         }
-        report("segment", ["kind": "system", "day": day, "path": path, "start": round3(startMs),
+        report("segment", ["kind": kind, "day": day, "path": path, "start": round3(startMs),
                            "end": round3(startMs + Double(frames) / sampleRate * 1000), "peak": Double(peak)])
     }
 
     private func begin(at startMs: Double) -> Open {
-        let (day, file) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: "sys", ext: "m4a")
+        let (day, file) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: prefix, ext: "m4a")
         let dir = URL(fileURLWithPath: "\(root)/\(day)")
         // Hidden while partial: never announced, and never matches a stored path's shape
         // (convex/lib/dayRecorder.ts FILE_RE refuses a leading dot).
@@ -249,10 +256,21 @@ final class SystemAudioRecorder {
     private var writer: SegmentWriter?
     private var hold: PCMHold?
     private var watcher: AudioUseWatcher?
+    private let root: String
+    private let segmentSec: Double
+    private let maxCallSec: Double
+    private let report: (String, [String: Any]) -> Void
+    /// Set while a call waits for its notice: released audio goes here, not to the writer.
+    private var callHold: CallHold?
 
     /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped`,
     /// `sessionUnverified`, `sampleRateChanged` and `audioUse`.
-    init(root: String, denylist: [String], segmentSec: Double, report: @escaping (String, [String: Any]) -> Void) {
+    init(root: String, denylist: [String], segmentSec: Double, maxCallSec: Double = CallHold.defaultMaxSec,
+         report: @escaping (String, [String: Any]) -> Void) {
+        self.root = root
+        self.segmentSec = segmentSec
+        self.maxCallSec = maxCallSec
+        self.report = report
         queue.sync {
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
             // silenced only one of two live instances (spike Q2). Bundle-ID taps need macOS 26.
@@ -273,8 +291,11 @@ final class SystemAudioRecorder {
                     return hold
                 }
                 let writer = SegmentWriter(root: root, segmentSec: segmentSec, sampleRate: format.mSampleRate, report: report)
+                // Released audio goes to the call hold while a call waits for its notice.
                 let hold = PCMHold(holdMs: SystemAudioRecorder.holdMs, sampleRate: format.mSampleRate,
-                                   deliver: writer.append, onDrop: writer.close)
+                                   deliver: { [unowned self] chunk in
+                                       if let call = self.callHold { call.store(chunk, sourceRate: writer.sampleRate) } else { writer.append(chunk) }
+                                   }, onDrop: writer.close)
                 self.writer = writer
                 self.hold = hold
                 return hold
@@ -305,9 +326,47 @@ final class SystemAudioRecorder {
             guard let runner, let timer else { return }
             timer.cancel()
             runner.finish(tailCheck: true)
+            // Never written without a notice: a stop while a call is held drops it.
+            if let call = callHold { discard(call, reason: "stop") }
             writer?.close()
             self.timer = nil
             self.runner = nil
         }
+    }
+
+    /// A call started: close the open segment so no call audio is in it, and hold from here.
+    func holdCall() {
+        queue.sync {
+            guard callHold == nil else { fail("call hold: a call is already held") }
+            writer?.close()
+            callHold = CallHold(maxSec: maxCallSec)
+            report("callHeld", ["t": round3(nowMs())])
+        }
+    }
+
+    /// The notice was given: write what was held as `call` segments, then record as usual.
+    func releaseCall() {
+        queue.sync {
+            guard let call = callHold else { fail("call release: no call is held") }
+            callHold = nil
+            let (heldSec, overflowed) = (call.heldSec, call.overflowed)
+            let segments = CallHold.flush(call.take(), root: root, segmentSec: segmentSec, report: report)
+            report("callReleased", ["segments": segments, "heldSec": round3(heldSec), "overflowed": overflowed])
+        }
+    }
+
+    /// Declined or timed out: drop what was held, unwritten.
+    func discardCall() {
+        queue.sync {
+            guard let call = callHold else { fail("call discard: no call is held") }
+            discard(call, reason: "command")
+        }
+    }
+
+    private func discard(_ call: CallHold, reason: String) {
+        callHold = nil
+        let heldSec = call.heldSec
+        _ = call.take()
+        report("callDiscarded", ["heldSec": round3(heldSec), "reason": reason])
     }
 }

@@ -7,7 +7,8 @@ and a change here bumps `v`.
 ## Invocation
 
 ```
-gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segment-sec 300] [--duration s]
+gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segment-sec 300]
+               [--call-hold-max-sec 1800] [--duration s]
 ```
 
 - `--media-root` must be an existing absolute directory. Files go under `<media-root>/<day>/`.
@@ -26,7 +27,31 @@ gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segm
   and end it with the default disposition (exit 143, no lines). Nothing has been captured at
   that point. A supervisor that stops a helper before its `ready` should expect this.
 - **A denylist change means a restart.** The helper reads its arguments once. The supervisor
-  stops it and spawns a new one, so there is no in-band control channel to get wrong.
+  stops it and spawns a new one. The only in-band control is the call hold (Commands, below).
+- `--call-hold-max-sec` caps how much call audio is held (default 1800: the 15-minute notice
+  timeout plus its one extension). Audio past the cap is not held; `callReleased` says so.
+
+## Commands (plan PR 4a)
+
+The supervisor writes one command per line on the helper's **stdin**. They drive the call
+hold (spec R5, F3): while a call waits for its recording notice, system audio is kept **in
+memory only** and reaches disk only after the notice.
+
+- `call hold`: the open system segment is finalized (so it holds no call audio), and from
+  here released tap audio is kept in memory as 16 kHz mono 16-bit PCM (32 KB/s, about 58 MB
+  at the default cap). Writes `callHeld`.
+- `call release`: the notice was given. The held audio is written as `segment` lines with
+  `"kind": "call"` and `call-HHmmss-SSS-<epochMs>.m4a` names (16 kHz mono AAC, at most
+  `--segment-sec` each, a new file at any gap), then `callReleased`. Recording continues as
+  usual (`sys-` segments) after it.
+- `call discard`: declined or timed out. The held audio is dropped, never written. Writes
+  `callDiscarded` with `"reason": "command"`.
+- A stop (signal) while a call is held drops it the same way, with `"reason": "stop"`.
+- An unknown command, `call hold` while one is held, or `call release`/`call discard` with
+  none held is a supervisor bug: the helper fails (stderr, non-zero exit).
+- The commands carry no notice id. The supervisor attaches the `noticeGiven` event it
+  released with to each `call` segment, and stores a `call` segment only after it sent
+  `call release` (Convex `addSegment` refuses one without a given notice too).
 
 ## Output
 
@@ -106,6 +131,9 @@ More detail on the fields:
     started (Electron's renderer records the mic).
   - At start, every app already using audio is reported once. After that, only changes
     are reported. `input: false, output: false` means the app stopped.
+- **`callHeld`** (`t`), **`callReleased`** (`segments`, `heldSec`, `overflowed`) and
+  **`callDiscarded`** (`heldSec`, `reason`: `command` or `stop`) report the call hold with
+  counts only, never audio.
 - **`tapRebuilt` / `tailDropped`** carry only counts, levels and bundle IDs, never audio.
   **Their bundle fields can name a denylisted app** (`addedBundles`, `arrivedBundles`).
   They are diagnostics. The supervisor must not store or log them, or `audioUse`'s and

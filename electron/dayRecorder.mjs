@@ -31,7 +31,11 @@ const SHAPES = {
   heartbeat: (m) => isNum(m.t),
   shot: (m) =>
     isStr(m.day) && isStr(m.path) && isNum(m.takenAt) && isStr(m.ocrText) && (m.appBundleId === null || isStr(m.appBundleId)),
-  segment: (m) => m.kind === "system" && isStr(m.day) && isStr(m.path) && isNum(m.start) && isNum(m.end),
+  segment: (m) => (m.kind === "system" || m.kind === "call") && isStr(m.day) && isStr(m.path) && isNum(m.start) && isNum(m.end),
+  // The call hold (plan PR 4a): counts and a fixed reason only, never audio.
+  callHeld: (m) => isNum(m.t),
+  callReleased: (m) => isNum(m.segments) && isNum(m.heldSec) && isBool(m.overflowed),
+  callDiscarded: (m) => isNum(m.heldSec) && (m.reason === "command" || m.reason === "stop"),
   // These are only logged, but what is logged is validated too (Codex #80 r2): counts must
   // be numbers and `trigger` one of its two values, so no line can smuggle text into a log.
   tapRebuilt: (m) =>
@@ -76,6 +80,12 @@ function diagnostic(m) {
       return `system audio sample rate changed from ${m.from} to ${m.to}`;
     case "sessionUnverified":
       return `a tap session ended after ${m.livedMs} ms, before its first IO cycle`;
+    case "callHeld":
+      return "call audio held";
+    case "callReleased":
+      return `call audio released: ${m.segments} segment(s), ${m.heldSec} s${m.overflowed ? ", the hold was full" : ""}`;
+    case "callDiscarded":
+      return `call audio discarded: ${m.heldSec} s (${m.reason})`;
     default:
       return null;
   }
@@ -134,6 +144,8 @@ export function createSupervisor({
   let exited = Promise.resolve();
   let stopRequested = false;
   let sawStopped = false;
+  // The notice event that released the call audio now arriving; null when nothing is released.
+  let releasing = null;
   let lastStderr = "";
   let silenceTimer = null;
   const pending = new Set();
@@ -230,8 +242,26 @@ export function createSupervisor({
           ocrText: m.ocrText,
         });
         return;
-      case "segment":
-        store("segment", sink.addSegment, { day: m.day, kind: "system", path: m.path, start: m.start, end: m.end });
+      case "segment": {
+        const row = { day: m.day, kind: m.kind, path: m.path, start: m.start, end: m.end };
+        if (m.kind === "call") {
+          // Spec R5: call audio is stored only with the notice that released it. A call segment
+          // nobody released means the helper broke the hold, so capture stops over it.
+          if (!releasing) {
+            if (state.status !== "notRecording" && !stopRequested) {
+              fail({ reason: "protocol", message: "gs-capture announced call audio that was never released" });
+              terminate(proc);
+            }
+            return;
+          }
+          row.noticeEventId = releasing;
+        }
+        store("segment", sink.addSegment, row);
+        return;
+      }
+      case "callReleased":
+        releasing = null;
+        log(diagnostic(m));
         return;
       case "stopped":
         sawStopped = true;
@@ -278,12 +308,16 @@ export function createSupervisor({
 
     let proc;
     try {
-      proc = spawnImpl(command, args, { stdio: ["ignore", "pipe", "pipe"], env });
+      // stdin carries the call-hold commands (protocol.md "Commands").
+      proc = spawnImpl(command, args, { stdio: ["pipe", "pipe", "pipe"], env });
     } catch (err) {
       fail({ reason: "spawnFailed", message: `couldn't start gs-capture: ${err?.message ?? err}` });
       return;
     }
     child = proc;
+    releasing = null;
+    // A helper that has exited closes its stdin; a command written then is reported here.
+    proc.stdin?.on("error", (err) => log(`could not send a command to gs-capture (${err?.code ?? err})`));
     exited = new Promise((resolve) => {
       proc.once("close", (code, signal) => {
         onExit(proc, code, signal);
@@ -340,9 +374,24 @@ export function createSupervisor({
     setState({ status: "off" });
   }
 
+  /** One call-hold command to the helper (protocol.md "Commands"). */
+  function sendCommand(line) {
+    if (!child?.stdin?.writable) throw new Error("The capture helper is not running");
+    child.stdin.write(`${line}\n`);
+  }
+
   return {
     start,
     stop,
+    /** A call started: the helper holds system audio in memory from here (spec R5). */
+    holdCall: () => sendCommand("call hold"),
+    /** The notice was given: the held audio is written and stored with this notice event. */
+    releaseCall(noticeEventId) {
+      sendCommand("call release");
+      releasing = noticeEventId;
+    },
+    /** Declined or timed out: the held audio is dropped unwritten. */
+    discardCall: () => sendCommand("call discard"),
     state: () => state,
     running: () => child !== null,
     /** Last resort for process exit: no time to finalize the open segment. */

@@ -155,7 +155,7 @@ switch (scenario) {
         else if (command === "call release") {
           line("segment", callSegment(0));
           line("segment", callSegment(1));
-          line("callReleased", { heldSec: 600, segments: 2 });
+          line("callReleased", { heldSec: 600, overflowed: false, segments: 2 });
         } else if (command === "call discard") line("callDiscarded", { heldSec: 42, reason: "command" });
         else {
           process.stderr.write(`gs-capture: unknown command ${command}\n`);

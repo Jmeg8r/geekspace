@@ -114,6 +114,21 @@ enum Run {
         return (day, "\(prefix)-\(formatter.string(from: date))-\(epochMs).\(ext)")
     }
 
+    /// The supervisor's commands, one per line on stdin (protocol.md "Commands"). An unknown
+    /// or out-of-order command is a supervisor bug, so it fails the run rather than guess.
+    static func readCommands(_ audio: SystemAudioRecorder) {
+        Thread.detachNewThread {
+            while let command = readLine() {
+                switch command {
+                case "call hold": audio.holdCall()
+                case "call release": audio.releaseCall()
+                case "call discard": audio.discardCall()
+                default: fail("unknown command on stdin: \(command.prefix(40))")
+                }
+            }
+        }
+    }
+
     static func run(_ args: Args) async {
         let root = args.required("media-root")
         var isDir: ObjCBool = false
@@ -150,10 +165,13 @@ enum Run {
         }
         line("ready", ["pid": Int(getpid()), "shotSec": shotSec, "segmentSec": segmentSec, "denylist": denylist])
         ProcWatch.detachHALFromMainRunLoop()
-        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec) { event, fields in
+        // How long a call may wait for its notice (CallHold.swift); the supervisor sets it.
+        let maxCallSec = args.double("call-hold-max-sec", default: CallHold.defaultMaxSec)
+        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec, maxCallSec: maxCallSec) { event, fields in
             line(event, fields)
         }
         adopt(audio)
+        readCommands(audio)
         Task.detached {
             while true {
                 try? await Task.sleep(nanoseconds: UInt64(heartbeatSec * 1_000_000_000))

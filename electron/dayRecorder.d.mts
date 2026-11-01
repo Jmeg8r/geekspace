@@ -24,7 +24,10 @@ export type HelperMessage =
   | { v: 1; event: "ready"; pid: number }
   | { v: 1; event: "heartbeat"; t: number }
   | { v: 1; event: "shot"; day: string; path: string; takenAt: number; appBundleId: string | null; ocrText: string }
-  | { v: 1; event: "segment"; kind: "system"; day: string; path: string; start: number; end: number }
+  | { v: 1; event: "segment"; kind: "system" | "call"; day: string; path: string; start: number; end: number }
+  | { v: 1; event: "callHeld"; t: number }
+  | { v: 1; event: "callReleased"; segments: number; heldSec: number; overflowed: boolean }
+  | { v: 1; event: "callDiscarded"; heldSec: number; reason: "command" | "stop" }
   | { v: 1; event: "audioUse"; app: string | null; denylisted: boolean; input: boolean; output: boolean }
   | { v: 1; event: "stopped"; reason: string }
   | { v: 1; event: "tapRebuilt" | "tailDropped" | "sampleRateChanged" | "sessionUnverified" };
@@ -34,7 +37,10 @@ export function parseLine(text: string): { ok: true; message: HelperMessage } | 
 /** The arguments of dayRecorder.addScreenshot. */
 export type ScreenshotRow = { day: string; path: string; takenAt: number; appBundleId?: string; ocrText: string };
 /** The arguments of dayRecorder.addSegment, as the helper produces them. */
-export type SegmentRow = { day: string; kind: "system"; path: string; start: number; end: number };
+export type SegmentRow =
+  | { day: string; kind: "system"; path: string; start: number; end: number }
+  /** Call audio carries the notice event that released it (spec R5). */
+  | { day: string; kind: "call"; path: string; start: number; end: number; noticeEventId: string };
 
 export type CaptureSink = {
   addScreenshot: (row: ScreenshotRow) => Promise<void>;
@@ -70,6 +76,10 @@ export type StartOptions = { denylist: string[]; shotSec: number; segmentSec: nu
 export type Supervisor = {
   start: (options: StartOptions) => void;
   stop: () => Promise<void>;
+  /** Throws when no helper is running. */
+  holdCall: () => void;
+  releaseCall: (noticeEventId: string) => void;
+  discardCall: () => void;
   state: () => SupervisorState;
   running: () => boolean;
   killSync: () => void;

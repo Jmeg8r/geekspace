@@ -63,6 +63,10 @@ function fakeSupervisors() {
       state: () => state,
       running: () => state.status === "recording",
       killSync: () => void calls.push({ op: "kill" }),
+      // The call hold is driven by the call notice (plan PR 4b), not by the service.
+      holdCall: () => {},
+      releaseCall: () => {},
+      discardCall: () => {},
     };
   };
   return {
