@@ -187,3 +187,19 @@ describe("assistant requests, round 2", () => {
     ).rejects.toThrow(/ends/);
   });
 });
+
+// Codex 6a r4 P1: a full page of rows too long for the cap hid every row after it.
+describe("assistant.unread, past a page", () => {
+  it("[P1] continues after a cursor, ties at its time included once", async () => {
+    const t = await seeded(1);
+    const now = Date.now();
+    const ids: string[] = [];
+    for (let i = 0; i < 3; i += 1) ids.push(await transcript(t, now - (10 - i) * MIN, `SYNTHETIC ${i}`));
+    const first = await t.query(api.assistant.unread, { since: 0, limit: 2 });
+    expect(first.transcripts.map((r) => r.text)).toEqual(["SYNTHETIC 0", "SYNTHETIC 1"]);
+    expect(first.transcriptsDone).toBe(false);
+    const next = await t.query(api.assistant.unread, { since: 0, limit: 2, transcriptAfter: first.transcriptAfter! });
+    expect(next.transcripts.map((r) => r.text)).toEqual(["SYNTHETIC 2"]);
+    expect(next.transcriptsDone).toBe(true);
+  });
+});

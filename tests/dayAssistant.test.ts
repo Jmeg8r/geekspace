@@ -53,6 +53,7 @@ function harness(
     key?: string | null;
     cap?: { capUsd: number | null; spentUsd: number; reached: boolean };
     input?: AssistantInput;
+    pages?: AssistantInput[];
     begin?: () => string | null;
     settleFails?: number;
     applyFails?: boolean;
@@ -82,7 +83,7 @@ function harness(
         calls.push(`start ${at}`);
         return at;
       },
-      unread: async () => opts.input ?? INPUT,
+      unread: async () => (opts.pages ? (opts.pages.shift() ?? { transcripts: [], screenshots: [] }) : (opts.input ?? INPUT)),
       capStatus: async () => opts.cap ?? { capUsd: 5, spentUsd: 0, reached: false },
       beginRequest: async (args: { reservedUsd: number; transcriptIds: string[]; transcriptEnds?: number[]; screenshotIds: string[]; screenshotEnds?: number[] }) => {
         begun.push(args);
@@ -409,6 +410,23 @@ describe("createDayAssistant.runBatch, round 3", () => {
     });
     await h.assistant.runBatch();
     expect(h.requests[0].messages[0].content).toContain("😀tail");
+  });
+});
+
+// Codex 6a r4 P1: a whole page of rows too long for the cap hid the row after it.
+describe("createDayAssistant.runBatch, round 4", () => {
+  it("[P1] reads past a page of rows that can't fit, to one that can", async () => {
+    const huge = Array.from({ length: 200 }, (_, i) => ({ _id: `big${i}`, takenAt: Date.now() - 900_000 + i, ocrText: "中".repeat(10_000) }));
+    const h = harness({
+      cap: { capUsd: 0.05, spentUsd: 0, reached: false },
+      pages: [
+        { transcripts: [], screenshots: huge, transcriptsDone: true, screenshotsDone: false, screenshotAfter: { at: huge[199].takenAt, ids: ["big199"] } },
+        { transcripts: [], screenshots: [{ _id: "shot201", takenAt: Date.now() - 100_000, ocrText: "SYNTHETIC Send deck" }], transcriptsDone: true, screenshotsDone: true },
+      ],
+    });
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    expect(h.begun[0].screenshotIds).toEqual(["shot201"]);
   });
 });
 
