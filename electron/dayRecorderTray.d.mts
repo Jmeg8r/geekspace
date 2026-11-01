@@ -4,6 +4,8 @@ import type { RecorderStatus } from "./dayRecorderService.mjs";
 /** How long an `off` straight after `stopping` or `notRecording` is held back. */
 export const OFF_HOLD_MS: number;
 export const PAUSE_ACCELERATOR: "Alt+Command+R";
+/** Appended to every tooltip while another app holds ⌥⌘R. */
+export const SHORTCUT_TAKEN: string;
 
 export type StatusSource = {
   status: () => RecorderStatus;

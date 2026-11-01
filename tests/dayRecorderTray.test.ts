@@ -5,6 +5,7 @@ import {
   type MenuItem,
   OFF_HOLD_MS,
   PAUSE_ACCELERATOR,
+  SHORTCUT_TAKEN,
   type Tone,
   createStatusView,
   dotPng,
@@ -139,9 +140,27 @@ describe("trayView", () => {
   });
 
   it("says how to pause when another app holds ⌥⌘R", () => {
+    expect(SHORTCUT_TAKEN).toBe(" Another app is using ⌥⌘R, so pause and resume from this menu.");
     expect(trayView({ status: "recording" }, { shortcut: false })?.tooltip).toBe(
-      "Day Recorder is on. Pause it from this menu: another app is using ⌥⌘R."
+      `Day Recorder is on.${SHORTCUT_TAKEN}`
     );
+  });
+
+  // Codex #3e-1 r1 P2: the notice belongs to every state, not to Recording alone.
+  it("keeps the ⌥⌘R notice in every state's tooltip, after the state's own copy", () => {
+    const states: RecorderStatus[] = [
+      { status: "paused" },
+      { status: "starting" },
+      { status: "stopping" },
+      { status: "recording", mic: { state: "silent", silentSec: 25 } },
+      { status: "recording", mic: { state: "error", kind: "denied", error: "Turn the mic on." } },
+      { status: "notRecording", error: "Screen capture stopped.", retryInMs: 5000 },
+      { status: "blocked", error: "Turn on FileVault." },
+    ];
+    for (const status of states) {
+      const own = trayView(status, on)?.tooltip;
+      expect(trayView(status, { shortcut: false })?.tooltip).toBe(`${own}${SHORTCUT_TAKEN}`);
+    }
   });
 
   it("says Paused with a hollow dot, and offers resume", () => {
@@ -371,7 +390,9 @@ describe("startRecorderIndicator", () => {
     const h = indicator({ register: false });
     h.source.emit({ status: "recording" });
     expect(h.log).toHaveBeenCalledWith(expect.stringContaining("⌥⌘R"));
-    expect(h.trays[0].tooltip).toBe("Day Recorder is on. Pause it from this menu: another app is using ⌥⌘R.");
+    expect(h.trays[0].tooltip).toBe(`Day Recorder is on.${SHORTCUT_TAKEN}`);
+    h.source.emit({ status: "recording", mic: { state: "silent", silentSec: 25 } });
+    expect(h.trays[0].tooltip).toContain(SHORTCUT_TAKEN);
     expect(h.trays[0].menu[2]).not.toHaveProperty("accelerator");
     h.source.emit({ status: "off" });
     expect(h.shortcut.unregister).not.toHaveBeenCalled();
