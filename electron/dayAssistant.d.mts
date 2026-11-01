@@ -12,40 +12,54 @@ export type Usage = {
 
 export function costOf(usage: Usage, model: string): number;
 
-/** What assistant.input returns: the batch's material. */
+export const STOP_GRACE_MS: number;
+
+/** What assistant.unread returns: the batch's material. */
 export type AssistantInput = {
   transcripts: { _id: string; segmentId: string; start: number; end: number; text: string }[];
   screenshots: { _id: string; takenAt: number; appBundleId?: string; ocrText: string }[];
 };
 
-/** What the assistant sends (the fields it sets on client.beta.messages.parse). */
+/** What the assistant sends (the fields it sets on client.messages.create). */
 export type AssistantRequest = {
   model: string;
   max_tokens: number;
-  betas: string[];
-  fallbacks: "default";
-  output_config: { effort: string; format: object };
+  output_config: { effort: string; format: { type: "json_schema"; schema: object } };
   system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[];
   messages: { role: "user"; content: string }[];
 };
 
-/** The parts of the SDK client the assistant uses. */
-export type AssistantClient = {
-  beta: { messages: { parse: (params: AssistantRequest) => Promise<{ parsed_output: { actions: object[] } | null; stop_reason: string; model: string; usage: Usage }> } };
-};
+type Reply = { content: { type: string; text?: string }[]; stop_reason: string; model: string; usage: Usage };
 
-export type DayAssistant = { runBatch: () => Promise<void> };
+/** The parts of the SDK client the assistant uses. */
+export type AssistantClient = { messages: { create: (params: AssistantRequest) => Promise<Reply> } };
+
+/** The SDK client for a key, with logging off whatever ANTHROPIC_LOG says. */
+export function assistantClient(apiKey: string): AssistantClient & { logLevel: string | undefined };
+
+export type DayAssistant = { runBatch: () => Promise<void>; stop: () => Promise<void> };
+
+type Proposal = Record<string, string | number | { start: number; end: number } | undefined>;
+
+export type OpenRequest = {
+  _id: string;
+  status: "inFlight" | "settled";
+  proposals: { proposal: object; state: string }[];
+};
 
 export function createDayAssistant(options: {
   client: () => AssistantClient | null;
   convex: {
-    input: (window: { after: number; until: number }) => Promise<AssistantInput>;
-    applyActions: (actions: object[]) => Promise<void>;
-    recordUsage: (row: { day: string; inputTokens: number; outputTokens: number; costUsd: number }) => Promise<void>;
+    ensureStart: (args: { at: number }) => Promise<number>;
+    unread: (args: { since: number; limit: number }) => Promise<AssistantInput>;
     capStatus: (day: string) => Promise<{ capUsd: number | null; spentUsd: number; reached: boolean }>;
+    beginRequest: (args: { day: string; reservedUsd: number; transcriptIds: string[]; screenshotIds: string[] }) => Promise<string | null>;
+    settleRequest: (args: { requestId: string; costUsd: number; inputTokens: number; outputTokens: number; proposals: Proposal[] }) => Promise<void>;
+    failRequest: (args: { requestId: string }) => Promise<void>;
+    openRequests: () => Promise<OpenRequest[]>;
+    applyProposal: (args: { requestId: string; index: number; tzOffsetMin?: number }) => Promise<void>;
+    refuseProposal: (args: { requestId: string; index: number }) => Promise<void>;
     logEvent: (event: { kind: "capPaused"; detail: string }) => Promise<void>;
-    watermark: () => Promise<number | null>;
-    setWatermark: (at: number) => Promise<void>;
   };
   log: (message: string) => void;
   model?: string;

@@ -1663,3 +1663,21 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-11-01, PR 4a, Codex: 3 rounds, ending PASS.** Round 1 FAIL (3 × P1), round 2 FAIL
   (2 × P1, 1 × P2), round 3 PASS ([P1] none, 1 × P2: released segments could overshoot a
   fractional `--segment-sec`, fixed in the commit after `3080b80`).
+- **2026-11-02, PR 6a, the assistant engine.** Built as planned (spec R8, R10, F4), with these
+  choices, most from Codex round 1:
+  - **A ledger, not a watermark.** Each transcript and screenshot carries `readAt`, set in the
+    same write (`settleRequest`) that records the call's real cost and keeps its proposals.
+    A time watermark skipped transcripts written late, resent part of a batch, and lost a
+    paid reply's proposals when a later write failed.
+  - **The cap is a reservation.** Before a call, its worst case (every input byte as a cache
+    write at the dearest price, every output token at the dearest price) is reserved against
+    the day's cap in `beginRequest`, and `max_tokens` is sized to fit; no call is made when
+    even 1,024 output tokens don't fit. A call abandoned in flight (a crash) stays counted at
+    its reservation after 30 minutes, and its items are read again.
+  - **No refusal fallback.** The `server-side-fallback` beta could run one call on two
+    models, which no single reservation bounds. The GA `messages.create` with structured
+    output is used, and the reply is parsed here, so invalid output is still paid for.
+  - **It reads from the local midnight of the day it first ran** (`assistantSince`), not a
+    rolling 15 minutes. Earlier days are never read.
+  - **The SDK client never logs** (`logLevel: "off"`, a silent logger), whatever
+    `ANTHROPIC_LOG` says: at debug it logs the request, the whole batch.

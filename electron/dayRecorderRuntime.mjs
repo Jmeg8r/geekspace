@@ -10,7 +10,6 @@
 import { app, globalShortcut, ipcMain, Menu, nativeImage, systemPreferences, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { ConvexClient } from "convex/browser";
 // The generated `api` is exactly `anyApi` (convex/_generated/api.js), and convex/ is not
 // packaged into the app, so the main process uses anyApi directly.
@@ -21,7 +20,7 @@ import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMedia.mjs";
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
-import { createDayAssistant } from "./dayAssistant.mjs";
+import { assistantClient, createDayAssistant } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -170,16 +169,19 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
   const assistant = createDayAssistant({
     client: () => {
       const key = keyStore?.get();
-      return key ? new Anthropic({ apiKey: key }) : null;
+      return key ? assistantClient(key) : null;
     },
     convex: {
-      input: (window) => client.query(api.assistant.input, window),
-      applyActions: (actions) => client.mutation(api.assistant.applyActions, { actions, tzOffsetMin: new Date().getTimezoneOffset() }),
-      recordUsage: (row) => client.mutation(api.assistant.recordUsage, row),
+      ensureStart: (args) => client.mutation(api.assistant.ensureStart, args),
+      unread: (args) => client.query(api.assistant.unread, args),
       capStatus: (day) => client.query(api.assistant.capStatus, { day }),
+      beginRequest: (args) => client.mutation(api.assistant.beginRequest, args),
+      settleRequest: (args) => client.mutation(api.assistant.settleRequest, args),
+      failRequest: (args) => client.mutation(api.assistant.failRequest, args),
+      openRequests: () => client.query(api.assistant.openRequests, {}),
+      applyProposal: (args) => client.mutation(api.assistant.applyProposal, args),
+      refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),
       logEvent: (event) => logEvent(event),
-      watermark: () => client.query(api.assistant.watermark, {}),
-      setWatermark: (at) => client.mutation(api.assistant.setWatermark, { at }),
     },
     log,
   });
@@ -253,10 +255,13 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
       // Capture stops first and now; the segment being transcribed finishes meanwhile, and the
       // backend stays up for its row (Codex review of PR 5: a slow write kept capture going).
       const transcribing = transcription.stop();
+      // A batch in flight gets a moment to record what it paid for (Codex review of PR 6a).
+      const thinking = assistant.stop();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();
       await service.shutdown();
       await transcribing;
+      await thinking;
       // Only now: the menu bar says Recording for as long as anything is still capturing.
       indicator.stop();
       view.stop();

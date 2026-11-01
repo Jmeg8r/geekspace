@@ -7,10 +7,14 @@
 // prompt marks it as material to read, never instructions to follow, and the reply is limited to
 // the allowed actions by a schema, checked again here (spec Security: "Claude output is
 // untrusted"). Logs carry counts and ids only, never text.
-// WHY the dearest price for a fallback: the cap must never be under-counted. A reply that went
-// through the refusal fallback may have run on more than one model.
+// WHY a ledger, not a watermark (Codex review of PR 6a, round 1): what was read, spent and
+// proposed lives in Convex (convex/assistant.ts). Each call reserves its worst case against the
+// day's cap before it is made, with max_tokens sized to fit; the reply's real cost, the items it
+// read and its proposals are written together; then each proposal is applied once. A reply that
+// is not valid output is still paid for, and one whose write failed is written first next time.
+import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
-import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { localDay } from "./dayRecorderMedia.mjs";
 
 // The current default model (claude-api skill). James's open question, "Haiku for batches,
@@ -18,8 +22,16 @@ import { localDay } from "./dayRecorderMedia.mjs";
 export const MODEL = "claude-opus-5-5";
 const EFFORT = "medium";
 const MAX_TOKENS = 16_000;
+// Below this there is no room for a useful reply: the call is not made.
+const MIN_OUTPUT_TOKENS = 1024;
 const MAX_ACTIONS = 20;
-const FALLBACK_BETA = "server-side-fallback-2026-07-01";
+const MAX_INPUT_ROWS = 200;
+// Message framing and the output schema the API adds, on top of the text it is given.
+const INPUT_OVERHEAD_TOKENS = 2000;
+// The SDK's own deadline for one request (convex/assistant.ts abandons a call after 30 min).
+const REQUEST_TIMEOUT_MS = 10 * 60_000;
+// How long a quit waits for a batch in flight.
+export const STOP_GRACE_MS = 15_000;
 
 // USD per million tokens (claude-api skill, cached 2026-10-06). Cache writes are 1.25x input.
 export const PRICES = {
@@ -68,6 +80,9 @@ const DraftLinear = z.object({
 });
 const Action = z.discriminatedUnion("type", [CreateTask, DraftLinear]);
 const Reply = z.object({ actions: z.array(Action).max(MAX_ACTIONS) });
+// What the model is asked for (structured output); what comes back is checked item by item.
+const { parse: _parse, ...FORMAT } = zodOutputFormat(Reply);
+const RawReply = z.object({ actions: z.array(z.unknown()) });
 
 const SYSTEM = `You read one stretch of James's workday, captured on his own Mac: what was said (transcripts) and what was on screen (screen text). Find the commitments James made or was given, and nothing else.
 
@@ -126,30 +141,89 @@ function toProposal(raw, sources) {
   };
 }
 
-const usedFallback = (response) => (response.usage?.iterations ?? []).some((it) => it?.type === "fallback_message");
+// Never logs, whatever ANTHROPIC_LOG says: at debug the SDK logs requests, which hold the
+// whole batch of captured text (Codex review of PR 6a, round 1).
+const SILENT = { error: () => {}, warn: () => {}, info: () => {}, debug: () => {} };
+
+/** The SDK client for a key: no logging, its own request deadline. */
+export function assistantClient(apiKey) {
+  return new Anthropic({ apiKey, logLevel: "off", logger: SILENT, timeout: REQUEST_TIMEOUT_MS });
+}
+
+const utf8Bytes = (text) => Buffer.byteLength(text, "utf8");
+// A token is at least one byte, so bytes bound the tokens the input can cost.
+const FIXED_INPUT_BYTES = utf8Bytes(SYSTEM) + utf8Bytes(JSON.stringify(FORMAT.schema));
+
+function startOfLocalDay(now) {
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * The most a call with this text can cost, and the max_tokens that keeps it inside `leftUsd`:
+ * every input token billed as a cache write at the dearest input price, every output token at
+ * the dearest output price. Null when even a small reply wouldn't fit.
+ */
+function fit(text, leftUsd) {
+  const inputUsd = (FIXED_INPUT_BYTES + utf8Bytes(text) + INPUT_OVERHEAD_TOKENS) * DEAREST.input * CACHE_WRITE * PER_TOKEN;
+  const perOutput = DEAREST.output * PER_TOKEN;
+  const maxTokens = Math.min(MAX_TOKENS, Math.floor((leftUsd - inputUsd) / perOutput));
+  if (maxTokens < MIN_OUTPUT_TOKENS) return null;
+  return { maxTokens, reservedUsd: inputUsd + maxTokens * perOutput };
+}
+
+/** The reply's actions, or [] when it is not valid structured output. */
+function replyActions(response) {
+  const text = (response.content ?? [])
+    .filter((b) => b?.type === "text")
+    .map((b) => b.text)
+    .join("");
+  try {
+    const parsed = RawReply.safeParse(JSON.parse(text));
+    return parsed.success ? parsed.data.actions.slice(0, MAX_ACTIONS) : null;
+  } catch {
+    // Not JSON at all: paid for all the same, and reported by the caller.
+    return null;
+  }
+}
 
 export function createDayAssistant({ client, convex, log, model = MODEL }) {
-  let running = false;
+  let running = null;
+  let stopped = false;
   let capNoticeDay = null;
+  // A settle whose write failed: written before anything else (Codex review of PR 6a, round 1).
+  let unsettled = null;
 
-  async function apply(proposals) {
-    try {
-      await convex.applyActions(proposals);
-      return;
-    } catch (err) {
-      // One bad proposal rolls back the whole call; the good ones go through one by one.
-      log(`assistant: a batch of ${proposals.length} action(s) was refused (${err?.name ?? "Error"}); trying them one at a time`);
-    }
+  async function capPaused(day, detail) {
+    if (capNoticeDay === day) return;
+    capNoticeDay = day;
+    await convex.logEvent({ kind: "capPaused", detail });
+    log(`assistant: paused, ${detail}`);
+  }
+
+  /** Apply what earlier calls proposed and is not applied yet, each once. */
+  async function applyOpen() {
+    const tzOffsetMin = new Date().getTimezoneOffset();
+    let applied = 0;
     let refused = 0;
-    for (const p of proposals) {
-      try {
-        await convex.applyActions([p]);
-      } catch {
-        // Counted, not logged one by one: the error could repeat the proposal's text.
-        refused += 1;
+    for (const r of await convex.openRequests()) {
+      if (r.status !== "settled") continue;
+      for (const [index, p] of r.proposals.entries()) {
+        if (p.state !== "pending") continue;
+        try {
+          await convex.applyProposal({ requestId: r._id, index, tzOffsetMin });
+          applied += 1;
+        } catch {
+          // Geekspace refused it (the client keeps a write while it is disconnected, so this is
+          // the backend's answer). Counted, not logged one by one: the error could repeat it.
+          await convex.refuseProposal({ requestId: r._id, index });
+          refused += 1;
+        }
       }
     }
     if (refused) log(`assistant: ${refused} action(s) refused by Geekspace`);
+    return applied;
   }
 
   async function batch() {
@@ -158,74 +232,122 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
       log("assistant: no API key, so nothing is sent");
       return;
     }
+    if (unsettled) {
+      try {
+        await convex.settleRequest(unsettled);
+        unsettled = null;
+      } catch (err) {
+        log(`assistant: a paid call is still not recorded (${err?.name ?? "Error"}); nothing new is sent until it is`);
+        return;
+      }
+      await applyOpen();
+      return;
+    }
+    await applyOpen();
+
     const now = Date.now();
     const day = localDay(now);
     const cap = await convex.capStatus(day);
     if (cap.reached) {
-      if (capNoticeDay !== day) {
-        capNoticeDay = day;
-        const detail = cap.capUsd === null ? "no daily cap is set" : `the daily cap of $${cap.capUsd} is used up`;
-        await convex.logEvent({ kind: "capPaused", detail });
-        log(`assistant: paused, ${detail}`);
+      await capPaused(day, cap.capUsd === null ? "no daily cap is set" : `the daily cap of $${cap.capUsd} is used up`);
+      return;
+    }
+    const since = await convex.ensureStart({ at: startOfLocalDay(now) });
+    const all = await convex.unread({ since, limit: MAX_INPUT_ROWS });
+    let input = all;
+    let made = material(input, now);
+    let sized = fit(made.text, cap.capUsd - cap.spentUsd);
+    // Too much for what is left: fewer items, oldest first, until one call fits.
+    while (!sized && input.transcripts.length + input.screenshots.length > 1) {
+      input = {
+        transcripts: input.transcripts.slice(0, Math.ceil(input.transcripts.length / 2)),
+        screenshots: input.screenshots.slice(0, Math.floor(input.screenshots.length / 2)),
+      };
+      made = material(input, now);
+      sized = fit(made.text, cap.capUsd - cap.spentUsd);
+    }
+    if (input.transcripts.length + input.screenshots.length === 0) return;
+    if (!sized) {
+      await capPaused(day, `what is left of the daily cap of $${cap.capUsd} can't cover another call`);
+      return;
+    }
+    const requestId = await convex.beginRequest({
+      day,
+      reservedUsd: sized.reservedUsd,
+      transcriptIds: input.transcripts.map((r) => r._id),
+      screenshotIds: input.screenshots.map((r) => r._id),
+    });
+    if (!requestId) {
+      await capPaused(day, `the daily cap of $${cap.capUsd} has no room for another call`);
+      return;
+    }
+    let response;
+    try {
+      response = await anthropic.messages.create({
+        model,
+        max_tokens: sized.maxTokens,
+        output_config: { effort: EFFORT, format: FORMAT },
+        system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
+        messages: [{ role: "user", content: made.text }],
+      });
+    } catch (err) {
+      // No answer: nothing to pay for, and the items are read again next time.
+      log(`assistant: the request failed (${err?.name ?? "Error"}${err?.status ? ` ${err.status}` : ""}); its items are tried again next batch`);
+      try {
+        await convex.failRequest({ requestId });
+      } catch (failErr) {
+        log(`assistant: could not free the call's reservation (${failErr?.name ?? "Error"}); it stays counted`);
       }
       return;
     }
-    const after = (await convex.watermark()) ?? now - 15 * 60_000;
-    const input = await convex.input({ after, until: now });
-    // A full read is a partial window: stop at its last item, so the rest is read next time.
-    const full = [input.transcripts, input.screenshots].filter((rows) => rows.length >= 200);
-    const until = full.length
-      ? Math.min(...full.map((rows) => Math.max(...rows.map((r) => r.start ?? r.takenAt))))
-      : now;
-    if (input.transcripts.length + input.screenshots.length === 0) {
-      await convex.setWatermark(until);
-      return;
-    }
-    const { text, sources } = material(input, now);
-    let response;
-    try {
-      response = await anthropic.beta.messages.parse({
-        model,
-        max_tokens: MAX_TOKENS,
-        betas: [FALLBACK_BETA],
-        fallbacks: "default",
-        output_config: { effort: EFFORT, format: betaZodOutputFormat(Reply) },
-        system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: text }],
-      });
-    } catch (err) {
-      // Nothing was paid for, or the SDK's retries ran out: the same window is tried next time.
-      log(`assistant: the request failed (${err?.name ?? "Error"}${err?.status ? ` ${err.status}` : ""}); this window is tried again next batch`);
-      return;
-    }
-    const costUsd = usedFallback(response) ? costOf(response.usage, "unknown") : costOf(response.usage, response.model);
-    await convex.recordUsage({ day, inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens, costUsd });
-    // Paid for: the window is done, whatever came back.
-    await convex.setWatermark(until);
-    if (response.stop_reason === "refusal" || !response.parsed_output) {
-      log(`assistant: no usable reply (${response.stop_reason})`);
-      return;
-    }
-    const raw = Array.isArray(response.parsed_output.actions) ? response.parsed_output.actions : [];
-    const proposals = raw.map((a) => toProposal(a, sources)).filter(Boolean);
-    const rejected = raw.length - proposals.length;
+    const costUsd = costOf(response.usage, response.model);
+    const raw = response.stop_reason === "refusal" ? [] : replyActions(response);
+    if (raw === null) log(`assistant: the reply was not valid output (${response.stop_reason}); it is paid for, and nothing is applied`);
+    const proposals = (raw ?? []).map((a) => toProposal(a, made.sources)).filter(Boolean);
+    const rejected = (raw ?? []).length - proposals.length;
     if (rejected) log(`assistant: rejected ${rejected} action(s) outside the allowed set`);
-    if (proposals.length) await apply(proposals);
-    log(`assistant: ${proposals.length} action(s) from ${input.transcripts.length} transcript(s) and ${input.screenshots.length} screen(s), $${costUsd.toFixed(4)}`);
+    const settle = {
+      requestId,
+      costUsd,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      proposals,
+    };
+    try {
+      await convex.settleRequest(settle);
+    } catch (err) {
+      unsettled = settle;
+      log(`assistant: could not record a paid call (${err?.name ?? "Error"}); it is written first next batch`);
+      return;
+    }
+    const applied = await applyOpen();
+    log(`assistant: ${applied} action(s) from ${input.transcripts.length} transcript(s) and ${input.screenshots.length} screen(s), $${costUsd.toFixed(4)}`);
   }
 
   return {
-    /** One batch. A batch already running makes this a no-op. */
-    async runBatch() {
-      if (running) return;
-      running = true;
-      try {
-        await batch();
-      } catch (err) {
-        log(`assistant: the batch stopped (${err?.name ?? "Error"})`);
-      } finally {
-        running = false;
-      }
+    /** One batch. A batch already running, or a stop, makes this a no-op. */
+    runBatch() {
+      if (running || stopped) return Promise.resolve();
+      running = batch()
+        .catch((err) => log(`assistant: the batch stopped (${err?.name ?? "Error"})`))
+        .finally(() => {
+          running = null;
+        });
+      return running;
+    },
+    /** Quit: start nothing new, and wait up to STOP_GRACE_MS for the batch in flight. */
+    async stop() {
+      stopped = true;
+      if (!running) return;
+      let timer;
+      const done = await Promise.race([
+        running.then(() => true),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), STOP_GRACE_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (!done) log("assistant: a call was still in flight at quit; its reservation stays counted against the cap");
     },
   };
 }

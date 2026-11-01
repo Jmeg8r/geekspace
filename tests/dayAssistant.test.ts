@@ -138,7 +138,6 @@ describe("createDayAssistant.runBatch", () => {
     expect(h.settled).toEqual([
       {
         requestId: "req1",
-        day: expect.any(String),
         inputTokens: 2_000,
         outputTokens: 300,
         costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, MODEL),
@@ -178,10 +177,10 @@ describe("createDayAssistant.runBatch", () => {
   });
 
   it("[P1] reserves the call's worst case inside what is left, and sizes max_tokens to fit", async () => {
-    const h = harness({ cap: { capUsd: 1, spentUsd: 0.9, reached: false } });
+    const h = harness({ cap: { capUsd: 1, spentUsd: 0.7, reached: false } });
     await h.assistant.runBatch();
     expect(h.begun).toHaveLength(1);
-    expect(h.begun[0].reservedUsd).toBeLessThanOrEqual(0.1 + 1e-9);
+    expect(h.begun[0].reservedUsd).toBeLessThanOrEqual(0.3 + 1e-9);
     const dearestOut = Math.max(...Object.values(PRICES).map((p) => p.output)) / 1_000_000;
     expect(h.requests[0].max_tokens * dearestOut).toBeLessThan(h.begun[0].reservedUsd + 1e-9);
   });
