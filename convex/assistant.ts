@@ -370,3 +370,59 @@ export const capStatus = query({
     return { capUsd, spentUsd, reached: capUsd === null || spentUsd >= capUsd };
   },
 });
+
+// What the assistant reads (plan PR 6a): the transcripts and screenshot text in a window,
+// oldest first. Bounded: a batch never grows past this, and what is left waits for the next.
+const MAX_INPUT_ROWS = 200;
+
+export const input = query({
+  args: { after: v.number(), until: v.number() },
+  handler: async (ctx, { after, until }) => {
+    assertTime("window start", after);
+    assertTime("window end", until);
+    if (until < after) throw new Error("Invalid window: it ends before it starts");
+    const transcripts = await ctx.db
+      .query("transcripts")
+      .withIndex("by_start", (q) => q.gt("start", after).lte("start", until))
+      .take(MAX_INPUT_ROWS);
+    const screenshots = await ctx.db
+      .query("screenshots")
+      .withIndex("by_takenAt", (q) => q.gt("takenAt", after).lte("takenAt", until))
+      .take(MAX_INPUT_ROWS);
+    return {
+      transcripts: transcripts.map((r) => ({ _id: r._id, segmentId: r.segmentId, start: r.start, end: r.end, text: r.text })),
+      screenshots: screenshots.map((r) => ({
+        _id: r._id,
+        takenAt: r.takenAt,
+        ocrText: r.ocrText,
+        ...(r.appBundleId !== undefined && { appBundleId: r.appBundleId }),
+      })),
+    };
+  },
+});
+
+export const watermark = query({
+  args: {},
+  handler: async (ctx) => {
+    const settings = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", "global"))
+      .unique();
+    return settings?.assistantWatermark ?? null;
+  },
+});
+
+/** Move the watermark forward; an older value is ignored, so a late writer can't rewind it. */
+export const setWatermark = mutation({
+  args: { at: v.number() },
+  handler: async (ctx, { at }) => {
+    assertTime("watermark", at);
+    const settings = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", "global"))
+      .unique();
+    if (!settings) throw new Error("No settings yet: open Geekspace once first");
+    if ((settings.assistantWatermark ?? 0) >= at) return;
+    await ctx.db.patch(settings._id, { assistantWatermark: at });
+  },
+});

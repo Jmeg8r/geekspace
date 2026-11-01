@@ -133,6 +133,8 @@ export default defineSchema({
     dayRecorderShotSec: v.optional(v.number()),
     assistantBatchMin: v.optional(v.number()),
     assistantDailyCapUsd: v.optional(v.number()), // unset = the assistant does not run
+    // Where the assistant's last batch ended (plan PR 6a): text after it is new.
+    assistantWatermark: v.optional(v.number()),
   }).index("by_key", ["key"]),
 
   schedulerState: defineTable({
@@ -214,6 +216,8 @@ export default defineSchema({
     text: v.string(),
   })
     .index("by_segment", ["segmentId"])
+    // The assistant reads a time window (plan PR 6a).
+    .index("by_start", ["start"])
     .searchIndex("search_text", { searchField: "text" }),
 
   screenshots: defineTable({
@@ -227,6 +231,8 @@ export default defineSchema({
     purgedAt: v.optional(v.number()), // image deleted; the OCR text is kept
   })
     .index("by_purged_takenAt", ["purgedAt", "takenAt"])
+    // The assistant reads a time window, purged images included: their text is kept.
+    .index("by_takenAt", ["takenAt"])
     .searchIndex("search_ocr", { searchField: "ocrText" }),
 
   recorderEvents: defineTable({
