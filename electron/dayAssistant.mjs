@@ -32,8 +32,12 @@ const INPUT_OVERHEAD_TOKENS = 2000;
 const REQUEST_TIMEOUT_MS = 10 * 60_000;
 // A long text goes in parts of at most this many characters, each recorded as read, so one
 // huge item never blocks the rest (Codex review of PR 6a, round 2); never smaller than this.
-const MAX_PART_CHARS = 8_000;
-const MIN_PART_CHARS = 500;
+// Tried largest first for each item; an item that fits at none waits for a later batch, and the
+// items after it still go (Codex review of PR 6a, round 3).
+const PART_CHARS = [8_000, 4_000, 2_000, 1_000, 500];
+const MAX_PART_CHARS = PART_CHARS[0];
+// Per line, for the key's digits and the newline: what packing adds before the final check.
+const LINE_SLACK_BYTES = 16;
 // API answers that come before any billable work: only these free a call's reservation. A
 // dropped connection, a timeout or a server error may have been paid for (Codex #6a r2).
 const REFUSED_BEFORE_WORK = new Set([400, 401, 403, 404, 413, 422, 429, 529]);
@@ -108,34 +112,52 @@ function escape(text) {
 }
 
 /** The batch as labelled items, and the map from each item's key to its row ids. */
-/** The next part of a text: from where it was last read, at most `partChars` long. */
+const isHighSurrogate = (code) => code >= 0xd800 && code <= 0xdbff;
+
+/**
+ * The next part of a text: from where it was last read, at most `partChars` UTF-16 units long,
+ * and never ending between the two halves of a surrogate pair (Codex review of PR 6a, round 3):
+ * offsets stay in UTF-16 units, as they are stored.
+ */
 function part(text, readChars, partChars) {
   const from = Math.min(readChars ?? 0, text.length);
-  const to = Math.min(text.length, from + partChars);
+  let to = Math.min(text.length, from + partChars);
+  if (to < text.length && to - from > 1 && isHighSurrogate(text.charCodeAt(to - 1))) to -= 1;
   return { text: text.slice(from, to), from, to, length: text.length };
 }
 
 const partAttr = (p) => (p.from > 0 || p.to < p.length ? ` part="${p.from}-${p.to} of ${p.length}"` : "");
 
-function material(input, now, partChars) {
+/** One item's line in the batch, and where its part ends. */
+function itemLine(kind, row, key, partChars) {
+  if (kind === "transcripts") {
+    const p = part(row.text, row.readChars, partChars);
+    const line = `<transcript key="${key}" start="${new Date(row.start).toISOString()}" end="${new Date(row.end).toISOString()}"${partAttr(p)}>${escape(p.text)}</transcript>`;
+    return { line, end: p.to };
+  }
+  const p = part(row.ocrText, row.readChars, partChars);
+  const app = row.appBundleId ? ` app="${escape(row.appBundleId)}"` : "";
+  return { line: `<screen key="${key}" at="${new Date(row.takenAt).toISOString()}"${app}${partAttr(p)}>${escape(p.text)}</screen>`, end: p.to };
+}
+
+function material(input, now) {
   const sources = new Map();
   const lines = [];
   const transcriptEnds = [];
   const screenshotEnds = [];
   input.transcripts.forEach((t, i) => {
     const key = `t${i + 1}`;
-    const p = part(t.text, t.readChars, partChars);
-    transcriptEnds.push(p.to);
+    const { line, end } = itemLine("transcripts", t, key, t.partChars ?? MAX_PART_CHARS);
+    transcriptEnds.push(end);
     sources.set(key, { sourceSegmentId: t.segmentId });
-    lines.push(`<transcript key="${key}" start="${new Date(t.start).toISOString()}" end="${new Date(t.end).toISOString()}"${partAttr(p)}>${escape(p.text)}</transcript>`);
+    lines.push(line);
   });
   input.screenshots.forEach((s, i) => {
     const key = `s${i + 1}`;
-    const p = part(s.ocrText, s.readChars, partChars);
-    screenshotEnds.push(p.to);
+    const { line, end } = itemLine("screenshots", s, key, s.partChars ?? MAX_PART_CHARS);
+    screenshotEnds.push(end);
     sources.set(key, { sourceScreenshotId: s._id });
-    const app = s.appBundleId ? ` app="${escape(s.appBundleId)}"` : "";
-    lines.push(`<screen key="${key}" at="${new Date(s.takenAt).toISOString()}"${app}${partAttr(p)}>${escape(p.text)}</screen>`);
+    lines.push(line);
   });
   const offsetMin = -new Date(now).getTimezoneOffset();
   const header = `Now: ${new Date(now).toISOString()} (local offset ${offsetMin >= 0 ? "+" : "-"}${String(Math.floor(Math.abs(offsetMin) / 60)).padStart(2, "0")}:${String(Math.abs(offsetMin) % 60).padStart(2, "0")}).`;
@@ -189,8 +211,12 @@ function startOfLocalDay(now) {
  * price (the dearest known for an unknown model). Null when even a small reply wouldn't fit.
  */
 function fit(text, leftUsd, model) {
+  return fitBytes(utf8Bytes(text), leftUsd, model);
+}
+
+function fitBytes(textBytes, leftUsd, model) {
   const price = PRICES[model] ?? DEAREST;
-  const inputUsd = (FIXED_INPUT_BYTES + utf8Bytes(text) + INPUT_OVERHEAD_TOKENS) * price.input * CACHE_WRITE * PER_TOKEN;
+  const inputUsd = (FIXED_INPUT_BYTES + textBytes + INPUT_OVERHEAD_TOKENS) * price.input * CACHE_WRITE * PER_TOKEN;
   const perOutput = price.output * PER_TOKEN;
   const maxTokens = Math.min(MAX_TOKENS, Math.floor((leftUsd - inputUsd) / perOutput));
   if (maxTokens < MIN_OUTPUT_TOKENS) return null;
@@ -278,25 +304,28 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
     }
     const since = await convex.ensureStart({ at: startOfLocalDay(now) });
     const all = await convex.unread({ since, limit: MAX_INPUT_ROWS });
-    let input = all;
-    let partChars = MAX_PART_CHARS;
+    if (all.transcripts.length + all.screenshots.length === 0) return;
     const left = cap.capUsd - cap.spentUsd;
-    let made = material(input, now, partChars);
-    let sized = fit(made.text, left, model);
-    // Too much for what is left: fewer items, oldest first, then shorter parts, until one fits.
-    while (!sized && (input.transcripts.length + input.screenshots.length > 1 || partChars > MIN_PART_CHARS)) {
-      if (input.transcripts.length + input.screenshots.length > 1) {
-        input = {
-          transcripts: input.transcripts.slice(0, Math.ceil(input.transcripts.length / 2)),
-          screenshots: input.screenshots.slice(0, Math.floor(input.screenshots.length / 2)),
-        };
-      } else {
-        partChars = Math.max(MIN_PART_CHARS, Math.floor(partChars / 2));
+    // Packed oldest first, each item at the largest part that still fits; one that fits at none
+    // waits for a later batch while the items after it go (Codex review of PR 6a, round 3).
+    const input = { transcripts: [], screenshots: [] };
+    let bytes = utf8Bytes(material(input, now).text);
+    let skipped = 0;
+    for (const kind of ["transcripts", "screenshots"]) {
+      for (const row of all[kind]) {
+        const key = `${kind[0]}${input[kind].length + 1}`;
+        const chosen = PART_CHARS.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
+        if (chosen === undefined) {
+          skipped += 1;
+          continue;
+        }
+        input[kind].push({ ...row, partChars: chosen });
+        bytes += utf8Bytes(itemLine(kind, row, key, chosen).line) + LINE_SLACK_BYTES;
       }
-      made = material(input, now, partChars);
-      sized = fit(made.text, left, model);
     }
-    if (input.transcripts.length + input.screenshots.length === 0) return;
+    if (skipped) log(`assistant: ${skipped} item(s) too long for what is left of the cap wait for a later batch`);
+    const made = material(input, now);
+    const sized = input.transcripts.length + input.screenshots.length > 0 ? fit(made.text, left, model) : null;
     if (!sized) {
       await capPaused(day, `what is left of the daily cap of $${cap.capUsd} can't cover another call`);
       return;
