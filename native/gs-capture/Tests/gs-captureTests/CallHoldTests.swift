@@ -98,3 +98,120 @@ final class CallSegmentTests: XCTestCase {
         XCTAssertEqual(first, start, accuracy: 0.01)
     }
 }
+
+// Codex 4a r1 P1: the command lands while up to 500 ms of audio still sits in PCMHold. That
+// tail was routed by the mode at delivery, so a discarded call's last half second reached a
+// sys- file and a released call's tail was filed as system audio. CallRouter decides by when
+// each chunk was captured, and settles a call only once everything before its end is out.
+final class CallRouterTests: XCTestCase {
+    final class Sink {
+        var system: [Double] = []      // start ms of chunks written as system audio
+        var systemCloses = 0
+        var flushed: [[Double]] = []   // per released call: start ms of its runs' samples
+        var reports: [(String, [String: Any])] = []
+    }
+
+    /// 10 ms of 16 kHz audio starting at `startMs`.
+    func chunk(_ startMs: Double) -> PCMChunk {
+        PCMChunk(endMs: startMs + 10, samples: [Float](repeating: 0.25, count: 160))
+    }
+
+    func makeRouter(_ sink: Sink) -> CallRouter {
+        CallRouter(maxSec: 60,
+                   append: { sink.system.append($0.endMs - 10) },
+                   closeSystem: { sink.systemCloses += 1 },
+                   flush: { runs in
+                       sink.flushed.append(runs.map(\.startMs))
+                       return runs.count
+                   },
+                   report: { sink.reports.append(($0, $1)) })
+    }
+
+    func events(_ sink: Sink) -> [String] { sink.reports.map(\.0) }
+
+    func testAudioBeforeTheHoldIsSystemAndTheSegmentClosesAtTheHold() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.deliver(chunk(990), sourceRate: 16_000)
+        router.deliver(chunk(1_000), sourceRate: 16_000)
+        XCTAssertEqual(sink.system, [990])
+        XCTAssertEqual(sink.systemCloses, 1)
+        XCTAssertEqual(events(sink), ["callHeld"])
+    }
+
+    func testADiscardedCallsTailNeverReachesTheSystemWriter() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.deliver(chunk(1_000), sourceRate: 16_000)
+        router.discard(at: 1_500)
+        // Still in PCMHold when the discard landed: captured during the call.
+        router.deliver(chunk(1_400), sourceRate: 16_000)
+        router.deliver(chunk(1_490), sourceRate: 16_000)
+        router.deliver(chunk(1_500), sourceRate: 16_000)
+        router.settle(frontier: 1_510)
+        XCTAssertEqual(sink.system, [1_500])
+        XCTAssertTrue(sink.flushed.isEmpty)
+        XCTAssertEqual(events(sink), ["callHeld", "callDiscarded"])
+        XCTAssertEqual(sink.reports.last?.1["reason"] as? String, "command")
+    }
+
+    func testAReleasedCallsTailIsWrittenWithTheCall() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.deliver(chunk(1_000), sourceRate: 16_000)
+        router.release(at: 1_500)
+        router.settle(frontier: 1_200)
+        XCTAssertTrue(sink.flushed.isEmpty, "the tail before the release is not out yet")
+        router.deliver(chunk(1_490), sourceRate: 16_000)
+        router.deliver(chunk(1_500), sourceRate: 16_000)
+        router.settle(frontier: 1_510)
+        XCTAssertEqual(sink.flushed.count, 1)
+        // 1490 follows 1010 within the 500 ms gap tolerance, so it is the same run.
+        XCTAssertEqual(sink.flushed[0], [1_000])
+        XCTAssertEqual(sink.system, [1_500])
+        XCTAssertEqual(events(sink), ["callHeld", "callReleased"])
+    }
+
+    func testCallsSettleInOrderWhenCommandsComeQuickly() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.release(at: 1_100)
+        router.hold(at: 1_200)
+        router.discard(at: 1_300)
+        for start in stride(from: 1_000.0, to: 1_400, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.settle(frontier: 1_400)
+        XCTAssertEqual(events(sink), ["callHeld", "callHeld", "callReleased", "callDiscarded"])
+        XCTAssertEqual(sink.flushed.count, 1)
+        XCTAssertEqual(sink.system.first, 1_100)
+        XCTAssertFalse(sink.system.contains { $0 >= 1_200 && $0 < 1_300 }, "the discarded call wrote nothing")
+    }
+
+    func testAStopWhileHeldDiscardsTheCall() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.deliver(chunk(1_000), sourceRate: 16_000)
+        router.stop()
+        XCTAssertTrue(sink.flushed.isEmpty)
+        XCTAssertEqual(events(sink), ["callHeld", "callDiscarded"])
+        XCTAssertEqual(sink.reports.last?.1["reason"] as? String, "stop")
+    }
+
+    func testAStopSettlesAReleaseStillWaitingForItsTail() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.deliver(chunk(1_000), sourceRate: 16_000)
+        router.release(at: 1_500)
+        router.stop()
+        XCTAssertEqual(sink.flushed.count, 1)
+        XCTAssertEqual(events(sink), ["callHeld", "callReleased"])
+    }
+
+    func testOutOfOrderCommandsAreRefused() {
+        let sink = Sink(), router = makeRouter(sink)
+        XCTAssertFalse(router.canRelease)
+        XCTAssertFalse(router.canDiscard)
+        router.hold(at: 1)
+        XCTAssertFalse(router.canHold)
+        XCTAssertTrue(router.canRelease)
+    }
+}

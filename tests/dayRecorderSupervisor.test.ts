@@ -406,3 +406,37 @@ describe("Day Recorder supervisor, call hold", () => {
     expect(() => h.supervisor.discardCall()).toThrow("The capture helper is not running");
   });
 });
+
+// Codex 4a r1 P1s: one `releasing` slot let a second release take the first call's segments,
+// and a command channel that broke after a command was written only logged.
+describe("Day Recorder supervisor, call hold under pressure", () => {
+  it("keeps each released call's notice with its own segments when releases overlap", async () => {
+    const h = started(harness("call"));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    h.supervisor.holdCall();
+    h.supervisor.releaseCall("notice-1");
+    h.supervisor.holdCall();
+    h.supervisor.releaseCall("notice-2");
+    await until(() => h.rows.length === 4);
+    expect(h.rows.map((r) => (r.args.kind === "call" ? r.args.noticeEventId : null))).toEqual([
+      "notice-1",
+      "notice-1",
+      "notice-2",
+      "notice-2",
+    ]);
+    expect(h.states.at(-1)).toEqual({ status: "recording" });
+  });
+
+  it("stops recording when the command channel breaks, so a hold can never be lost silently", async () => {
+    const h = started(harness("call", { env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CLOSE_STDIN: "1" } }));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      h.supervisor.holdCall();
+    } catch {
+      // Refused at once is fine too; what matters is that capture does not go on.
+    }
+    await until(() => h.states.some((s) => s.status === "notRecording"));
+    expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
+  });
+});

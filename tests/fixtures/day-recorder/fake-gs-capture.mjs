@@ -148,6 +148,8 @@ switch (scenario) {
     ready();
     beat = setInterval(() => line("heartbeat", { t: Date.now() }), 50);
     if (process.env.FAKE_STRAY_CALL) setTimeout(() => line("segment", callSegment(0)), 30);
+    // A command channel that breaks while capture goes on.
+    if (process.env.FAKE_CLOSE_STDIN) setTimeout(() => process.stdin.destroy(), 30);
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (text) => {
       for (const command of text.split("\n").filter(Boolean)) {
