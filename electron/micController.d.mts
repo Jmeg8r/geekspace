@@ -17,12 +17,13 @@ export type MicConfig = { segmentSec: number; timesliceMs: number };
 export type ConfigReply = { ok: true; data: MicConfig } | { ok: false; cancelled: true; error: string };
 
 export type MicController = {
-  start: () => Promise<void>;
+  /** `owner`: the capture helper this mic is for; classification counts only from it. */
+  start: (owner?: number) => Promise<void>;
   stop: () => Promise<void>;
   /** A call started: drop the open segment unfinished, then stop. */
   discard: () => Promise<void>;
   /** gs-capture has classified everything before `through`. */
-  classified: (through: number) => void;
+  classified: (through: number, owner?: number) => void;
   receive: (sender: { id: number } | null | undefined, message: IncomingMessage) => void;
   ownsSender: (sender: { id: number } | null | undefined) => boolean;
   /** The capture page's config: cancelled when a stop came first; null for another sender. */

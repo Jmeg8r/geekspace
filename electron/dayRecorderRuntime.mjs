@@ -63,10 +63,18 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     // Each new helper: what it reports first says which calls are still going on, and it
     // holds from its first sample if the newest call is unanswered or declined (plan PR 4b).
     callHeldAtStart: () => {
+      helperGen += 1;
+      helperStopping = false;
       detector.reset();
       denylistedAudio = false;
       audioReady = false;
       return notice.helperStarting();
+    },
+    // The mic finishes, and its last audio is classified, before its helper stops.
+    beforeHelperStop: async () => {
+      helperStopping = true;
+      syncMic();
+      await mic.stop();
     },
     platform: process.platform,
     mediaRoot,
@@ -123,11 +131,15 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   // apps are using audio (Codex review of PR 4b, round 2).
   let denylistedAudio = false;
   let audioReady = false;
+  // Which helper the mic is for, and whether the current one is about to stop (plan PR 4b).
+  let helperGen = 0;
+  let helperStopping = false;
   let prompt = null;
   const promptListeners = new Set();
   const syncMic = () => {
     const recording = service.status().status === "recording";
-    void (recording && audioReady && !denylistedAudio && !notice.micHeld() ? mic.start() : mic.stop());
+    const run = recording && audioReady && !helperStopping && !denylistedAudio && !notice.micHeld();
+    void (run ? mic.start(helperGen) : mic.stop());
   };
   const notice = createCallNotice({
     helper: service.calls,
@@ -154,7 +166,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   });
   service.onAudioUse((use) => detector.receive(use));
   service.onCallHeld((app) => notice.callHeld(app));
-  service.onAudioClassified((through) => mic.classified(through));
+  service.onAudioClassified((through) => mic.classified(through, helperGen));
   service.onAudioUseReady(() => {
     audioReady = true;
     notice.audioReady();

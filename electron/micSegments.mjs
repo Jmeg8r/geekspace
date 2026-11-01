@@ -25,6 +25,13 @@ export const MAX_CHUNK_BYTES = 1024 * 1024;
 export const MAX_SEGMENT_BYTES = 64 * 1024 * 1024;
 // One recording and the one finishing behind it, at a boundary.
 const MAX_OPEN = 2;
+// While chunks wait for classification (Codex review of PR 4b, round 5): at most this much
+// audio (an hour of Opus is about 30 MB), at most this many finished segments, and no longer
+// than this without classification moving. Past any of them the mic fails loudly and keeps
+// nothing that waited.
+export const MAX_WAITING_BYTES = 16 * 1024 * 1024;
+const MAX_ENDING = 2;
+export const CLASSIFY_STALL_MS = 10_000;
 // How long close() waits for row writes still in flight.
 const DRAIN_MS = 5_000;
 // A segment starts now, give or take: a day back covers a window that ran across midnight or
@@ -61,6 +68,9 @@ export function createMicSegmentWriter({
   maxSegmentBytes = MAX_SEGMENT_BYTES,
   now = Date.now,
   writeSync = fs.writeSync,
+  rmSync = fs.rmSync,
+  maxWaitingBytes = MAX_WAITING_BYTES,
+  classifyStallMs = CLASSIFY_STALL_MS,
   // Hold chunks until classified (the Day Recorder). Off, chunks are written as they come.
   waitForClassification = false,
   // A write that fails while catching up, outside any message: the caller fails the mic.
@@ -73,6 +83,8 @@ export function createMicSegmentWriter({
   let discarding = false;
   let classifiedThrough = -Infinity;
   let waiters = [];
+  let waitingBytes = 0;
+  let stallTimer = null;
   const pending = new Set();
   let highest = -1;
   let closed = false;
@@ -133,6 +145,10 @@ export function createMicSegmentWriter({
     s.bytes += bytes.byteLength;
     if (waitForClassification) {
       s.queue.push({ bytes, at: now() });
+      waitingBytes += bytes.byteLength;
+      if (waitingBytes > maxWaitingBytes) {
+        giveUp(`mic audio waited for gs-capture's classification past ${maxWaitingBytes} bytes`);
+      } else armStall();
       return { ok: true };
     }
     try {
@@ -162,18 +178,23 @@ export function createMicSegmentWriter({
     if (s.broken) {
       // Already reported when it broke; a file with a hole in it is not kept.
       fs.closeSync(s.fd);
-      fs.rmSync(s.partial, { force: true });
+      rmSync(s.partial, { force: true });
       return { ok: true, dropped: true };
     }
     if (s.bytes === 0) {
       // No row and no file. Whether that is a dead mic or a stop just after a boundary is the
       // caller's call (micController.mjs).
       fs.closeSync(s.fd);
-      fs.rmSync(s.partial, { force: true });
+      rmSync(s.partial, { force: true });
       return { ok: true, empty: true };
     }
     if (waitForClassification) {
       ending.set(segment, { s, endAt, arrival: now() });
+      if (ending.size > MAX_ENDING) {
+        giveUp(`mic audio waited for gs-capture's classification: ${ending.size} finished segments`);
+        return { ok: true };
+      }
+      armStall();
       catchUp();
       return { ok: true };
     }
@@ -185,11 +206,12 @@ export function createMicSegmentWriter({
   function writeClassified(s) {
     while (s.queue.length > 0 && s.queue[0].at <= classifiedThrough) {
       const { bytes } = s.queue.shift();
+      waitingBytes -= bytes.byteLength;
       try {
         writeAll(s.fd, bytes);
       } catch (err) {
         s.broken = true;
-        s.queue = [];
+        dropQueue(s);
         onError(`could not write mic audio (${err?.code ?? err?.name ?? "Error"})`);
         return false;
       }
@@ -234,8 +256,46 @@ export function createMicSegmentWriter({
       }
       s.fd = null;
     }
-    if (s.partial) fs.rmSync(s.partial, { force: true });
+    if (s.partial) {
+      try {
+        rmSync(s.partial, { force: true });
+      } catch (err) {
+        // Reported, never thrown: this runs from the helper's line handler.
+        onError(`could not remove mic segment ${s.segment}'s file (${err?.code ?? err?.name ?? "Error"})`);
+      }
+    }
+    dropQueue(s);
+  }
+
+  function dropQueue(s) {
+    for (const { bytes } of s.queue) waitingBytes -= bytes.byteLength;
     s.queue = [];
+  }
+
+  function armStall() {
+    if (stallTimer || closed) return;
+    stallTimer = setTimeout(() => {
+      stallTimer = null;
+      if (busy()) giveUp(`no classification from gs-capture for ${Math.round(classifyStallMs / 1000)} s while mic audio waited`);
+    }, classifyStallMs);
+  }
+
+  /** Classification stalled or too much waits: keep nothing that waited, write nothing more. */
+  function giveUp(reason) {
+    clearTimeout(stallTimer);
+    stallTimer = null;
+    discarding = true;
+    for (const s of open.values()) {
+      if (s.discarded) continue;
+      dropFile(s);
+      s.broken = true;
+      s.discarded = true;
+    }
+    for (const { s } of ending.values()) dropFile(s);
+    ending.clear();
+    for (const w of waiters) w();
+    waiters = [];
+    onError(reason);
   }
 
   /** Give a whole segment its name and its row. */
@@ -301,7 +361,15 @@ export function createMicSegmentWriter({
   function classified(through) {
     if (closed || !isNum(through) || through <= classifiedThrough) return;
     classifiedThrough = through;
-    catchUp();
+    clearTimeout(stallTimer);
+    stallTimer = null;
+    try {
+      catchUp();
+    } catch (err) {
+      // Never thrown into the helper's line handler.
+      onError(`could not write mic audio (${err?.code ?? err?.name ?? "Error"})`);
+    }
+    if (busy()) armStall();
   }
 
   /** Resolves once nothing waits for classification. */
@@ -334,6 +402,8 @@ export function createMicSegmentWriter({
    */
   async function close() {
     closed = true;
+    clearTimeout(stallTimer);
+    stallTimer = null;
     for (const s of open.values()) {
       if (s.discarded) continue;
       if (s.queue.length > 0) log(`mic segment ${s.segment}: ${s.queue.length} chunk(s) not classified at close, dropped`);

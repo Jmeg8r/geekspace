@@ -39,6 +39,8 @@ export type ServiceOptions = {
   retryResetMs?: number;
   /** Asked as each helper starts: hold call audio from its first sample (plan PR 4b). */
   callHeldAtStart?: () => boolean;
+  /** Runs before a helper is stopped, while it is still the current one. */
+  beforeHelperStop?: () => Promise<void>;
 };
 
 export type DayRecorderService = {

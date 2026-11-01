@@ -1683,7 +1683,13 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Every helper starts held** until its first audio-use report, and calls belong to one
     helper: a restarted helper asks again (round 2). No report within 10 s of ready is Not
     recording (round 3).
-  - **Codex: round 5, by James's decision** after round 4 failed with five P1s (the L42 cap).
+  - **The mic finishes under the helper that classifies it (round 5).** Before a helper is
+    stopped (pause, off, a restart for a new denylist), the mic stops and its last audio is
+    classified while that helper is still current; a writer takes classification only from
+    the helper it was opened under. At most 16 MB of audio and two finished segments wait,
+    and 10 s without classification fails the mic loudly, keeping nothing that waited.
+  - **Codex: rounds 5 and 6, by James's decision** after round 4 failed with five P1s (the L42
+    cap), and round 5 with four.
   - **Each hold of the helper's is a call of its own** unless the newest call is unanswered or
     declined, which it joins; an answer resolves every hold of its call. An app starting after
     a yes (even one still being saved), or leaving and coming back, is asked about again.

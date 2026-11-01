@@ -40,6 +40,9 @@ export function createDayRecorderService({
   retryResetMs = RETRY_RESET_MS,
   // Whether a new helper must hold call audio from its first sample (plan PR 4b).
   callHeldAtStart = () => false,
+  // Runs before a helper is stopped, while it is still the current one (plan PR 4b): the mic
+  // finishes while the helper that classifies its audio still runs (Codex #4b r5).
+  beforeHelperStop = async () => {},
 }) {
   let status = { status: "off" };
   let supervisor = null;
@@ -99,6 +102,12 @@ export function createDayRecorderService({
   }
 
   async function stopCurrent() {
+    if (!supervisor) return;
+    try {
+      await beforeHelperStop();
+    } catch (err) {
+      log(`before stopping the helper: ${err?.message ?? err}`);
+    }
     if (!supervisor) return;
     const old = supervisor;
     supervisor = null;

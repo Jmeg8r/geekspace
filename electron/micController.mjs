@@ -49,6 +49,10 @@ export function createMicController({
   let failed = false;
   let win = null;
   let writer = null;
+  // The capture helper the mic was started for, and the one its writer was opened under:
+  // classification counts only from that helper (Codex review of PR 4b, round 5).
+  let wantedOwner;
+  let writerOwner;
   // The start in progress; a second start while macOS is asking joins it, never asks again.
   let starting = null;
   // The window being asked to finish; its promise is shared by every stop that arrives meanwhile.
@@ -88,6 +92,7 @@ export function createMicController({
       failMic("denied", COPY.denied);
       return;
     }
+    writerOwner = wantedOwner;
     writer = createWriter({
       // A write that failed while catching up with classification: loud, and the mic stops.
       onError: (reason) => {
@@ -106,8 +111,10 @@ export function createMicController({
   }
 
   /** The recorder is Recording: run the mic, unless it already runs or failed this recording. */
-  function start() {
-    if (wanted || shutDown) return Promise.resolve();
+  function start(owner) {
+    if (shutDown) return Promise.resolve();
+    wantedOwner = owner;
+    if (wanted) return Promise.resolve();
     wanted = true;
     failed = false;
     // A start whose permission ask is still out opens the window once it is answered.
@@ -141,9 +148,9 @@ export function createMicController({
     if (!done) log(`mic audio still waited for classification after ${settleMs} ms; the rest is dropped`);
   }
 
-  /** gs-capture has classified everything before `through` (micSegments.mjs). */
-  function classified(through) {
-    writer?.classified(through);
+  /** gs-capture `owner` has classified everything before `through` (micSegments.mjs). */
+  function classified(through, owner) {
+    if (owner === writerOwner) writer?.classified(through);
   }
 
   /**
