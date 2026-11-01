@@ -97,6 +97,25 @@ final class CallSegmentTests: XCTestCase {
         let first = try XCTUnwrap(reports.first?["start"] as? Double)
         XCTAssertEqual(first, start, accuracy: 0.01)
     }
+
+    // Codex 4a r3 P2: 100 ms pieces overshot a --segment-sec that is not a multiple of them.
+    func testFlushedSegmentsNeverExceedAFractionalSegmentLength() throws {
+        var reports: [[String: Any]] = []
+        let hold = CallHold(maxSec: 60)
+        for i in 1...300 {
+            hold.store(PCMChunk(endMs: 1_000 + Double(i) * 10, samples: [Float](repeating: 0.2, count: 160)), sourceRate: 16_000)
+        }
+        _ = CallHold.flush(hold.take(), root: root.path, segmentSec: 2.05) { event, fields in
+            if event == "segment" { reports.append(fields) }
+        }
+        let lengths = reports.compactMap { r -> Double? in
+            guard let s = r["start"] as? Double, let e = r["end"] as? Double else { return nil }
+            return e - s
+        }
+        XCTAssertEqual(lengths.count, 2)
+        XCTAssertEqual(lengths[0], 2_050, accuracy: 0.01)
+        XCTAssertEqual(lengths.reduce(0, +), 3_000, accuracy: 0.01)
+    }
 }
 
 // Codex 4a r1 P1: the command lands while up to 500 ms of audio still sits in PCMHold. That
