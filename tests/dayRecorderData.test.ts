@@ -302,3 +302,11 @@ describe("dayRecorder.pendingSegments", () => {
     expect((await t.query(api.dayRecorder.pendingSegments, { limit: 1 })).map((r) => r._id)).toEqual([b]);
   });
 });
+
+// Codex 5 r1 P2: a non-finite limit reached .take() unchecked.
+describe("dayRecorder.pendingSegments, its argument", () => {
+  it.each([[Number.NaN], [Number.POSITIVE_INFINITY], [2.5], [0]])("refuses limit %s", async (limit) => {
+    const t = convexTest(schema, modules);
+    await expect(t.query(api.dayRecorder.pendingSegments, { limit })).rejects.toThrow(/limit/);
+  });
+});
