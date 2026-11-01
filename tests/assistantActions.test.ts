@@ -333,3 +333,28 @@ describe("assistant.input and the watermark", () => {
     expect(await t.query(api.assistant.watermark, {})).toBe(2_000_000_000_000);
   });
 });
+
+// Plan PR 6b: a send to Linear that fails puts its draft back in the queue; the Linear code
+// reads the draft it claimed by id.
+describe("assistant drafts, the send", () => {
+  async function aDraft() {
+    const t = await seeded();
+    const id = await t.run((ctx) =>
+      ctx.db.insert("externalDrafts", { target: "linear", issueRef: "ENG-42", body: "SYNTHETIC", status: "pending", createdAt: 1, updatedAt: 1 })
+    );
+    return { t, id };
+  }
+
+  it("an approved draft whose send failed goes back to pending", async () => {
+    const { t, id } = await aDraft();
+    await t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "approved" });
+    await t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "pending" });
+    expect((await t.query(api.assistant.draft, { draftId: id }))?.status).toBe("pending");
+  });
+
+  it("reads one draft by id", async () => {
+    const { t, id } = await aDraft();
+    expect(await t.query(api.assistant.draft, { draftId: id })).toMatchObject({ issueRef: "ENG-42", body: "SYNTHETIC" });
+  });
+});
+
