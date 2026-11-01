@@ -41,6 +41,7 @@ function harness(
     },
     drain: vi.fn(async () => {}),
     close: vi.fn(opts.close ?? (async () => {})),
+    discardOpen: vi.fn(() => {}),
   };
   const controller = createMicController({
     askMic: () => Promise.resolve(opts.mic ?? true),
@@ -349,3 +350,24 @@ describe("createMicController", () => {
   });
 });
 
+
+// Codex 4b r3 P3: a call starting stops the mic without finishing its open segment.
+describe("createMicController, a call starting", () => {
+  it("[P1] discard drops the open segment before asking the window to stop", async () => {
+    const h = harness();
+    await h.controller.start();
+    const stopping = h.controller.discard();
+    expect(h.writer.discardOpen).toHaveBeenCalledTimes(1);
+    expect(h.windows[0].sent).toEqual(["gs:mic:stop"]);
+    h.controller.receive(h.fromWindow(), { type: "stopped" });
+    await stopping;
+    expect(h.windows[0].destroyed()).toBe(true);
+    expect(h.states.at(-1)).toEqual({ state: "off" });
+  });
+
+  it("discard with no window is a stop", async () => {
+    const h = harness();
+    await h.controller.discard();
+    expect(h.writer.discardOpen).not.toHaveBeenCalled();
+  });
+});

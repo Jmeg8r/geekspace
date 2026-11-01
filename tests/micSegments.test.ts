@@ -29,7 +29,14 @@ const bytes = (s: string) => new TextEncoder().encode(s).buffer;
 type WriteSync = (fd: number, buf: Uint8Array, offset: number, length: number) => number;
 
 function harness(
-  opts: { maxChunkBytes?: number; maxSegmentBytes?: number; failRows?: boolean; now?: number; writeSync?: WriteSync } = {}
+  opts: {
+    maxChunkBytes?: number;
+    maxSegmentBytes?: number;
+    failRows?: boolean;
+    now?: number;
+    writeSync?: WriteSync;
+    quarantineMs?: number;
+  } = {}
 ) {
   const rows: MicSegmentRow[] = [];
   const logs: string[] = [];
@@ -44,6 +51,7 @@ function harness(
     ...(opts.writeSync && { writeSync: opts.writeSync }),
     ...(opts.maxChunkBytes !== undefined && { maxChunkBytes: opts.maxChunkBytes }),
     ...(opts.maxSegmentBytes !== undefined && { maxSegmentBytes: opts.maxSegmentBytes }),
+    ...(opts.quarantineMs !== undefined && { quarantineMs: opts.quarantineMs }),
   });
   return { writer, rows, logs };
 }
@@ -246,5 +254,55 @@ describe("createMicSegmentWriter", () => {
     await h.writer.close();
     expect(fs.readdirSync(path.join(root, DAY))).toEqual([`.partial-${NAME}`]);
     expect(h.writer.handle({ type: "segmentStart", segment: 1, start: END }).ok).toBe(false);
+  });
+});
+
+// Codex 4b r3 P3: when a call starts, the mic's open segment holds the call's opening audio
+// (detection takes up to a poll), and a segment that just ended may too. Both are discarded,
+// never finished: nothing of a call reaches disk before its notice.
+describe("createMicSegmentWriter, a call starting", () => {
+  it("[P1] discards the open segment at once: no file, no row, and later chunks write nothing", async () => {
+    const h = harness();
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("before") });
+    h.writer.discardOpen();
+    const partial = path.join(root, DAY, `.partial-${NAME}`);
+    expect(fs.existsSync(partial)).toBe(false);
+    expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("call") })).toEqual({ ok: true });
+    expect(h.writer.handle({ type: "segmentEnd", segment: 0, end: END })).toMatchObject({ ok: true, dropped: true });
+    await h.writer.drain();
+    expect(h.rows).toEqual([]);
+    expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
+  });
+
+  it("[P1] discards a segment that ended within the quarantine, too", async () => {
+    const h = harness({ quarantineMs: 60_000 });
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("tail") });
+    h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
+    expect(fs.existsSync(path.join(root, DAY, NAME))).toBe(false);
+    h.writer.discardOpen();
+    await h.writer.close();
+    expect(h.rows).toEqual([]);
+    expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
+  });
+
+  it("finishes a quarantined segment once its quarantine is over", async () => {
+    const h = harness({ quarantineMs: 30 });
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("tail") });
+    h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
+    await new Promise((r) => setTimeout(r, 80));
+    await h.writer.drain();
+    expect(h.rows).toEqual([{ day: DAY, kind: "mic", path: `${DAY}/${NAME}`, start: START, end: END }]);
+  });
+
+  it("finishes a quarantined segment at close: a stop is not a call", async () => {
+    const h = harness({ quarantineMs: 60_000 });
+    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("tail") });
+    h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
+    await h.writer.close();
+    expect(h.rows).toHaveLength(1);
   });
 });

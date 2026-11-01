@@ -497,3 +497,56 @@ describe("Day Recorder supervisor, the first report and the startup hold", () =>
     await until(() => h.logs.some((l) => l.includes("startup hold cleared: 1 segment(s), 1.5 s")));
   });
 });
+
+// Codex 4b r3 P4: a helper that never sends its first audio-use report kept the mic off and
+// system audio held while the status said Recording. Heartbeats don't count for it.
+describe("Day Recorder supervisor, the first-report deadline", () => {
+  it("[P1] is Not recording, loudly, when no audio-use report comes in time", async () => {
+    const h = started(harness("healthy", { audioUseReadyLimitMs: 200 }));
+    await until(() => h.states.some((s) => s.status === "notRecording"));
+    expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
+    expect(h.logs.join("\n")).toMatch(/audio-use report/);
+  });
+
+  it("stays Recording when the report comes", async () => {
+    const h = started(harness("call", { audioUseReadyLimitMs: 200 }));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(h.states.at(-1)).toEqual({ status: "recording" });
+  });
+});
+
+// Codex 4b r3 P3: the helper holds a call app's audio itself, so it is told which apps are
+// call apps, and says which app it held.
+describe("Day Recorder supervisor, the helper's own call holds", () => {
+  it("passes the call apps and browsers to the helper", async () => {
+    const argv: string[][] = [];
+    const spawnImpl: SupervisorOptions["spawnImpl"] = (command, args, options) => {
+      argv.push(args);
+      return spawn(command, args, options);
+    };
+    const h = started(harness("healthy", { spawnImpl }));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    const at = (flag: string) => argv[0][argv[0].indexOf(flag) + 1].split(",");
+    expect(at("--call-apps")).toContain("us.zoom.xos");
+    expect(at("--call-apps")).not.toContain("com.google.Chrome");
+    expect(at("--browsers")).toContain("com.google.Chrome");
+  });
+
+  it("passes on which app the helper held, and logs no app", async () => {
+    const seen: string[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CALL_HELD: "1" },
+        onCallHeld: (app) => void seen.push(app),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual(["us.zoom.xos"]);
+    expect(h.logs.join("\n")).not.toContain("us.zoom.xos");
+  });
+
+  it("refuses a callHeld whose app is not a string", () => {
+    expect(parseLine('{"v":1,"event":"callHeld","t":1,"app":"us.zoom.xos"}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callHeld","t":1,"app":7}').ok).toBe(false);
+  });
+});

@@ -318,4 +318,61 @@ final class CallRouterTests: XCTestCase {
         router.settle(frontier: 30)
         XCTAssertEqual(events(sink), ["callHeld", "callDiscarded"])
     }
+
+    // Codex 4b r3 P1: a call's opening audio, captured before the helper saw the call app,
+    // reached a sys- file. The helper holds from before its poll saw the app, so a hold can
+    // reach back past where system audio resumed after an earlier call.
+    func testAHoldLooksBackPastWhereSystemAudioResumed() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.release(at: 1_100)
+        router.hold(at: 1_050, app: "us.zoom.xos")
+        for start in stride(from: 1_000.0, to: 1_300, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.release(at: 1_200)
+        router.settle(frontier: 1_300)
+        XCTAssertEqual(sink.flushed, [[1_000], [1_050]], "the second call from where it was looked back to")
+        XCTAssertEqual(sink.system.first, 1_200)
+        XCTAssertFalse(sink.system.contains { $0 < 1_200 }, "nothing before the second release is system audio")
+    }
+
+    func testALookbackNeverReachesIntoTheCallBeforeIt() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.hold(at: 900, app: "us.zoom.xos")
+        for start in stride(from: 900.0, to: 1_100, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.release(at: 1_100)
+        router.release(at: 1_100)
+        router.settle(frontier: 1_200)
+        XCTAssertEqual(sink.system.first, 900, "before the first hold is system audio")
+        XCTAssertFalse(sink.system.contains { $0 >= 1_000 && $0 < 1_100 })
+    }
+
+    func testAHoldNamesTheAppItHeld() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000, app: "us.zoom.xos")
+        XCTAssertEqual(sink.reports.last?.0, "callHeld")
+        XCTAssertEqual(sink.reports.last?.1["app"] as? String, "us.zoom.xos")
+    }
+
+    // The lookback must cover the poll's detection lag (spike Q3: up to 125 ms) and stay
+    // inside what PCMHold has not yet delivered.
+    func testTheLookbackCoversDetectionAndStaysInsideTheHoldBack() {
+        XCTAssertGreaterThanOrEqual(SystemAudioRecorder.callLookbackMs, AudioUse.detectionLagMs)
+        XCTAssertLessThan(SystemAudioRecorder.callLookbackMs + Tap.releaseTickMs, SystemAudioRecorder.holdMs)
+    }
+
+    func testTheCallTrackerStartsACallOncePerApp() {
+        var tracker = AudioUse.CallTracker(apps: ["us.zoom.xos"], browsers: ["com.google.Chrome"])
+        let on = AudioUse.State(input: true, output: true)
+        let out = AudioUse.State(input: false, output: true)
+        XCTAssertEqual(tracker.update([.app("us.zoom.xos"): out]), ["us.zoom.xos"], "a call app playing audio")
+        XCTAssertEqual(tracker.update([.app("us.zoom.xos"): on]), [], "already in a call")
+        XCTAssertEqual(tracker.update([.app("us.zoom.xos"): on, .app("com.google.Chrome"): out]), [], "a browser only playing")
+        XCTAssertEqual(tracker.update([.app("us.zoom.xos"): on, .app("com.google.Chrome"): on]), ["com.google.Chrome"])
+        XCTAssertEqual(tracker.update([.app("com.google.Chrome"): out]), [], "the browser call goes on, its mic off")
+        XCTAssertEqual(tracker.update([.app("us.zoom.xos"): out, .app("com.google.Chrome"): out]), ["us.zoom.xos"],
+                       "an app that left and came back starts again")
+        XCTAssertEqual(tracker.update([.denylisted: on, .app("com.apple.Music"): out]), [], "never-record and other apps")
+        XCTAssertTrue(tracker.inCall.isEmpty)
+    }
 }
