@@ -61,7 +61,7 @@ function fakeStream() {
   return { stream, track };
 }
 
-function harness(opts: { level?: () => number; segmentSec?: number } = {}) {
+function harness(opts: { level?: () => number; segmentSec?: number; failStartAt?: number } = {}) {
   const { stream, track } = fakeStream();
   const recorders: FakeRecorder[] = [];
   const events: MicEvent[] = [];
@@ -70,6 +70,11 @@ function harness(opts: { level?: () => number; segmentSec?: number } = {}) {
     createRecorder: (s) => {
       const r = new FakeRecorder(s, recorders.length);
       recorders.push(r);
+      if (opts.failStartAt === r.n) {
+        r.start = () => {
+          throw Object.assign(new Error("inactive stream"), { name: "InvalidStateError" });
+        };
+      }
       return r;
     },
     segmentSec: opts.segmentSec ?? 300,
@@ -171,6 +176,45 @@ describe("startMicCapture", () => {
       kind: "recorderError",
       message: "The recorder failed (UnknownError).",
     });
+    expect(h.events.at(-1)).toEqual({ type: "stopped" });
+  });
+});
+
+describe("startMicCapture, Codex #89 r1 [P1]", () => {
+  it("reports a recorder that will not start, and never claims a segment", async () => {
+    const h = harness({ failStartAt: 0 });
+    await settle();
+    expect(h.events).toEqual([
+      { type: "error", kind: "recorderError", message: "The recorder could not start (InvalidStateError)." },
+      { type: "stopped" },
+    ]);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(h.recorders).toHaveLength(1);
+  });
+
+  it("finishes the old segment when the next recorder will not start at a boundary", async () => {
+    const h = harness({ failStartAt: 1 });
+    await vi.advanceTimersByTimeAsync(300_000);
+    await settle();
+    expect(h.view().slice(1)).toEqual([
+      { type: "error", kind: "recorderError", message: "The recorder could not start (InvalidStateError)." },
+      { type: "chunk", segment: 0, bytes: "final-0" },
+      { type: "segmentEnd", segment: 0, end: T0 + 300_000 },
+      { type: "stopped" },
+    ]);
+  });
+
+  it("says a chunk was lost, and fails, when its bytes cannot be read", async () => {
+    const h = harness();
+    h.recorders[0].ondataavailable?.({
+      data: { size: 3, arrayBuffer: () => Promise.reject(new Error("blob gone")) },
+    });
+    await settle();
+    await settle();
+    expect(h.events.slice(1, 3)).toEqual([
+      { type: "chunkFailed", segment: 0 },
+      { type: "error", kind: "recorderError", message: "A recorded chunk could not be read." },
+    ]);
     expect(h.events.at(-1)).toEqual({ type: "stopped" });
   });
 });

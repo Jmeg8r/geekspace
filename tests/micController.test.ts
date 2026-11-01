@@ -25,7 +25,9 @@ function fakeWindow() {
   return { win, sent, destroyed: () => destroyed };
 }
 
-function harness(opts: { mic?: boolean; handle?: (m: IncomingMessage) => Handled } = {}) {
+function harness(
+  opts: { mic?: boolean | Promise<boolean>; handle?: (m: IncomingMessage) => Handled; close?: () => Promise<void> } = {}
+) {
   const windows: ReturnType<typeof fakeWindow>[] = [];
   let gone: (() => void) | null = null;
   const states: MicState[] = [];
@@ -38,10 +40,10 @@ function harness(opts: { mic?: boolean; handle?: (m: IncomingMessage) => Handled
       return opts.handle ? opts.handle(m) : { ok: true };
     },
     drain: vi.fn(async () => {}),
-    close: vi.fn(async () => {}),
+    close: vi.fn(opts.close ?? (async () => {})),
   };
   const controller = createMicController({
-    askMic: async () => opts.mic ?? true,
+    askMic: () => Promise.resolve(opts.mic ?? true),
     createWindow: ({ onGone }) => {
       const w = fakeWindow();
       windows.push(w);
@@ -188,6 +190,73 @@ describe("createMicController", () => {
     await h.controller.stop();
     await h.controller.stop();
     expect(h.states).toEqual([]);
+  });
+
+  describe("Codex #89 r1", () => {
+    it("[P1] a stop while the mic permission is pending cancels the start", async () => {
+      let grant!: (ok: boolean) => void;
+      const h = harness({ mic: new Promise<boolean>((r) => (grant = r)) });
+      const starting = h.controller.start();
+      await h.controller.stop();
+      grant(true);
+      await starting;
+      expect(h.windows).toEqual([]);
+      expect(h.states.at(-1)).toEqual({ state: "off" });
+    });
+
+    it("[P1] a start during a stop is kept, and runs once the stop is done", async () => {
+      const h = harness();
+      await h.controller.start();
+      const stopping = h.controller.stop();
+      void h.controller.start();
+      h.controller.receive(h.fromWindow(0), { type: "stopped" });
+      await stopping;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.windows).toHaveLength(2);
+      expect(h.windows[1].destroyed()).toBe(false);
+      expect(h.states.at(-1)).toEqual({ state: "starting" });
+    });
+
+    it("[P1] a stop after the window stopped itself waits for that teardown's last row", async () => {
+      let finishClose!: () => void;
+      const h = harness({ close: () => new Promise<void>((r) => (finishClose = r)) });
+      await h.controller.start();
+      h.controller.receive(h.fromWindow(), { type: "error", kind: "deviceLost", message: "The microphone was disconnected." });
+      h.controller.receive(h.fromWindow(), { type: "stopped" });
+      let stopped = false;
+      const stopping = h.controller.stop().then(() => (stopped = true));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stopped).toBe(false);
+      finishClose();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
+
+    it("[P2] a silence episode is recorded once as a capError", async () => {
+      const h = harness();
+      await h.controller.start();
+      h.controller.receive(h.fromWindow(), { type: "silent", silentSec: 25 });
+      h.controller.receive(h.fromWindow(), { type: "silent", silentSec: 25 });
+      expect(h.errors).toEqual(["mic: no signal for 25 s"]);
+      h.controller.receive(h.fromWindow(), { type: "signal" });
+      h.controller.receive(h.fromWindow(), { type: "silent", silentSec: 25 });
+      expect(h.errors).toHaveLength(2);
+    });
+
+    it("a failure does not reopen the window on the next Recording status", async () => {
+      // Found while fixing r1: the runtime calls start on every Recording status, and a mic
+      // error itself re-emits Recording, so the window must not come back until a stop.
+      const h = harness();
+      await h.controller.start();
+      h.controller.receive(h.fromWindow(), { type: "error", kind: "deviceLost", message: "The microphone was disconnected." });
+      h.controller.receive(h.fromWindow(), { type: "stopped" });
+      await vi.advanceTimersByTimeAsync(0);
+      await h.controller.start();
+      expect(h.windows).toHaveLength(1);
+      await h.controller.stop();
+      await h.controller.start();
+      expect(h.windows).toHaveLength(2);
+    });
   });
 
   it("knows its own window, so main.mjs can leave it out of app-window lookups", async () => {

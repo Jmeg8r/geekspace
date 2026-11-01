@@ -25,7 +25,11 @@ const DAY = localDay(START);
 const NAME = "mic-102000-005.webm";
 const bytes = (s: string) => new TextEncoder().encode(s).buffer;
 
-function harness(opts: { maxChunkBytes?: number; maxSegmentBytes?: number; failRows?: boolean; now?: number } = {}) {
+type WriteSync = (fd: number, buf: Uint8Array, offset: number, length: number) => number;
+
+function harness(
+  opts: { maxChunkBytes?: number; maxSegmentBytes?: number; failRows?: boolean; now?: number; writeSync?: WriteSync } = {}
+) {
   const rows: MicSegmentRow[] = [];
   const logs: string[] = [];
   const writer = createMicSegmentWriter({
@@ -36,6 +40,7 @@ function harness(opts: { maxChunkBytes?: number; maxSegmentBytes?: number; failR
     },
     log: (m) => void logs.push(m),
     now: () => opts.now ?? START,
+    ...(opts.writeSync && { writeSync: opts.writeSync }),
     ...(opts.maxChunkBytes !== undefined && { maxChunkBytes: opts.maxChunkBytes }),
     ...(opts.maxSegmentBytes !== undefined && { maxSegmentBytes: opts.maxSegmentBytes }),
   });
@@ -100,6 +105,47 @@ describe("createMicSegmentWriter", () => {
     expect(h.writer.handle({ type: "chunk", segment: 0, bytes: "text" }).ok).toBe(false);
     expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("12345") }).ok).toBe(false);
     expect(fs.readFileSync(path.join(root, DAY, `.partial-${NAME}`), "utf8")).toBe("");
+  });
+
+  describe("Codex #89 r1 [P1]: a segment with a missing chunk never becomes a row", () => {
+    it("drops a segment whose chunk was refused, even when the rest arrives", async () => {
+      const h = harness({ maxChunkBytes: 4 });
+      h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+      h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("HEAD") });
+      expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("MIDDLE") }).ok).toBe(false);
+      h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("TAIL") });
+      expect(h.writer.handle({ type: "segmentEnd", segment: 0, end: END })).toEqual({ ok: true, dropped: true });
+      await h.writer.drain();
+      expect(h.rows).toEqual([]);
+      expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
+    });
+
+    it("drops a segment the window says lost a chunk", async () => {
+      const h = harness();
+      h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+      h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("a") });
+      expect(h.writer.handle({ type: "chunkFailed", segment: 0 })).toEqual({ ok: true });
+      expect(h.writer.handle({ type: "segmentEnd", segment: 0, end: END })).toEqual({ ok: true, dropped: true });
+      await h.writer.drain();
+      expect(h.rows).toEqual([]);
+    });
+
+    it("writes every byte of a chunk across short writes", async () => {
+      const h = harness({ writeSync: (fd, buf, offset, length) => fs.writeSync(fd, buf, offset, Math.min(2, length)) });
+      h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+      h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("WHOLE-CHUNK") });
+      h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
+      await h.writer.drain();
+      expect(fs.readFileSync(path.join(root, DAY, NAME), "utf8")).toBe("WHOLE-CHUNK");
+    });
+
+    it("drops the segment when the disk takes no bytes at all", async () => {
+      const h = harness({ writeSync: () => 0 });
+      h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+      expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("a") }).ok).toBe(false);
+      expect(h.writer.handle({ type: "segmentEnd", segment: 0, end: END })).toEqual({ ok: true, dropped: true });
+      expect(h.rows).toEqual([]);
+    });
   });
 
   it("refuses a segment that grows past its cap", () => {
