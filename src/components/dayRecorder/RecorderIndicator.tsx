@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { statusCopy, type Tone } from "../../../electron/dayRecorderCopy.mjs";
-import { pauseRecorder, resumeRecorder } from "../../lib/dayRecorderBridge";
+import { dayRecorderAvailable, pauseRecorder, resumeRecorder } from "../../lib/dayRecorderBridge";
 import { cn } from "../../lib/utils";
 import { useRecorderStatus } from "./useRecorderStatus";
 
@@ -12,7 +12,7 @@ import { useRecorderStatus } from "./useRecorderStatus";
 const DOT = {
   red: "bg-[#d93036]",
   amber: "bg-[#c27c0e]",
-  grey: "bg-ink-3",
+  grey: "bg-ink-2",
   hollow: "border-2 border-ink-2",
 } satisfies Record<Tone, string>;
 
@@ -21,9 +21,17 @@ export function RecorderDot({ tone }: { tone: Tone }) {
 }
 
 export function RecorderIndicator() {
-  const { status } = useRecorderStatus();
+  const { status, error: statusError } = useRecorderStatus();
   const [error, setError] = useState<string | null>(null);
   const copy = status ? statusCopy(status, { shortcut: true }) : null;
+  // In the desktop app a failed status read is said, not hidden; a browser tab has no recorder.
+  if (!copy && statusError && dayRecorderAvailable()) {
+    return (
+      <p role="alert" className="no-drag px-3 pb-2 text-[11.5px] text-[var(--pal-red)]">
+        Day Recorder: {statusError}
+      </p>
+    );
+  }
   if (!copy) return null;
 
   const resume = copy.action === "resume";
@@ -43,7 +51,7 @@ export function RecorderIndicator() {
           type="button"
           onClick={() => void toggle()}
           title={resume ? "Resume recording (⌥⌘R)" : "Pause recording (⌥⌘R)"}
-          className="rounded px-1.5 py-0.5 text-[11.5px] text-ink-2 hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          className="rounded px-1.5 py-0.5 text-[11.5px] text-ink hover:bg-hov focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         >
           {resume ? "Resume" : "Pause"}
           <span className="sr-only"> recording</span>

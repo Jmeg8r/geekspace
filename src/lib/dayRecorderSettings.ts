@@ -33,6 +33,37 @@ export function shotSecError(value: number): string | null {
   }
 }
 
+/**
+ * Edits to a list that is saved whole. Each edit applies to the list the previous edit left,
+ * not to a saved copy that has not caught up, and saves run one after another, in order.
+ * WHY: two quick edits from the same stale copy each replaced the whole list, so the later
+ * one undid the earlier (Codex review of PR 3e-2): an app just denied became capturable.
+ */
+export function createListEditor(save: (list: string[]) => Promise<void>) {
+  let latest: string[] | null = null;
+  let outstanding = 0;
+  let queue: Promise<void> = Promise.resolve();
+
+  return {
+    edit(saved: string[], change: (list: string[]) => string[]): Promise<void> {
+      const next = change(latest ?? saved);
+      latest = next;
+      // With nothing pending the save starts now; otherwise after the one before it.
+      const run = outstanding === 0 ? save(next) : queue.then(() => save(next));
+      outstanding += 1;
+      const settle = () => {
+        outstanding -= 1;
+        // Nothing pending: the saved list is the truth again, including after a failure.
+        if (outstanding === 0) latest = null;
+      };
+      queue = run.then(settle, settle);
+      return run;
+    },
+  };
+}
+
+export const UNSUPPORTED = "Recording your day needs macOS. Geekspace on this computer can't capture.";
+
 // Spec, Security and data: macOS asks for two separate grants (settled on a clean user in
 // 3c part 2), and the mic asks once on its own.
 export const ONBOARDING = {

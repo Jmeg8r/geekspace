@@ -1,9 +1,9 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { statusCopy } from "../../../electron/dayRecorderCopy.mjs";
 import { setRecorderEnabled } from "../../lib/dayRecorderBridge";
-import { ONBOARDING, addBundleId, removeBundleId, shotSecError } from "../../lib/dayRecorderSettings";
+import { ONBOARDING, UNSUPPORTED, addBundleId, createListEditor, removeBundleId, shotSecError } from "../../lib/dayRecorderSettings";
 import { RecorderDot } from "./RecorderIndicator";
 import { useRecorderStatus } from "./useRecorderStatus";
 
@@ -23,8 +23,16 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
   const { status, error: statusError } = useRecorderStatus();
   const [onboarding, setOnboarding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const denylistEditor = useMemo(() => createListEditor(async (denylist) => void (await update({ denylist }))), [update]);
 
   if (!settings) return null;
+  if (status?.status === "unsupported") {
+    return (
+      <Section title="Day Recorder">
+        <p className="py-1 text-[12.5px] text-ink-2">{UNSUPPORTED}</p>
+      </Section>
+    );
+  }
   const copy = status ? statusCopy(status, { shortcut: true }) : null;
 
   async function enable(on: boolean) {
@@ -33,13 +41,15 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
     setError(r.ok ? null : r.error);
   }
 
-  async function save(patch: { denylist?: string[]; shotSec?: number }) {
-    try {
-      await update(patch);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
+  const showError = (err: Error | string) => setError(err instanceof Error ? err.message : err);
+
+  const savedDenylist = settings.denylist;
+  function editDenylist(change: (list: string[]) => string[]) {
+    denylistEditor.edit(savedDenylist, change).then(() => setError(null), showError);
+  }
+
+  function saveShotSec(shotSec: number) {
+    update({ shotSec }).then(() => setError(null), showError);
   }
 
   return (
@@ -91,8 +101,8 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
         </p>
       )}
 
-      <Denylist list={settings.denylist} onSave={(denylist) => void save({ denylist })} />
-      <ShotInterval value={settings.shotSec} onSave={(shotSec) => void save({ shotSec })} />
+      <Denylist list={settings.denylist} onEdit={editDenylist} />
+      <ShotInterval value={settings.shotSec} onSave={saveShotSec} />
     </Section>
   );
 }
@@ -127,7 +137,8 @@ function Onboarding({ onTurnOn, onCancel }: { onTurnOn: () => void; onCancel: ()
   );
 }
 
-function Denylist({ list, onSave }: { list: string[]; onSave: (list: string[]) => void }) {
+/** Edits go through `onEdit` as changes, so each applies to the latest list (createListEditor). */
+function Denylist({ list, onEdit }: { list: string[]; onEdit: (change: (list: string[]) => string[]) => void }) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputId = useId();
@@ -141,7 +152,8 @@ function Denylist({ list, onSave }: { list: string[]; onSave: (list: string[]) =
     }
     setError(null);
     setDraft("");
-    onSave(r.list);
+    const id = draft.trim();
+    onEdit((latest) => (latest.includes(id) ? latest : [...latest, id]));
   }
 
   return (
@@ -154,7 +166,7 @@ function Denylist({ list, onSave }: { list: string[]; onSave: (list: string[]) =
           {list.map((id) => (
             <li key={id} className="flex items-center justify-between py-0.5 text-[12.5px]">
               <code>{id}</code>
-              <button type="button" onClick={() => onSave(removeBundleId(list, id))} aria-label={`Remove ${id} from the list`} className={BUTTON}>
+              <button type="button" onClick={() => onEdit((latest) => removeBundleId(latest, id))} aria-label={`Remove ${id} from the list`} className={BUTTON}>
                 Remove
               </button>
             </li>
