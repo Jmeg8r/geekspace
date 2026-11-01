@@ -35,6 +35,9 @@ export function checkOllama(
 
 /** Parse ffmpeg `volumedetect` stderr into dB stats. */
 export function parseVolumeStats(stderr: string): VolumeStats;
+export function findFfmpeg(): Promise<string | null>;
+export function convertToWhisperWav(ffmpegBin: string, input: string, wav: string): Promise<string>;
+export function measureVolume(ffmpegBin: string, wavPath: string): Promise<VolumeStats>;
 
 /** True when the audio carries no usable speech signal. Fails open on NaN. */
 export function isSilentAudio(stats: VolumeStats): boolean;

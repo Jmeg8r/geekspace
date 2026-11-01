@@ -27,6 +27,7 @@
     "migrate:local-data": "node scripts/migrate-local-data.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
     "probe:schema-failure": "node scripts/probe-schema-failure.mjs",
+    "probe:segment-decode": "node scripts/probe-segment-decode.mjs",
     "verify": "oxlint && tsc -b --noEmit && vitest run"
   },
   "dependencies": {
@@ -101,7 +102,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "extendInfo": {
         "NSAppleEventsUsageDescription": "Geekspace reads your macOS Calendar and Mail to show events and messages, and to auto-schedule work around your appointments.",
-        "NSMicrophoneUsageDescription": "Geekspace records meeting audio so it can transcribe and summarize your meetings — entirely on this Mac.",
+        "NSMicrophoneUsageDescription": "Geekspace records your microphone for meetings and, when you turn it on, for the Day Recorder, so it can transcribe them. The audio stays on this Mac.",
       "NSAudioCaptureUsageDescription": "Geekspace's Day Recorder records your Mac's system audio, leaving out the apps on your denylist, so it can transcribe your day. The audio stays on this Mac."
       },
       "extraResources": [

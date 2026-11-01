@@ -38,6 +38,16 @@ describe("Day Recorder packaging", () => {
     expect(text).not.toBe("This app needs access to audio capture");
   });
 
+  it("names the Day Recorder in the mic prompt, since it now records the mic too (plan PR 3d-2)", () => {
+    const text: string = pkg.build.mac.extendInfo.NSMicrophoneUsageDescription;
+    expect(text).toMatch(/Day Recorder/);
+    expect(text).toMatch(/stays on this Mac/);
+  });
+
+  it("builds the hidden mic window's page with the app", () => {
+    expect(fs.readFileSync(path.join(ROOT, "vite.config.ts"), "utf8")).toMatch(/capture\.html/);
+  });
+
   it("signs the helper with the app's inherited entitlements", () => {
     // electron-builder applies entitlementsInherit to everything in Resources (spike Q7).
     expect(pkg.build.mac.hardenedRuntime).toBe(true);

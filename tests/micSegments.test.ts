@@ -113,12 +113,15 @@ describe("createMicSegmentWriter", () => {
     expect(h.writer.handle({ type: "segmentEnd", segment: 1, end: START - 1 }).ok).toBe(false);
   });
 
-  it("never indexes an empty segment, and says so", async () => {
+  it("never indexes an empty segment, and reports it as empty for the caller to judge", async () => {
+    // The probe's first run (plan PR 3d-2): a stop just after a boundary leaves a final
+    // segment with no audio yet. Mid-recording that means a dead mic; at a stop it doesn't.
+    // The controller knows which, so the writer only reports it.
     const h = harness();
     h.writer.handle({ type: "segmentStart", segment: 0, start: START });
     const result = h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
     await h.writer.drain();
-    expect(!result.ok && result.reason).toMatch(/empty/);
+    expect(result).toEqual({ ok: true, empty: true });
     expect(h.rows).toEqual([]);
     expect(fs.readdirSync(path.join(root, DAY))).toEqual([]);
   });

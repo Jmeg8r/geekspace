@@ -156,8 +156,21 @@ function fmtDb(db) {
   return Number.isFinite(db) ? `${db.toFixed(1)} dB` : "silence";
 }
 
+/** The ffmpeg binary, or null. Exported for probe:segment-decode. */
+export function findFfmpeg() {
+  return findTool(["ffmpeg"]);
+}
+
+/**
+ * Decode any audio ffmpeg reads into the 16 kHz mono wav whisper takes. Exported so
+ * probe:segment-decode checks a Day Recorder segment through exactly this path.
+ */
+export function convertToWhisperWav(ffmpegBin, input, wav) {
+  return run(ffmpegBin, ["-y", "-i", input, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], 10 * 60 * 1000);
+}
+
 /** Measure a wav's levels with ffmpeg volumedetect (fast — it decodes only). */
-function measureVolume(ffmpegBin, wavPath) {
+export function measureVolume(ffmpegBin, wavPath) {
   return new Promise((resolve) => {
     execFile(
       ffmpegBin,
@@ -402,7 +415,7 @@ export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaMode
     await fs.writeFile(webm, Buffer.from(audio));
 
     onProgress?.({ phase: "transcribing", pct: 0 });
-    await run(ffmpeg, ["-y", "-i", webm, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", wav], 10 * 60 * 1000);
+    await convertToWhisperWav(ffmpeg, webm, wav);
 
     // WHY here, before whisper: a dead input device (e.g. Bluetooth speakers
     // selected as the system input) yields a perfectly valid but silent stream.

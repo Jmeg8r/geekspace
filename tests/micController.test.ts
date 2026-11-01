@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMicController, type CaptureWindow, type MicState } from "../electron/micController.mjs";
+import type { Handled, IncomingMessage } from "../electron/micSegments.mjs";
 
 // WHAT: the main process's handle on the hidden mic capture window (plan PR 3d-2). WHY
 // tested: it is the only code that accepts messages from that window, so it must ignore
@@ -13,8 +14,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-type Handled = { ok: true } | { ok: false; reason: string };
-
 function fakeWindow() {
   const sent: string[] = [];
   let destroyed = false;
@@ -26,17 +25,17 @@ function fakeWindow() {
   return { win, sent, destroyed: () => destroyed };
 }
 
-function harness(opts: { mic?: boolean; handle?: (m: object) => Handled } = {}) {
+function harness(opts: { mic?: boolean; handle?: (m: IncomingMessage) => Handled } = {}) {
   const windows: ReturnType<typeof fakeWindow>[] = [];
   let gone: (() => void) | null = null;
   const states: MicState[] = [];
   const logs: string[] = [];
-  const handled: object[] = [];
+  const handled: IncomingMessage[] = [];
   const errors: string[] = [];
   const writer = {
-    handle: (m: object) => {
+    handle: (m: IncomingMessage): Handled => {
       handled.push(m);
-      return opts.handle ? opts.handle(m) : { ok: true as const };
+      return opts.handle ? opts.handle(m) : { ok: true };
     },
     drain: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
@@ -114,6 +113,25 @@ describe("createMicController", () => {
     expect(h.windows[0].sent).toContain("gs:mic:stop");
   });
 
+  it("treats an empty segment while recording as a dead mic", async () => {
+    const h = harness({ handle: () => ({ ok: true, empty: true }) });
+    await h.controller.start();
+    h.controller.receive(h.fromWindow(), { type: "segmentEnd", segment: 0, end: 2 });
+    expect(h.states.at(-1)).toMatchObject({ state: "error", kind: "noAudio" });
+    expect(h.errors).toHaveLength(1);
+  });
+
+  it("drops an empty final segment at a stop without calling it an error", async () => {
+    const h = harness({ handle: () => ({ ok: true, empty: true }) });
+    await h.controller.start();
+    const stopping = h.controller.stop();
+    h.controller.receive(h.fromWindow(), { type: "segmentEnd", segment: 3, end: 2 });
+    h.controller.receive(h.fromWindow(), { type: "stopped" });
+    await stopping;
+    expect(h.errors).toEqual([]);
+    expect(h.states.at(-1)).toEqual({ state: "off" });
+  });
+
   it("stop asks the window to finish, waits for stopped, then drains and closes", async () => {
     const h = harness();
     await h.controller.start();
@@ -144,6 +162,15 @@ describe("createMicController", () => {
     h.gone();
     await vi.advanceTimersByTimeAsync(0);
     expect(h.states.at(-1)).toMatchObject({ state: "error", kind: "windowGone" });
+  });
+
+  it("owns only its own window's sender, for the config handler's check", async () => {
+    const h = harness();
+    expect(h.controller.ownsSender({ id: 7 })).toBe(false);
+    await h.controller.start();
+    expect(h.controller.ownsSender(h.fromWindow())).toBe(true);
+    expect(h.controller.ownsSender({ id: 99 })).toBe(false);
+    expect(h.controller.ownsSender(null)).toBe(false);
   });
 
   it("knows its own window, so main.mjs can leave it out of app-window lookups", async () => {
