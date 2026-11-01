@@ -25,6 +25,10 @@ const COPY = {
   cancelled: "The recorder stopped before the mic window started.",
 };
 
+// How long a stop waits for chunks still waiting on gs-capture's classification (it reports
+// every 100 ms poll), before dropping them.
+const SETTLE_MS = 2000;
+
 export function createMicController({
   askMic,
   createWindow,
@@ -34,6 +38,7 @@ export function createMicController({
   log,
   micConfig,
   stopTimeoutMs = STOP_TIMEOUT_MS,
+  settleMs = SETTLE_MS,
 }) {
   // Set by shutdown (quit): nothing starts again. WHY (Codex #89 r2): at quit the service is
   // still Recording, so the mic's own "off" re-emits Recording and the runtime calls start.
@@ -44,6 +49,10 @@ export function createMicController({
   let failed = false;
   let win = null;
   let writer = null;
+  // The capture helper the mic was started for, and the one its writer was opened under:
+  // classification counts only from that helper (Codex review of PR 4b, round 5).
+  let wantedOwner;
+  let writerOwner;
   // The start in progress; a second start while macOS is asking joins it, never asks again.
   let starting = null;
   // The window being asked to finish; its promise is shared by every stop that arrives meanwhile.
@@ -83,7 +92,15 @@ export function createMicController({
       failMic("denied", COPY.denied);
       return;
     }
-    writer = createWriter();
+    writerOwner = wantedOwner;
+    writer = createWriter({
+      // A write that failed while catching up with classification: loud, and the mic stops.
+      onError: (reason) => {
+        if (failed) return;
+        failMic("writeFailed", reason);
+        if (win) void closeWindow();
+      },
+    });
     win = createWindow({
       onGone: () => {
         if (!win) return;
@@ -94,8 +111,10 @@ export function createMicController({
   }
 
   /** The recorder is Recording: run the mic, unless it already runs or failed this recording. */
-  function start() {
-    if (wanted || shutDown) return Promise.resolve();
+  function start(owner) {
+    if (shutDown) return Promise.resolve();
+    wantedOwner = owner;
+    if (wanted) return Promise.resolve();
     wanted = true;
     failed = false;
     // A start whose permission ask is still out opens the window once it is answered.
@@ -114,6 +133,33 @@ export function createMicController({
     if (tearingDown) return tearingDown.then(settleOff);
     settleOff();
     return Promise.resolve();
+  }
+
+  async function settleWriter() {
+    if (!writer) return;
+    let timer;
+    const done = await Promise.race([
+      writer.settled().then(() => true),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), settleMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!done) log(`mic audio still waited for classification after ${settleMs} ms; the rest is dropped`);
+  }
+
+  /** gs-capture `owner` has classified everything before `through` (micSegments.mjs). */
+  function classified(through, owner) {
+    if (owner === writerOwner) writer?.classified(through);
+  }
+
+  /**
+   * A call started (plan PR 4b): the open segment may hold the call's opening audio, so it is
+   * dropped, not finished (Codex review of PR 4b, round 3); then the mic stops as usual.
+   */
+  function discard() {
+    writer?.discardOpen();
+    return stop();
   }
 
   function settleOff() {
@@ -213,6 +259,8 @@ export function createMicController({
       onStopped = null;
       // The writer's own drain waits for the last segment's row. A window that crashed during
       // this stop has already started its teardown; that one is awaited, not skipped.
+      // Chunks wait for gs-capture's classification (micSegments.mjs); give it a moment.
+      await settleWriter();
       await writer?.drain();
       await teardown();
     })().finally(() => {
@@ -244,6 +292,8 @@ export function createMicController({
   return {
     start,
     stop,
+    discard,
+    classified,
     shutdown,
     receive,
     ownsSender,

@@ -1663,3 +1663,42 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-11-01, PR 4a, Codex: 3 rounds, ending PASS.** Round 1 FAIL (3 × P1), round 2 FAIL
   (2 × P1, 1 × P2), round 3 PASS ([P1] none, 1 × P2: released segments could overshoot a
   fractional `--segment-sec`, fixed in the commit after `3080b80`).
+- **2026-11-01, PR 4b, calls and the room-mic pause.** Built as planned (spec R5, F2, F3), with
+  these choices, most from Codex rounds 1-3:
+  - **The mic stops for a call instead of holding.** The helper holds system audio (PR 4a); the
+    mic's segments are cut by its page, and a hold there would mean splitting a live WebM. What
+    is lost is James's own voice before he answers.
+  - **The helper holds a call itself (round 3).** Detection in the supervisor came a poll and a
+    round trip late, so a call's opening audio reached a `sys-` file. The helper is given the
+    call apps (`--call-apps`, `--browsers`) and holds from where its previous poll had
+    classified. Round 4 showed a fixed lookback fails when a poll runs late (a long flush), so
+    system audio is delivered only up to what the last poll classified (`audioClassified`).
+  - **Mic chunks wait in memory until gs-capture has classified their time (round 4)**, and a
+    segment is finished only once its end is classified. A call or a never-record app seen
+    meanwhile discards what waits and the open segments, and nothing more is written for that
+    capture window. **Up to one segment (5 minutes) of mic audio from just before a call or a
+    never-record app is lost**, plus what still waits at a stop if classification doesn't
+    catch up within 2 s. That is the price of "nothing of a call on disk before its notice";
+    James can revisit it.
+  - **Every helper starts held** until its first audio-use report, and calls belong to one
+    helper: a restarted helper asks again (round 2). No report within 10 s of ready is Not
+    recording (round 3).
+  - **The mic finishes under the helper that classifies it (round 5).** Before a helper is
+    stopped (pause, off, a restart for a new denylist), the mic stops and its last audio is
+    classified while that helper is still current; a writer takes classification only from
+    the helper it was opened under. At most 16 MB of audio and two finished segments wait,
+    and 10 s without classification fails the mic loudly, keeping nothing that waited.
+  - **A late poll is unchecked time (round 6).** A poll more than 400 ms after the last means
+    a call or a never-record app could have come and gone unseen, so the gap's system audio is
+    dropped and the mic discards what waits and starts again. Writing a long released call
+    out on the control queue is what makes polls late, so **a few seconds of ordinary audio
+    around each long released call can be lost.** Moving that write off the queue would avoid
+    it; it is a larger change.
+  - **A late first poll is a gap from capture start, and the startup hold drops gaps (round
+    7)**, so a `call clear` never writes unchecked startup audio as system audio. The gap
+    clock is read before the tap starts (round 8), not when the watcher is made.
+  - **Codex: rounds 5 to 9, by James's decision (from round 8: until PASS)** after round 4 failed with five P1s (the L42
+    cap), round 5 with four, round 6 with one, and round 7 with two.
+  - **Each hold of the helper's is a call of its own** unless the newest call is unanswered or
+    declined, which it joins; an answer resolves every hold of its call. An app starting after
+    a yes (even one still being saved), or leaving and coming back, is asked about again.

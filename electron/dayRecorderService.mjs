@@ -38,6 +38,11 @@ export function createDayRecorderService({
   purgeIntervalMs = PURGE_INTERVAL_MS,
   retryDelaysMs = RETRY_DELAYS_MS,
   retryResetMs = RETRY_RESET_MS,
+  // Whether a new helper must hold call audio from its first sample (plan PR 4b).
+  callHeldAtStart = () => false,
+  // Runs before a helper is stopped, while it is still the current one (plan PR 4b): the mic
+  // finishes while the helper that classifies its audio still runs (Codex #4b r5).
+  beforeHelperStop = async () => {},
 }) {
   let status = { status: "off" };
   let supervisor = null;
@@ -57,6 +62,10 @@ export function createDayRecorderService({
   let mic = null;
   const listeners = new Set();
   const audioUseListeners = new Set();
+  const audioReadyListeners = new Set();
+  const callHeldListeners = new Set();
+  const classifiedListeners = new Set();
+  const gapListeners = new Set();
 
   function live() {
     if (!supervisor) throw new Error("The capture helper is not running");
@@ -94,6 +103,12 @@ export function createDayRecorderService({
   }
 
   async function stopCurrent() {
+    if (!supervisor) return;
+    try {
+      await beforeHelperStop();
+    } catch (err) {
+      log(`before stopping the helper: ${err?.message ?? err}`);
+    }
     if (!supervisor) return;
     const old = supervisor;
     supervisor = null;
@@ -191,11 +206,28 @@ export function createDayRecorderService({
         if (owner !== supervisor) return;
         for (const cb of audioUseListeners) cb(m);
       },
+      onAudioUseReady: () => {
+        if (owner !== supervisor) return;
+        for (const cb of audioReadyListeners) cb();
+      },
+      onCallHeld: (app) => {
+        if (owner !== supervisor) return;
+        for (const cb of callHeldListeners) cb(app);
+      },
+      onAudioClassified: (through) => {
+        if (owner !== supervisor) return;
+        for (const cb of classifiedListeners) cb(through);
+      },
+      onAudioGap: (from, to) => {
+        if (owner !== supervisor) return;
+        for (const cb of gapListeners) cb(from, to);
+      },
     });
     supervisor = owner;
     runningKey = key;
     try {
-      owner.start({ denylist, shotSec: s.shotSec, segmentSec: SEGMENT_SEC });
+      const startHeld = callHeldAtStart();
+      owner.start({ denylist, shotSec: s.shotSec, segmentSec: SEGMENT_SEC, ...(startHeld && { startHeld }) });
     } catch (err) {
       supervisor = null;
       runningKey = null;
@@ -250,11 +282,31 @@ export function createDayRecorderService({
       audioUseListeners.add(cb);
       return () => audioUseListeners.delete(cb);
     },
+    onAudioUseReady(cb) {
+      audioReadyListeners.add(cb);
+      return () => audioReadyListeners.delete(cb);
+    },
+    /** The live helper held a call app's audio on its own (plan PR 4b). */
+    onCallHeld(cb) {
+      callHeldListeners.add(cb);
+      return () => callHeldListeners.delete(cb);
+    },
+    /** How far the live helper's audio-use polls have classified (plan PR 4b). */
+    onAudioClassified(cb) {
+      classifiedListeners.add(cb);
+      return () => classifiedListeners.delete(cb);
+    },
+    /** The live helper's audio-use poll came late: that time was never checked. */
+    onAudioGap(cb) {
+      gapListeners.add(cb);
+      return () => gapListeners.delete(cb);
+    },
     /** The call hold, on the live helper (plan PR 4b). Throws when none is running. */
     calls: {
       hold: () => live().holdCall(),
       release: (noticeEventId) => live().releaseCall(noticeEventId),
       discard: () => live().discardCall(),
+      clear: () => live().clearCall(),
     },
     running: () => supervisor?.running() ?? false,
     killSync() {

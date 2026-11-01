@@ -123,6 +123,7 @@ enum Run {
                 case "call hold": audio.holdCall()
                 case "call release": audio.releaseCall()
                 case "call discard": audio.discardCall()
+                case "call clear": audio.clearCall()
                 default: fail("unknown command on stdin: \(command.prefix(40))")
                 }
             }
@@ -167,7 +168,24 @@ enum Run {
         ProcWatch.detachHALFromMainRunLoop()
         // How long a call may wait for its notice (CallHold.swift); the supervisor sets it.
         let maxCallSec = args.double("call-hold-max-sec", default: CallHold.defaultMaxSec)
-        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec, maxCallSec: maxCallSec) { event, fields in
+        // A helper started while a call waits for its notice or was declined holds from its first
+        // sample, so the call never reaches a sys- file (plan PR 4b).
+        let startHeld: Bool
+        switch args.string("start-held") {
+        case nil: startHeld = false
+        case "yes": startHeld = true
+        // A malformed value must never read as "don't hold" (the --rebuild-ms lesson, PR 3a).
+        case let other?: fail("--start-held takes yes, got \(other)")
+        }
+        // The call apps, from the supervisor: the helper holds a call itself, from before its
+        // poll saw the app start (Codex review of PR 4b, round 3).
+        let callApps = args.list("call-apps"), browsers = args.list("browsers")
+        for id in callApps + browsers where id.range(of: bundleIDPattern, options: .regularExpression) == nil {
+            fail("--call-apps / --browsers entry is not a bundle id: \(id)")
+        }
+        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec, maxCallSec: maxCallSec,
+                                        startHeld: startHeld,
+                                        calls: AudioUse.CallTracker(apps: Set(callApps), browsers: Set(browsers))) { event, fields in
             line(event, fields)
         }
         adopt(audio)

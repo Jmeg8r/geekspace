@@ -10,43 +10,61 @@ type Use = { app: string | null; denylisted: boolean; input: boolean; output: bo
 const use = (app: string | null, input: boolean, output = false, denylisted = false): Use => ({ app, denylisted, input, output });
 
 function harness() {
-  const onCall = vi.fn();
+  const onAppStarted = vi.fn();
+  const onCallEnded = vi.fn();
   const onDenylistedAudio = vi.fn();
-  const detector = createCallDetector({ onCall, onDenylistedAudio });
-  return { detector, onCall, onDenylistedAudio };
+  const detector = createCallDetector({ onAppStarted, onCallEnded, onDenylistedAudio });
+  return { detector, onAppStarted, onCallEnded, onDenylistedAudio };
 }
 
 describe("createCallDetector", () => {
-  it("starts a call when a call app takes the mic, and ends it when it lets go", () => {
+  it("starts a call when a call app takes the mic, and ends it when it stops using audio", () => {
     const h = harness();
     h.detector.receive(use("us.zoom.xos", true, true));
-    expect(h.onCall).toHaveBeenLastCalledWith({ active: true, app: "us.zoom.xos" });
-    h.detector.receive(use("us.zoom.xos", false, true));
-    expect(h.onCall).toHaveBeenLastCalledWith({ active: false, app: null });
-    expect(h.onCall).toHaveBeenCalledTimes(2);
+    expect(h.onAppStarted).toHaveBeenCalledWith("us.zoom.xos");
+    h.detector.receive(use("us.zoom.xos", false, false));
+    expect(h.onCallEnded).toHaveBeenCalledOnce();
   });
 
   it("counts a browser holding the mic as a call (Meet and the like)", () => {
     const h = harness();
     h.detector.receive(use("com.google.Chrome", true));
-    expect(h.onCall).toHaveBeenLastCalledWith({ active: true, app: "com.google.Chrome" });
+    expect(h.onAppStarted).toHaveBeenCalledWith("com.google.Chrome");
   });
 
-  it("does not count output alone, or an app that is not a call app", () => {
+  it("does not count a browser's output alone, or an app that is not a call app", () => {
+    const h = harness();
+    h.detector.receive(use("com.google.Chrome", false, true));
+    h.detector.receive(use("com.apple.VoiceMemos", true));
+    expect(h.onAppStarted).not.toHaveBeenCalled();
+  });
+
+  // Codex 4b r1 P1: a listen-only call, and a call whose mic track stopped, are still calls.
+  it("counts a dedicated call app's output alone as a call (listen-only)", () => {
     const h = harness();
     h.detector.receive(use("us.zoom.xos", false, true));
-    h.detector.receive(use("com.apple.VoiceMemos", true));
-    expect(h.onCall).not.toHaveBeenCalled();
+    expect(h.onAppStarted).toHaveBeenCalledWith("us.zoom.xos");
   });
 
-  it("keeps one call while a second call app joins, and ends it when the last leaves", () => {
+  it("keeps a call going while the other side is still audible, after the mic is let go", () => {
+    const h = harness();
+    h.detector.receive(use("com.google.Chrome", true, true));
+    h.detector.receive(use("com.google.Chrome", false, true));
+    expect(h.onCallEnded).not.toHaveBeenCalled();
+    h.detector.receive(use("com.google.Chrome", false, false));
+    expect(h.onCallEnded).toHaveBeenCalledOnce();
+  });
+
+  // Codex 4b r2 P1: each app joining is reported, so a new app can't ride on an old answer.
+  it("reports every call app that joins, and ends the call when the last one leaves", () => {
     const h = harness();
     h.detector.receive(use("us.zoom.xos", true));
     h.detector.receive(use("com.tinyspeck.slackmacgap", true));
+    expect(h.onAppStarted.mock.calls).toEqual([["us.zoom.xos"], ["com.tinyspeck.slackmacgap"]]);
     h.detector.receive(use("us.zoom.xos", false));
-    expect(h.onCall).toHaveBeenCalledTimes(1);
+    expect(h.onCallEnded).not.toHaveBeenCalled();
     h.detector.receive(use("com.tinyspeck.slackmacgap", false));
-    expect(h.onCall).toHaveBeenLastCalledWith({ active: false, app: null });
+    expect(h.onCallEnded).toHaveBeenCalledOnce();
   });
 
   it("pauses the room mic while a denylisted app uses audio in or out (F2), and no call starts", () => {
@@ -57,18 +75,20 @@ describe("createCallDetector", () => {
     expect(h.onDenylistedAudio).toHaveBeenCalledTimes(1);
     h.detector.receive(use(null, false, false, true));
     expect(h.onDenylistedAudio).toHaveBeenLastCalledWith(false);
-    expect(h.onCall).not.toHaveBeenCalled();
+    expect(h.onAppStarted).not.toHaveBeenCalled();
   });
 
-  it("forgets everything on reset, as a new helper reports from scratch", () => {
+  // A new helper reports every app afresh; the notice treats it as a new start (Codex 4b r2).
+  it("forgets everything on reset, quietly, and hears the new helper's report afresh", () => {
     const h = harness();
     h.detector.receive(use("us.zoom.xos", true));
     h.detector.receive(use(null, true, false, true));
     h.detector.reset();
-    expect(h.onCall).toHaveBeenLastCalledWith({ active: false, app: null });
-    expect(h.onDenylistedAudio).toHaveBeenLastCalledWith(false);
+    expect(h.onCallEnded).not.toHaveBeenCalled();
     h.detector.receive(use("us.zoom.xos", true));
-    expect(h.onCall).toHaveBeenLastCalledWith({ active: true, app: "us.zoom.xos" });
+    expect(h.onAppStarted).toHaveBeenCalledTimes(2);
+    h.detector.receive(use(null, true, false, true));
+    expect(h.onDenylistedAudio).toHaveBeenLastCalledWith(true);
   });
 
   it("covers the spec's call apps", () => {
