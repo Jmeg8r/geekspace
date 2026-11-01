@@ -14,8 +14,14 @@ export function costOf(usage: Usage, model: string): number;
 
 export const STOP_GRACE_MS: number;
 
-/** What assistant.unread returns: the batch's material. */
+type Cursor = { at: number; ids: string[] };
+
+/** What assistant.unread returns: a page of the batch's material, and where it ended. */
 export type AssistantInput = {
+  transcriptsDone?: boolean;
+  screenshotsDone?: boolean;
+  transcriptAfter?: Cursor;
+  screenshotAfter?: Cursor;
   transcripts: { _id: string; segmentId: string; start: number; end: number; text: string; readChars?: number }[];
   screenshots: { _id: string; takenAt: number; appBundleId?: string; ocrText: string; readChars?: number }[];
 };
@@ -51,7 +57,7 @@ export function createDayAssistant(options: {
   client: () => AssistantClient | null;
   convex: {
     ensureStart: (args: { at: number }) => Promise<number>;
-    unread: (args: { since: number; limit: number }) => Promise<AssistantInput>;
+    unread: (args: { since: number; limit: number; transcriptAfter?: Cursor; screenshotAfter?: Cursor }) => Promise<AssistantInput>;
     capStatus: (day: string) => Promise<{ capUsd: number | null; spentUsd: number; reached: boolean }>;
     beginRequest: (args: {
       day: string;

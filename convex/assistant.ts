@@ -337,6 +337,8 @@ export const capStatus = query({
 // proposals, in one write. A time watermark skipped transcripts written late and resent part
 // of a batch; this can't.
 const MAX_INPUT_ROWS = 200;
+// How many pages one batch may read past rows too long for the cap (electron/dayAssistant.mjs).
+const MAX_CURSOR_PAGES = 10;
 // A call still in flight after this was abandoned (a crash, a quit mid-call): it stays counted
 // at its reservation, and its items are read again. Past the SDK's own request timeout.
 const ABANDON_MS = 30 * 60_000;
@@ -372,23 +374,57 @@ async function globalSettings(ctx: QueryCtx) {
     .unique();
 }
 
-/** Unread transcripts and screen text captured since `since`, oldest first. */
+// Where a page of unread rows ended: its last row's time, and the ids already returned at that
+// exact time, so a row sharing it is neither skipped nor returned twice (Codex #6a r4).
+const after = v.optional(v.object({ at: v.number(), ids: v.array(v.string()) }));
+
+/** A page of rows from `from` on, past `cursor`; and the cursor its last row leaves. */
+function page<R extends { _id: string }>(rows: R[], limit: number, timeOf: (r: R) => number, cursor?: { at: number; ids: string[] }) {
+  const seen = new Set(cursor?.ids ?? []);
+  const fresh = rows.filter((r) => !(cursor && timeOf(r) === cursor.at && seen.has(r._id))).slice(0, limit);
+  const last = fresh.at(-1);
+  const tied = last ? fresh.filter((r) => timeOf(r) === timeOf(last)).map((r) => r._id) : [];
+  const ids = last && cursor && timeOf(last) === cursor.at ? [...cursor.ids, ...tied] : tied;
+  return { rows: fresh, done: fresh.length < limit, after: last ? { at: timeOf(last), ids } : cursor };
+}
+
+/**
+ * Unread transcripts and screen text captured since `since`, oldest first, a page of each.
+ * `transcriptAfter` / `screenshotAfter` continue after an earlier page: a page whose rows are
+ * all too long for what is left of the cap must not hide the rows behind it (Codex #6a r4).
+ */
 export const unread = query({
-  args: { since: v.number(), limit: v.number() },
-  handler: async (ctx, { since, limit }) => {
+  args: { since: v.number(), limit: v.number(), transcriptAfter: after, screenshotAfter: after },
+  handler: async (ctx, { since, limit, transcriptAfter, screenshotAfter }) => {
     assertTime("since", since);
     if (!Number.isInteger(limit) || limit < 1 || limit > MAX_INPUT_ROWS) {
       throw new Error(`The limit must be 1–${MAX_INPUT_ROWS}, got ${limit}`);
     }
-    const transcripts = await ctx.db
+    for (const cursor of [transcriptAfter, screenshotAfter]) {
+      if (!cursor) continue;
+      assertTime("cursor", cursor.at);
+      if (cursor.ids.length > MAX_INPUT_ROWS * MAX_CURSOR_PAGES) throw new Error("The cursor names too many rows");
+    }
+    // Ties at the cursor's time are fetched again and filtered: at most the ids it names more.
+    const tFrom = Math.max(since, transcriptAfter?.at ?? since);
+    const sFrom = Math.max(since, screenshotAfter?.at ?? since);
+    const tRows = await ctx.db
       .query("transcripts")
-      .withIndex("by_read_start", (q) => q.eq("readAt", undefined).gte("start", since))
-      .take(limit);
-    const screenshots = await ctx.db
+      .withIndex("by_read_start", (q) => q.eq("readAt", undefined).gte("start", tFrom))
+      .take(limit + (transcriptAfter?.ids.length ?? 0));
+    const sRows = await ctx.db
       .query("screenshots")
-      .withIndex("by_read_takenAt", (q) => q.eq("readAt", undefined).gte("takenAt", since))
-      .take(limit);
+      .withIndex("by_read_takenAt", (q) => q.eq("readAt", undefined).gte("takenAt", sFrom))
+      .take(limit + (screenshotAfter?.ids.length ?? 0));
+    const tPage = page(tRows, limit, (r) => r.start, transcriptAfter);
+    const sPage = page(sRows, limit, (r) => r.takenAt, screenshotAfter);
+    const transcripts = tPage.rows;
+    const screenshots = sPage.rows;
     return {
+      transcriptsDone: tPage.done,
+      screenshotsDone: sPage.done,
+      ...(tPage.after && { transcriptAfter: tPage.after }),
+      ...(sPage.after && { screenshotAfter: sPage.after }),
       transcripts: transcripts.map((r) => ({
         _id: r._id,
         segmentId: r.segmentId,

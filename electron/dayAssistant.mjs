@@ -26,6 +26,8 @@ const MAX_TOKENS = 16_000;
 const MIN_OUTPUT_TOKENS = 1024;
 const MAX_ACTIONS = 20;
 const MAX_INPUT_ROWS = 200;
+// Pages read past rows too long for the cap before the batch gives up (Codex #6a r4).
+const MAX_SCAN_PAGES = 10;
 // Message framing and the output schema the API adds, on top of the text it is given.
 const INPUT_OVERHEAD_TOKENS = 2000;
 // The SDK's own deadline for one request (convex/assistant.ts abandons a call after 30 min).
@@ -303,26 +305,38 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
       return;
     }
     const since = await convex.ensureStart({ at: startOfLocalDay(now) });
-    const all = await convex.unread({ since, limit: MAX_INPUT_ROWS });
-    if (all.transcripts.length + all.screenshots.length === 0) return;
     const left = cap.capUsd - cap.spentUsd;
     // Packed oldest first, each item at the largest part that still fits; one that fits at none
-    // waits for a later batch while the items after it go (Codex review of PR 6a, round 3).
+    // waits for a later batch while the items after it go (Codex review of PR 6a, round 3). A
+    // page that packs nothing is read past, to a bounded depth (round 4).
     const input = { transcripts: [], screenshots: [] };
     let bytes = utf8Bytes(material(input, now).text);
     let skipped = 0;
-    for (const kind of ["transcripts", "screenshots"]) {
-      for (const row of all[kind]) {
-        const key = `${kind[0]}${input[kind].length + 1}`;
-        const chosen = PART_CHARS.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
-        if (chosen === undefined) {
-          skipped += 1;
-          continue;
+    let seen = 0;
+    let cursor = {};
+    for (let pageNo = 0; pageNo < MAX_SCAN_PAGES; pageNo += 1) {
+      const all = await convex.unread({ since, limit: MAX_INPUT_ROWS, ...cursor });
+      seen += all.transcripts.length + all.screenshots.length;
+      for (const kind of ["transcripts", "screenshots"]) {
+        for (const row of all[kind]) {
+          const key = `${kind[0]}${input[kind].length + 1}`;
+          const chosen = PART_CHARS.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
+          if (chosen === undefined) {
+            skipped += 1;
+            continue;
+          }
+          input[kind].push({ ...row, partChars: chosen });
+          bytes += utf8Bytes(itemLine(kind, row, key, chosen).line) + LINE_SLACK_BYTES;
         }
-        input[kind].push({ ...row, partChars: chosen });
-        bytes += utf8Bytes(itemLine(kind, row, key, chosen).line) + LINE_SLACK_BYTES;
       }
+      const done = (all.transcriptsDone ?? true) && (all.screenshotsDone ?? true);
+      if (input.transcripts.length + input.screenshots.length > 0 || done) break;
+      cursor = {
+        ...(all.transcriptAfter && { transcriptAfter: all.transcriptAfter }),
+        ...(all.screenshotAfter && { screenshotAfter: all.screenshotAfter }),
+      };
     }
+    if (seen === 0) return;
     if (skipped) log(`assistant: ${skipped} item(s) too long for what is left of the cap wait for a later batch`);
     const made = material(input, now);
     const sized = input.transcripts.length + input.screenshots.length > 0 ? fit(made.text, left, model) : null;
