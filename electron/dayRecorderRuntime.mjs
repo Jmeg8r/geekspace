@@ -10,6 +10,7 @@
 import { app, globalShortcut, ipcMain, Menu, nativeImage, systemPreferences, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
 import { ConvexClient } from "convex/browser";
 // The generated `api` is exactly `anyApi` (convex/_generated/api.js), and convex/ is not
 // packaged into the app, so the main process uses anyApi directly.
@@ -20,6 +21,7 @@ import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMedia.mjs";
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
+import { createDayAssistant } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -47,7 +49,7 @@ function helperPath() {
  * `capturePage` is where the mic window's page is: the dev server, or dist/capture.html.
  * `showApp` brings the app window forward, for the menu bar's "Open Geekspace".
  */
-export function startDayRecorder({ convexUrl, capturePage, showApp }) {
+export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) {
   const logDir = path.join(GEEKSPACE_DIR, "logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = createFileLog(path.join(logDir, "day-recorder.log"));
@@ -163,10 +165,42 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     (err) => log(`could not read the segments waiting for transcription: ${err?.message ?? err}`)
   );
 
+  // The assistant (plan PR 6a, spec R8): a batch every batchMin minutes while the recorder is
+  // on. The key is read from the Keychain-encrypted store only when a request is made (F4).
+  const assistant = createDayAssistant({
+    client: () => {
+      const key = keyStore?.get();
+      return key ? new Anthropic({ apiKey: key }) : null;
+    },
+    convex: {
+      input: (window) => client.query(api.assistant.input, window),
+      applyActions: (actions) => client.mutation(api.assistant.applyActions, { actions, tzOffsetMin: new Date().getTimezoneOffset() }),
+      recordUsage: (row) => client.mutation(api.assistant.recordUsage, row),
+      capStatus: (day) => client.query(api.assistant.capStatus, { day }),
+      logEvent: (event) => logEvent(event),
+      watermark: () => client.query(api.assistant.watermark, {}),
+      setWatermark: (at) => client.mutation(api.assistant.setWatermark, { at }),
+    },
+    log,
+  });
+  let batchTimer = null;
+  let batchMs = 0;
+  const scheduleAssistant = (enabled, batchMin) => {
+    const every = enabled ? batchMin * 60_000 : 0;
+    if (every === batchMs) return;
+    clearInterval(batchTimer);
+    batchTimer = null;
+    batchMs = every;
+    if (every > 0) batchTimer = setInterval(() => void assistant.runBatch(), every);
+  };
+
   const unsubscribe = client.onUpdate(
     api.dayRecorder.getSettings,
     {},
-    (s) => void service.apply({ enabled: s.enabled, paused: s.paused, denylist: s.denylist, shotSec: s.shotSec }),
+    (s) => {
+      void service.apply({ enabled: s.enabled, paused: s.paused, denylist: s.denylist, shotSec: s.shotSec });
+      scheduleAssistant(s.enabled, s.batchMin);
+    },
     (err) => log(`could not read Day Recorder settings: ${err?.message ?? err}`)
   );
 
@@ -213,6 +247,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     ...controls,
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
+      clearInterval(batchTimer);
       unsubscribe();
       unsubscribePending();
       // Capture stops first and now; the segment being transcribed finishes meanwhile, and the
