@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ONBOARDING, addBundleId, removeBundleId, shotSecError } from "../src/lib/dayRecorderSettings";
+import { ONBOARDING, UNSUPPORTED, addBundleId, createListEditor, removeBundleId, shotSecError } from "../src/lib/dayRecorderSettings";
 
 // WHAT: the Day Recorder Settings section's rules (plan PR 3e-2). WHY tested: the denylist
 // decides which apps are never captured (R4), so the editor must refuse what the server would
@@ -51,5 +51,55 @@ describe("ONBOARDING", () => {
     expect(text).toContain("private window picker");
     expect(text).toContain("microphone");
     expect(text).toContain("⌥⌘R");
+  });
+});
+
+// Codex 3e-2 r1 P1: two quick edits each replaced the whole list from the same stale copy,
+// so "add TextEdit, then remove Mail" saved [] last and TextEdit lost its protection.
+describe("createListEditor", () => {
+  it("applies each edit to the list the previous edit left, and saves in order", async () => {
+    const saved: string[][] = [];
+    let finish: () => void = () => {};
+    const save = (list: string[]) => {
+      saved.push(list);
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    };
+    const editor = createListEditor(save);
+    const first = editor.edit(["com.apple.Mail"], (list) => [...list, "com.apple.TextEdit"]);
+    const second = editor.edit(["com.apple.Mail"], (list) => list.filter((id) => id !== "com.apple.Mail"));
+    expect(saved).toEqual([["com.apple.Mail", "com.apple.TextEdit"]]);
+    finish();
+    await first;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(saved).toEqual([["com.apple.Mail", "com.apple.TextEdit"], ["com.apple.TextEdit"]]);
+    finish();
+    await second;
+  });
+
+  it("rebases on the saved list once nothing is pending", async () => {
+    const saved: string[][] = [];
+    const editor = createListEditor(async (list) => void saved.push(list));
+    await editor.edit(["a.b"], (list) => [...list, "c.d"]);
+    await editor.edit(["x.y"], (list) => [...list, "e.f"]);
+    expect(saved).toEqual([["a.b", "c.d"], ["x.y", "e.f"]]);
+  });
+
+  it("passes a failed save on, and recovers for the next edit", async () => {
+    let fail = true;
+    const editor = createListEditor(async () => {
+      if (fail) throw new Error("backend down");
+    });
+    await expect(editor.edit(["a.b"], (list) => [...list, "c.d"])).rejects.toThrow("backend down");
+    fail = false;
+    await expect(editor.edit(["a.b"], (list) => list)).resolves.toBeUndefined();
+  });
+});
+
+// Codex 3e-2 r1 P2: off macOS the recorder is `unsupported`, which has no state copy.
+describe("UNSUPPORTED", () => {
+  it("says the recorder needs macOS", () => {
+    expect(UNSUPPORTED).toBe("Recording your day needs macOS. Geekspace on this computer can't capture.");
   });
 });
