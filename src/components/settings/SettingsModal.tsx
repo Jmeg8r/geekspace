@@ -14,7 +14,9 @@ import {
   meetingTools,
   type MeetingToolStatus,
 } from "../../lib/meetingsBridge";
+import { dayRecorderAvailable } from "../../lib/dayRecorderBridge";
 import { useUI } from "../../state/ui";
+import { DayRecorderSettings } from "../dayRecorder/DayRecorderSettings";
 import { Modal } from "../common/Modal";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -146,6 +148,8 @@ export function SettingsModal() {
             patch={patch}
           />
         )}
+
+        {dayRecorderAvailable() && <DayRecorderSettings section={Section} />}
 
         <p className="pt-2 text-[11.5px] leading-relaxed text-ink-3">
           Geekspace · an As The Geek Learns build · data lives in your local Convex deployment.
