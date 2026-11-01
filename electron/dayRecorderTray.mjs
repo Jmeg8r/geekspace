@@ -58,11 +58,15 @@ export function createStatusView(source) {
   };
 }
 
-const ON_COPY = "Day Recorder is on. ⌥⌘R to pause.";
-const ON_COPY_NO_SHORTCUT = "Day Recorder is on. Pause it from this menu: another app is using ⌥⌘R.";
+export const SHORTCUT_TAKEN = " Another app is using ⌥⌘R, so pause and resume from this menu.";
 
 /** What the menu bar shows for a status (spec, UI states and copy); null means no tray. */
 export function trayView(status, { shortcut }) {
+  const view = stateView(status, shortcut);
+  return view && !shortcut ? { ...view, tooltip: `${view.tooltip}${SHORTCUT_TAKEN}` } : view;
+}
+
+function stateView(status, shortcut) {
   switch (status.status) {
     case "recording": {
       const mic = status.mic;
@@ -82,7 +86,8 @@ export function trayView(status, { shortcut }) {
           action: "pause",
         };
       }
-      return { tone: "red", title: "Recording", tooltip: shortcut ? ON_COPY : ON_COPY_NO_SHORTCUT, action: "pause" };
+      const tooltip = shortcut ? "Day Recorder is on. ⌥⌘R to pause." : "Day Recorder is on.";
+      return { tone: "red", title: "Recording", tooltip, action: "pause" };
     }
     case "paused":
       return { tone: "hollow", title: "Paused", tooltip: "Recording paused. Resume when you're ready.", action: "resume" };
