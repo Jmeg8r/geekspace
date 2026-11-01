@@ -135,37 +135,46 @@ final class CallRouter {
     private var spans = [Span(fromMs: -.infinity, call: nil)]
     private var routingCall = false
 
-    init(maxSec: Double, append: @escaping (PCMChunk) -> Void, closeSystem: @escaping () -> Void,
+    /// `startHeld`: everything from the first sample belongs to a held call, for a helper
+    /// started while a call waits for its notice or was declined (Codex review of PR 4b).
+    init(maxSec: Double, startHeld: Bool = false, append: @escaping (PCMChunk) -> Void, closeSystem: @escaping () -> Void,
          flush: @escaping ([CallHold.Run]) -> Int, report: @escaping (String, [String: Any]) -> Void) {
         self.maxSec = maxSec
         self.append = append
         self.closeSystem = closeSystem
         self.flush = flush
         self.report = report
+        if startHeld { hold(at: -.infinity) }
     }
 
-    private var open: Call? {
-        guard let call = spans.last?.call, case .pending = call.fate else { return nil }
-        return call
+    /// The oldest call still waiting for a release or a discard: commands resolve calls in the
+    /// order they were held. A hold while one waits holds the new call apart (Codex #4b r1).
+    private var oldestPending: (index: Int, call: Call)? {
+        for (index, span) in spans.enumerated() {
+            if let call = span.call, case .pending = call.fate { return (index, call) }
+        }
+        return nil
     }
 
-    var canHold: Bool { spans.last?.call == nil }
-    var canRelease: Bool { open != nil }
-    var canDiscard: Bool { open != nil }
+    var canHold: Bool { true }
+    var canRelease: Bool { oldestPending != nil }
+    var canDiscard: Bool { oldestPending != nil }
 
     func hold(at t: Double) {
         spans.append(Span(fromMs: t, call: Call(maxSec: maxSec)))
-        report("callHeld", ["t": round3(t)])
+        report("callHeld", ["t": t.isFinite ? round3(t) : 0])
     }
 
-    func release(at t: Double) {
-        open?.fate = .release
-        spans.append(Span(fromMs: t, call: nil))
-    }
+    func release(at t: Double) { resolve(.release, at: t) }
 
-    func discard(at t: Double, reason: String = "command") {
-        open?.fate = .discard(reason)
-        spans.append(Span(fromMs: t, call: nil))
+    func discard(at t: Double, reason: String = "command") { resolve(.discard(reason), at: t) }
+
+    /// Resolve the oldest waiting call. If it is still the one being held, system audio
+    /// resumes at `t`; otherwise it already ended where the next call began.
+    private func resolve(_ fate: Fate, at t: Double) {
+        guard let (index, call) = oldestPending else { return }
+        call.fate = fate
+        if index == spans.count - 1 { spans.append(Span(fromMs: t, call: nil)) }
     }
 
     /// Each sample goes where its own capture time falls, so a chunk that straddles a hold,
@@ -220,7 +229,9 @@ final class CallRouter {
                 _ = call.hold.take()
                 report("callDiscarded", ["heldSec": round3(heldSec), "reason": reason])
             case .pending:
-                fail("call router: a call ended without a release or a discard")
+                // Held apart by a later call, and not answered yet: it settles later, in order.
+                spans.insert(done, at: 0)
+                return
             }
         }
     }
@@ -228,7 +239,7 @@ final class CallRouter {
     /// The tap has stopped and everything is delivered: a call still waiting for its notice
     /// is dropped (never written without one), and the rest settle.
     func stop() {
-        if open != nil { discard(at: .infinity, reason: "stop") }
+        while oldestPending != nil { discard(at: .infinity, reason: "stop") }
         settle(frontier: .infinity)
     }
 }

@@ -29,6 +29,8 @@ import { createMicSegmentWriter } from "./micSegments.mjs";
 const GEEKSPACE_DIR = path.join(app.getPath("appData"), "Geekspace");
 // MediaRecorder's timeslice: how often a chunk crosses to the main process.
 const MIC_TIMESLICE_MS = 1000;
+// A new helper reports every app using audio within its first poll (100 ms); this is ample.
+const SNAPSHOT_MS = 1000;
 const REFUSED = { ok: false, error: "Refused: the request did not come from the mic capture window" };
 
 
@@ -60,6 +62,12 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   };
 
   const service = createDayRecorderService({
+    // Each new helper: what it reports first says which calls are still going on, and it
+    // holds from its first sample if the newest call is unanswered or declined (plan PR 4b).
+    callHeldAtStart: () => {
+      detector.beginSnapshot();
+      return notice.helperStarting();
+    },
     platform: process.platform,
     mediaRoot,
     helperPath: helperPath(),
@@ -130,12 +138,17 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     },
   });
   service.onAudioUse((use) => detector.receive(use));
+  // Decisions outlive helpers (Codex review of PR 4b): a stop, a pause or a retry replaces the
+  // helper, not the call. Once a new helper is recording, its first report has had time to
+  // arrive; apps it did not mention have stopped.
+  let lastStatus = null;
+  let snapshotTimer = null;
   service.onStatus((s) => {
-    // A helper that stops drops anything it held, and a new one reports every app afresh.
-    if (s.status !== "recording") {
-      notice.recorderStopped();
-      detector.reset();
+    if (s.status === "recording" && lastStatus !== "recording") {
+      clearTimeout(snapshotTimer);
+      snapshotTimer = setTimeout(() => detector.endSnapshot(), SNAPSHOT_MS);
     }
+    lastStatus = s.status;
     syncMic();
   });
 
@@ -195,6 +208,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     ...controls,
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
+      clearTimeout(snapshotTimer);
       unsubscribe();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();

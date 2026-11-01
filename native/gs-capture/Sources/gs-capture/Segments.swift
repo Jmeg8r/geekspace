@@ -306,12 +306,12 @@ final class SystemAudioRecorder {
     /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped`,
     /// `sessionUnverified`, `sampleRateChanged` and `audioUse`.
     init(root: String, denylist: [String], segmentSec: Double, maxCallSec: Double = CallHold.defaultMaxSec,
-         report: @escaping (String, [String: Any]) -> Void) {
+         startHeld: Bool = false, report: @escaping (String, [String: Any]) -> Void) {
         self.root = root
         self.segmentSec = segmentSec
         self.maxCallSec = maxCallSec
         self.report = report
-        router = CallRouter(maxSec: maxCallSec,
+        router = CallRouter(maxSec: maxCallSec, startHeld: startHeld,
                             append: { [unowned self] in self.writer?.append($0) },
                             closeSystem: { [unowned self] in self.writer?.close() },
                             flush: { [unowned self] runs in CallHold.flush(runs, root: self.root, segmentSec: self.segmentSec, report: self.report) },
@@ -382,10 +382,7 @@ final class SystemAudioRecorder {
 
     /// A call started: audio captured from now on is the call's, held in memory.
     func holdCall() {
-        queue.sync {
-            guard router.canHold else { fail("call hold: a call is already held") }
-            router.hold(at: nowMs())
-        }
+        queue.sync { router.hold(at: nowMs()) }
     }
 
     /// The notice was given: the call's audio, up to now, is written as `call` segments once

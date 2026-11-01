@@ -288,7 +288,7 @@ export function createSupervisor({
     fail({ reason: "exited", message: why, code });
   }
 
-  function start({ denylist, shotSec, segmentSec }) {
+  function start({ denylist, shotSec, segmentSec, startHeld = false }) {
     if (child) throw new Error("A gs-capture helper is already running");
     for (const id of denylist) {
       if (!BUNDLE_ID_RE.test(id)) throw new Error(`Denylist entry is not a bundle id: ${JSON.stringify(id)}`);
@@ -303,6 +303,8 @@ export function createSupervisor({
       String(shotSec),
       "--segment-sec",
       String(segmentSec),
+      // A call waits for its notice or was declined: hold from the first sample (plan PR 4b).
+      ...(startHeld ? ["--start-held", "yes"] : []),
     ];
     stopRequested = false;
     sawStopped = false;

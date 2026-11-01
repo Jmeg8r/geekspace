@@ -16,7 +16,8 @@ export type CallNotice = {
   declined: (callId: string) => Promise<void>;
   extend: (callId: string) => void;
   dismiss: () => void;
-  recorderStopped: () => void;
+  /** A new helper is starting: whether it must hold from its first sample. */
+  helperStarting: () => boolean;
   micHeld: () => boolean;
 };
 

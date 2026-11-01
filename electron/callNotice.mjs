@@ -8,161 +8,211 @@
 // segments are cut by its page, and a hold there would mean splitting a live WebM. Stopping
 // keeps the same guarantee (nothing of the call on disk before the notice); what is lost is
 // James's own voice before he answers (plan.md Deviations, 4b).
-// WHY helper commands are caught: a command throws only when no helper is running, and then
-// nothing is being recorded either; the supervisor fails capture on a broken channel itself.
+// WHY a list of calls (Codex review of PR 4b): a call can start while an earlier one is still
+// being answered. Each is held apart and answered on its own; the helper resolves held calls
+// oldest first, so each call's command waits for the one before it.
+// WHY decisions survive the helper: a retry, a pause or a restart replaces the helper, not the
+// call. A helper started while the newest call is unanswered or declined starts held, and only
+// that call carries into it; older calls' audio went with the old helper.
 
 const MIN = 60_000;
 // Spec: NOTICE_TIMEOUT_MIN = 15, with one extension (2.2.1); the helper's hold cap matches.
 export const NOTICE_TIMEOUT_MS = 15 * MIN;
 export const EXTEND_MS = 15 * MIN;
 
+// Calls whose audio the helper is holding: waiting for an answer, being answered, or declined.
+const HELD = new Set(["asking", "giving", "declining", "dropping"]);
+
 export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log }) {
-  // idle | asking | giving | declining | told | dropping. `ended`: the call ended while asked.
-  let state = { kind: "idle" };
-  let timer = null;
+  /** Oldest first: { callId, app, kind, ended, deadline, canExtend, timer, inHelper, ready, done } */
+  let calls = [];
+  let warning = null;
   let seq = 0;
   let micHeld = false;
+  let prompt = null;
 
-  const setMicHeld = (held) => {
-    if (held === micHeld) return;
-    micHeld = held;
-    onMicHeld(held);
-  };
+  const newest = () => calls.at(-1) ?? null;
+  const find = (callId) => calls.find((c) => c.callId === callId) ?? null;
 
-  const command = (name, ...args) => {
+  function command(name, ...args) {
     try {
       helper[name](...args);
-      return true;
     } catch (err) {
       log(`call notice: could not ${name} the call (${err?.message ?? err})`);
-      return false;
     }
-  };
+  }
 
-  const clearTimer = () => {
-    clearTimeout(timer);
-    timer = null;
-  };
+  function refresh() {
+    const held = calls.some((c) => HELD.has(c.kind));
+    if (held !== micHeld) {
+      micHeld = held;
+      onMicHeld(held);
+    }
+    const asking = [...calls].reverse().find((c) => c.kind === "asking");
+    const next = asking
+      ? { state: "asking", callId: asking.callId, app: asking.app, deadline: asking.deadline, canExtend: asking.canExtend }
+      : warning;
+    if (JSON.stringify(next) === JSON.stringify(prompt)) return;
+    prompt = next;
+    onPrompt(next);
+  }
 
-  const ask = () => {
-    onPrompt({ state: "asking", callId: state.callId, app: state.app, deadline: state.deadline, canExtend: state.canExtend });
-  };
+  function remove(call) {
+    clearTimeout(call.timer);
+    calls = calls.filter((c) => c !== call);
+  }
 
-  const arm = () => {
-    clearTimer();
-    const callId = state.callId;
-    timer = setTimeout(() => void drop(callId, "timedOut"), Math.max(0, state.deadline - Date.now()));
-  };
+  function arm(call) {
+    clearTimeout(call.timer);
+    call.timer = setTimeout(() => void drop(call, "timedOut"), Math.max(0, call.deadline - Date.now()));
+  }
+
+  /**
+   * Run this call's resolving command once every earlier call has issued its own, so the
+   * helper (which resolves the oldest held call) applies it to this call. A call that is not
+   * in the current helper has nothing there to resolve.
+   */
+  async function resolveInHelper(call, name, ...args) {
+    await call.ready;
+    if (call.inHelper) command(name, ...args);
+    call.done();
+  }
 
   /** Drop what is held; keep holding to drop the rest while the call goes on. */
-  async function drop(callId, why) {
-    if (state.callId !== callId || state.kind !== "asking") return;
-    clearTimer();
-    const ended = state.ended;
-    state = { kind: "declining", callId, ended };
-    const detail = why === "timedOut" ? "no answer within the notice deadline" : "James chose not to record this call";
+  async function drop(call, why) {
+    if (call.kind !== "asking") return;
+    clearTimeout(call.timer);
+    call.kind = "declining";
+    const detail =
+      why === "timedOut"
+        ? "no answer within the notice deadline"
+        : why === "superseded"
+          ? "a new call began before the notice was answered"
+          : "James chose not to record this call";
     try {
       await logEvent({ kind: "noticeDeclined", detail });
     } catch (err) {
       log(`call notice: could not record that the notice was declined (${err?.message ?? err})`);
     }
-    if (state.callId !== callId) return;
-    finishDrop(callId, state.ended || ended);
-    onPrompt(why === "timedOut" ? { state: "timedOut", callId } : null);
+    await settleDropped(call);
+    if (why === "timedOut") warning = { state: "timedOut", callId: call.callId };
+    refresh();
   }
 
-  function finishDrop(callId, ended) {
-    command("discard");
-    if (ended) {
-      state = { kind: "idle" };
-      setMicHeld(false);
-    } else {
-      command("hold");
-      state = { kind: "dropping", callId };
+  async function settleDropped(call) {
+    await resolveInHelper(call, "discard");
+    if (call.ended || call !== newest()) {
+      remove(call);
+      return;
     }
+    // The call goes on: hold again, so the rest of it is dropped too when it ends.
+    if (call.inHelper) command("hold");
+    call.kind = "dropping";
+    call.ready = Promise.resolve();
+    call.done = () => {};
   }
 
   return {
     callStarted(app) {
-      if (state.kind !== "idle") return;
-      if (!command("hold")) return;
+      const current = newest();
+      // The same call going on: the detector reports a call once, until it ends.
+      if (current && !current.ended) return;
+      // Hold the new call apart first, so not a sample of it is in an earlier call's hold.
+      command("hold");
+      const before = current && HELD.has(current.kind) ? current : null;
+      let done;
+      const finished = new Promise((resolve) => {
+        done = resolve;
+      });
       seq += 1;
-      state = {
-        kind: "asking",
+      const call = {
         callId: `call-${seq}-${Date.now()}`,
         app,
+        kind: "asking",
+        ended: false,
         deadline: Date.now() + NOTICE_TIMEOUT_MS,
         canExtend: true,
-        ended: false,
+        timer: null,
+        inHelper: true,
+        ready: before ? before.finished : Promise.resolve(),
+        done,
+        finished,
       };
-      setMicHeld(true);
-      arm();
-      ask();
+      calls.push(call);
+      warning = null;
+      arm(call);
+      // An earlier call nobody answered is dropped: its answer can't cover this one.
+      if (before?.kind === "asking") void drop(before, "superseded");
+      refresh();
     },
 
     callEnded() {
-      switch (state.kind) {
-        case "asking":
-        case "giving":
-        case "declining":
-          state.ended = true;
-          return;
-        case "told":
-          state = { kind: "idle" };
-          return;
-        case "dropping":
-          command("discard");
-          state = { kind: "idle" };
-          setMicHeld(false);
-          return;
-        default:
+      const call = newest();
+      if (!call || call.ended) return;
+      call.ended = true;
+      if (call.kind === "told") {
+        remove(call);
+      } else if (call.kind === "dropping") {
+        // Nothing is ahead of a dropping call: it waited its turn when it was declined.
+        if (call.inHelper) command("discard");
+        remove(call);
       }
+      refresh();
     },
 
     async given(callId) {
-      if (state.kind !== "asking" || state.callId !== callId) return;
-      clearTimer();
-      state = { kind: "giving", callId, ended: state.ended };
+      const call = find(callId);
+      if (!call || call.kind !== "asking") return;
+      clearTimeout(call.timer);
+      call.kind = "giving";
       let noticeId;
       try {
         noticeId = await logEvent({ kind: "noticeGiven", detail: "James told everyone on the call it is being recorded" });
       } catch (err) {
         log(`call notice: could not record the notice, so the call is not recorded (${err?.message ?? err})`);
-        if (state.callId !== callId) return;
-        finishDrop(callId, state.ended);
-        onPrompt({ state: "failed", callId });
+        call.kind = "declining";
+        await settleDropped(call);
+        warning = { state: "failed", callId };
+        refresh();
         return;
       }
-      // The recorder stopped meanwhile: the helper dropped what it held when it stopped.
-      if (state.callId !== callId) return;
-      command("release", noticeId);
-      state = state.ended ? { kind: "idle" } : { kind: "told", callId };
-      setMicHeld(false);
-      onPrompt(null);
+      await resolveInHelper(call, "release", noticeId);
+      if (call.ended || call !== newest()) remove(call);
+      else call.kind = "told";
+      refresh();
     },
 
-    declined: (callId) => drop(callId, "declined"),
+    declined: (callId) => {
+      const call = find(callId);
+      return call ? drop(call, "declined") : Promise.resolve();
+    },
 
     extend(callId) {
-      if (state.kind !== "asking" || state.callId !== callId || !state.canExtend) return;
-      state.deadline += EXTEND_MS;
-      state.canExtend = false;
-      arm();
-      ask();
+      const call = find(callId);
+      if (!call || call.kind !== "asking" || !call.canExtend) return;
+      call.deadline += EXTEND_MS;
+      call.canExtend = false;
+      arm(call);
+      refresh();
     },
 
     /** Close a "not recorded" warning. */
     dismiss() {
-      onPrompt(null);
+      warning = null;
+      refresh();
     },
 
-    /** The recorder left Recording: its helper drops anything held when it stops. */
-    recorderStopped() {
-      clearTimer();
-      if (state.kind === "idle") return;
-      state = { kind: "idle" };
-      setMicHeld(false);
-      onPrompt(null);
+    /**
+     * A new helper is starting. Returns whether it must start held: the newest call is still
+     * held (unanswered, being answered, or declined). Only that call carries into it.
+     */
+    helperStarting() {
+      const call = newest();
+      for (const c of calls) c.inHelper = false;
+      if (!call || !HELD.has(call.kind)) return false;
+      call.inHelper = true;
+      call.ready = Promise.resolve();
+      return true;
     },
 
     micHeld: () => micHeld,

@@ -6,7 +6,10 @@ export type AudioUse = { app: string | null; denylisted: boolean; input: boolean
 
 export type CallDetector = {
   receive: (use: AudioUse) => void;
-  reset: () => void;
+  /** A new helper is starting; its first report says what is still going on. */
+  beginSnapshot: () => void;
+  /** The first report is in: apps it did not mention have stopped. */
+  endSnapshot: () => void;
 };
 
 export function createCallDetector(options: {

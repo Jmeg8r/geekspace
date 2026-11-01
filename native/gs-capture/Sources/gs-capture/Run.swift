@@ -167,7 +167,17 @@ enum Run {
         ProcWatch.detachHALFromMainRunLoop()
         // How long a call may wait for its notice (CallHold.swift); the supervisor sets it.
         let maxCallSec = args.double("call-hold-max-sec", default: CallHold.defaultMaxSec)
-        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec, maxCallSec: maxCallSec) { event, fields in
+        // A helper started while a call waits for its notice or was declined holds from its first
+        // sample, so the call never reaches a sys- file (plan PR 4b).
+        let startHeld: Bool
+        switch args.string("start-held") {
+        case nil: startHeld = false
+        case "yes": startHeld = true
+        // A malformed value must never read as "don't hold" (the --rebuild-ms lesson, PR 3a).
+        case let other?: fail("--start-held takes yes, got \(other)")
+        }
+        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec, maxCallSec: maxCallSec,
+                                        startHeld: startHeld) { event, fields in
             line(event, fields)
         }
         adopt(audio)

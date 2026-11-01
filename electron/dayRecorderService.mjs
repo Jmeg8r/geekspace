@@ -38,6 +38,8 @@ export function createDayRecorderService({
   purgeIntervalMs = PURGE_INTERVAL_MS,
   retryDelaysMs = RETRY_DELAYS_MS,
   retryResetMs = RETRY_RESET_MS,
+  // Whether a new helper must hold call audio from its first sample (plan PR 4b).
+  callHeldAtStart = () => false,
 }) {
   let status = { status: "off" };
   let supervisor = null;
@@ -195,7 +197,8 @@ export function createDayRecorderService({
     supervisor = owner;
     runningKey = key;
     try {
-      owner.start({ denylist, shotSec: s.shotSec, segmentSec: SEGMENT_SEC });
+      const startHeld = callHeldAtStart();
+      owner.start({ denylist, shotSec: s.shotSec, segmentSec: SEGMENT_SEC, ...(startHeld && { startHeld }) });
     } catch (err) {
       supervisor = null;
       runningKey = null;

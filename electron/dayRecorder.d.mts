@@ -73,7 +73,8 @@ export type SupervisorOptions = {
   drainMs?: number;
 };
 
-export type StartOptions = { denylist: string[]; shotSec: number; segmentSec: number };
+/** `startHeld`: the helper holds call audio from its first sample (plan PR 4b). */
+export type StartOptions = { denylist: string[]; shotSec: number; segmentSec: number; startHeld?: boolean };
 
 export type Supervisor = {
   start: (options: StartOptions) => void;

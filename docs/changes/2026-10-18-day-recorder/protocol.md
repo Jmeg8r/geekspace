@@ -8,7 +8,7 @@ and a change here bumps `v`.
 
 ```
 gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segment-sec 300]
-               [--call-hold-max-sec 1800] [--duration s]
+               [--call-hold-max-sec 1800] [--start-held yes] [--duration s]
 ```
 
 - `--media-root` must be an existing absolute directory. Files go under `<media-root>/<day>/`.
@@ -28,6 +28,10 @@ gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segm
   that point. A supervisor that stops a helper before its `ready` should expect this.
 - **A denylist change means a restart.** The helper reads its arguments once. The supervisor
   stops it and spawns a new one. The only in-band control is the call hold (Commands, below).
+- `--start-held yes` (plan PR 4b): the helper holds from its first sample, as if `call hold`
+  came before any audio. The supervisor passes it when a helper starts (a retry, a resume) while
+  a call is unanswered or declined, so the call never reaches a `sys-` file. Any other value
+  fails the helper.
 - `--call-hold-max-sec` caps how much call audio is held (default 1800: the 15-minute notice
   timeout plus its one extension). Audio past the cap is not held; `callReleased` says so.
 
@@ -53,8 +57,11 @@ memory only** and reaches disk only after the notice.
 - `call discard`: declined or timed out. The held audio is dropped, never written. Writes
   `callDiscarded` with `"reason": "command"`.
 - A stop (signal) while a call is held drops it the same way, with `"reason": "stop"`.
-- An unknown command, `call hold` while one is held, or `call release`/`call discard` with
-  none held is a supervisor bug: the helper fails (stderr, non-zero exit).
+- **Several calls can be held at once** (plan PR 4b): `call hold` while a call is held starts a
+  new call there, held apart. `call release` and `call discard` always resolve the **oldest**
+  call still waiting; the supervisor sends them in the order the calls began.
+- An unknown command, or `call release`/`call discard` with no call held, is a supervisor
+  bug: the helper fails (stderr, non-zero exit).
 - The commands carry no notice id. The supervisor attaches the `noticeGiven` event it
   released with to each `call` segment, and stores a `call` segment only after it sent
   `call release` (Convex `addSegment` refuses one without a given notice too).

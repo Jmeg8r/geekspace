@@ -37,6 +37,8 @@ export type ServiceOptions = {
   purgeIntervalMs?: number;
   retryDelaysMs?: number[];
   retryResetMs?: number;
+  /** Asked as each helper starts: hold call audio from its first sample (plan PR 4b). */
+  callHeldAtStart?: () => boolean;
 };
 
 export type DayRecorderService = {

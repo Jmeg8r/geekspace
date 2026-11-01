@@ -17,11 +17,11 @@ function harness() {
 }
 
 describe("createCallDetector", () => {
-  it("starts a call when a call app takes the mic, and ends it when it lets go", () => {
+  it("starts a call when a call app takes the mic, and ends it when it stops using audio", () => {
     const h = harness();
     h.detector.receive(use("us.zoom.xos", true, true));
     expect(h.onCall).toHaveBeenLastCalledWith({ active: true, app: "us.zoom.xos" });
-    h.detector.receive(use("us.zoom.xos", false, true));
+    h.detector.receive(use("us.zoom.xos", false, false));
     expect(h.onCall).toHaveBeenLastCalledWith({ active: false, app: null });
     expect(h.onCall).toHaveBeenCalledTimes(2);
   });
