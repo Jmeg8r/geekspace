@@ -418,7 +418,7 @@ describe("Day Recorder supervisor, call hold under pressure", () => {
     h.supervisor.holdCall();
     h.supervisor.releaseCall("notice-2");
     await until(() => h.rows.length === 4);
-    expect(h.rows.map((r) => (r.args.kind === "call" ? r.args.noticeEventId : null))).toEqual([
+    expect(h.rows.map((r) => (r.table === "captureSegments" && r.args.kind === "call" ? r.args.noticeEventId : null))).toEqual([
       "notice-1",
       "notice-1",
       "notice-2",

@@ -22,6 +22,8 @@ const STEP_MS = { settle: 3000, held: 5000, gap: 3000, discarded: 4000, after: 3
 const CALL_RATE = 16000;
 // spike-tone plays at about 0.25 peak; well above the noise floor of an idle tap.
 const MIN_TONE_PEAK = 0.05;
+// The tap delivers 10 ms chunks; a boundary can fall inside one.
+const CHUNK_MS = 10;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -87,6 +89,10 @@ async function main() {
     const released = events.find((e) => e.event === "callReleased");
     const discarded = events.find((e) => e.event === "callDiscarded");
     const firstHold = events.find((e) => e.event === "callHeld").at;
+    // Each call's window, from its callHeld time to the moment its release/discard was sent.
+    const held = events.filter((e) => e.event === "callHeld").map((e) => e.t);
+    const ended = events.filter((e) => e.event === "> call release" || e.event === "> call discard").map((e) => e.at);
+    const windows = held.map((t, i) => [t, ended[i]]);
     const files = fs.readdirSync(root, { recursive: true }).map(String);
     const callFiles = files.filter((f) => path.basename(f).startsWith("call-"));
     const partials = files.filter((f) => path.basename(f).startsWith(".partial-"));
@@ -103,6 +109,9 @@ async function main() {
       discardedTheSecondCall: discarded?.reason === "command" && discarded.heldSec > 0,
       recordingResumedAfterRelease: systems.some((s) => s.at > released.at),
       noPartialsLeft: partials.length === 0,
+      // Codex 4a r1: the tail still in the 500 ms hold-back must follow its call, so no sys-
+      // segment may cover a call's time (beyond the 10 ms chunk a boundary falls in).
+      noSystemAudioInsideACall: systems.every((s) => windows.every(([from, to]) => Math.min(s.end, to) - Math.max(s.start, from) <= CHUNK_MS)),
     };
     console.log(
       JSON.stringify(

@@ -144,8 +144,9 @@ export function createSupervisor({
   let exited = Promise.resolve();
   let stopRequested = false;
   let sawStopped = false;
-  // The notice event that released the call audio now arriving; null when nothing is released.
-  let releasing = null;
+  // The notice events of released calls whose audio has not all arrived, oldest first. The
+  // helper settles calls in order, so each call segment belongs to the first (Codex #4a r1).
+  let releasing = [];
   let lastStderr = "";
   let silenceTimer = null;
   const pending = new Set();
@@ -247,20 +248,20 @@ export function createSupervisor({
         if (m.kind === "call") {
           // Spec R5: call audio is stored only with the notice that released it. A call segment
           // nobody released means the helper broke the hold, so capture stops over it.
-          if (!releasing) {
+          if (releasing.length === 0) {
             if (state.status !== "notRecording" && !stopRequested) {
               fail({ reason: "protocol", message: "gs-capture announced call audio that was never released" });
               terminate(proc);
             }
             return;
           }
-          row.noticeEventId = releasing;
+          row.noticeEventId = releasing[0];
         }
         store("segment", sink.addSegment, row);
         return;
       }
       case "callReleased":
-        releasing = null;
+        releasing.shift();
         log(diagnostic(m));
         return;
       case "stopped":
@@ -315,9 +316,15 @@ export function createSupervisor({
       return;
     }
     child = proc;
-    releasing = null;
-    // A helper that has exited closes its stdin; a command written then is reported here.
-    proc.stdin?.on("error", (err) => log(`could not send a command to gs-capture (${err?.code ?? err})`));
+    releasing = [];
+    // A broken command channel means a hold may never reach the helper, which would then go
+    // on writing call audio as system audio: capture stops (Codex #4a r1). After an exit this
+    // is the exit's echo, already handled.
+    proc.stdin?.on("error", (err) => {
+      if (child !== proc) return;
+      fail({ reason: "protocol", message: `the command channel to gs-capture broke (${err?.code ?? "error"})` });
+      terminate(proc);
+    });
     exited = new Promise((resolve) => {
       proc.once("close", (code, signal) => {
         onExit(proc, code, signal);
@@ -388,7 +395,7 @@ export function createSupervisor({
     /** The notice was given: the held audio is written and stored with this notice event. */
     releaseCall(noticeEventId) {
       sendCommand("call release");
-      releasing = noticeEventId;
+      releasing.push(noticeEventId);
     },
     /** Declined or timed out: the held audio is dropped unwritten. */
     discardCall: () => sendCommand("call discard"),

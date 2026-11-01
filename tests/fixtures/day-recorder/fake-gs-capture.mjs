@@ -2,6 +2,8 @@
 // child process on every platform (CI is ubuntu and cannot build the Swift helper).
 // It speaks protocol v1 (docs/changes/2026-10-18-day-recorder/protocol.md) and acts out the
 // scenario named in FAKE_SCENARIO. Every captured value in here is invented.
+import fs from "node:fs";
+
 const scenario = process.env.FAKE_SCENARIO ?? "healthy";
 const args = process.argv.slice(2);
 
@@ -148,8 +150,12 @@ switch (scenario) {
     ready();
     beat = setInterval(() => line("heartbeat", { t: Date.now() }), 50);
     if (process.env.FAKE_STRAY_CALL) setTimeout(() => line("segment", callSegment(0)), 30);
-    // A command channel that breaks while capture goes on.
-    if (process.env.FAKE_CLOSE_STDIN) setTimeout(() => process.stdin.destroy(), 30);
+    // A command channel that breaks while capture goes on: fd 0 itself is closed, so the
+    // supervisor's next write fails with EPIPE (destroying the stream would not close it).
+    if (process.env.FAKE_CLOSE_STDIN) {
+      setTimeout(() => fs.closeSync(0), 30);
+      break;
+    }
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (text) => {
       for (const command of text.split("\n").filter(Boolean)) {

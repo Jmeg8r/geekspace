@@ -101,3 +101,110 @@ final class CallHold {
         return written
     }
 }
+
+/// Routes released tap audio by when it was captured: system audio to the writer, call audio
+/// to that call's hold, a discarded call's audio nowhere (Codex review of PR 4a, round 1).
+/// WHY by capture time: a command lands while up to 500 ms of audio still sits in PCMHold.
+/// Routed by the mode at delivery, a discarded call's tail reached a sys- file and a released
+/// call's tail was filed as system audio. A call is settled (written or dropped) only once
+/// everything captured before its end has been delivered.
+/// Used from the recorder's control queue only.
+final class CallRouter {
+    private enum Fate { case pending, release, discard(String) }
+    private final class Call {
+        let hold: CallHold
+        var fate = Fate.pending
+        init(maxSec: Double) { hold = CallHold(maxSec: maxSec) }
+    }
+    /// From `fromMs` on, audio belongs to `call` (nil: system audio).
+    private struct Span {
+        let fromMs: Double
+        let call: Call?
+    }
+
+    private let maxSec: Double
+    private let append: (PCMChunk) -> Void
+    private let closeSystem: () -> Void
+    private let flush: ([CallHold.Run]) -> Int
+    private let report: (String, [String: Any]) -> Void
+    private var spans = [Span(fromMs: -.infinity, call: nil)]
+    private var routingCall = false
+
+    init(maxSec: Double, append: @escaping (PCMChunk) -> Void, closeSystem: @escaping () -> Void,
+         flush: @escaping ([CallHold.Run]) -> Int, report: @escaping (String, [String: Any]) -> Void) {
+        self.maxSec = maxSec
+        self.append = append
+        self.closeSystem = closeSystem
+        self.flush = flush
+        self.report = report
+    }
+
+    private var open: Call? {
+        guard let call = spans.last?.call, case .pending = call.fate else { return nil }
+        return call
+    }
+
+    var canHold: Bool { spans.last?.call == nil }
+    var canRelease: Bool { open != nil }
+    var canDiscard: Bool { open != nil }
+
+    func hold(at t: Double) {
+        spans.append(Span(fromMs: t, call: Call(maxSec: maxSec)))
+        report("callHeld", ["t": round3(t)])
+    }
+
+    func release(at t: Double) {
+        open?.fate = .release
+        spans.append(Span(fromMs: t, call: nil))
+    }
+
+    func discard(at t: Double, reason: String = "command") {
+        open?.fate = .discard(reason)
+        spans.append(Span(fromMs: t, call: nil))
+    }
+
+    func deliver(_ chunk: PCMChunk, sourceRate: Double) {
+        let startMs = chunk.endMs - Double(chunk.samples.count) / sourceRate * 1000
+        let span = spans.last { $0.fromMs <= startMs } ?? spans[0]
+        guard let call = span.call else {
+            routingCall = false
+            append(chunk)
+            return
+        }
+        // The system segment ends where the call begins, so no call audio is in a sys- file.
+        if !routingCall {
+            closeSystem()
+            routingCall = true
+        }
+        if case .discard = call.fate { return }
+        call.hold.store(chunk, sourceRate: sourceRate)
+    }
+
+    /// Write or drop every call whose audio has all been delivered: everything captured
+    /// before `frontier` is out of PCMHold.
+    func settle(frontier: Double) {
+        while spans.count > 1, spans[1].fromMs <= frontier {
+            let done = spans.removeFirst()
+            guard let call = done.call else { continue }
+            switch call.fate {
+            case .release:
+                let (heldSec, overflowed) = (call.hold.heldSec, call.hold.overflowed)
+                let segments = flush(call.hold.take())
+                report("callReleased", ["segments": segments, "heldSec": round3(heldSec), "overflowed": overflowed])
+            case .discard(let reason):
+                let heldSec = call.hold.heldSec
+                _ = call.hold.take()
+                report("callDiscarded", ["heldSec": round3(heldSec), "reason": reason])
+            case .pending:
+                fail("call router: a call ended without a release or a discard")
+            }
+        }
+    }
+
+    /// The tap has stopped and everything is delivered: a call still waiting for its notice
+    /// is dropped (never written without one), and the rest settle.
+    func stop() {
+        if open != nil { discard(at: .infinity, reason: "stop") }
+        settle(frontier: .infinity)
+    }
+}

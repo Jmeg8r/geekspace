@@ -73,6 +73,16 @@ final class PCMHold: TapSink, @unchecked Sendable {
 
     func sampleCount() -> Int { lock.withLock { total } }
 
+    /// Everything captured before this has been delivered: the oldest held chunk's start, or,
+    /// with nothing held, the newest moment a delivered chunk could have ended.
+    func frontier(limit: Double) -> Double {
+        lock.withLock {
+            let released = limit - holdMs
+            guard let oldest = pending.first else { return released }
+            return min(released, oldest.endMs - Double(oldest.samples.count) / sampleRate * 1000)
+        }
+    }
+
     var rate: Double { lock.withLock { sampleRate } }
 
     /// Only between sessions, after a drop: anything still held was captured at the old rate.
@@ -260,8 +270,8 @@ final class SystemAudioRecorder {
     private let segmentSec: Double
     private let maxCallSec: Double
     private let report: (String, [String: Any]) -> Void
-    /// Set while a call waits for its notice: released audio goes here, not to the writer.
-    private var callHold: CallHold?
+    /// Decides, by capture time, whether released audio is system audio or a call's.
+    private var router: CallRouter!
 
     /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped`,
     /// `sessionUnverified`, `sampleRateChanged` and `audioUse`.
@@ -271,6 +281,11 @@ final class SystemAudioRecorder {
         self.segmentSec = segmentSec
         self.maxCallSec = maxCallSec
         self.report = report
+        router = CallRouter(maxSec: maxCallSec,
+                            append: { [unowned self] in self.writer?.append($0) },
+                            closeSystem: { [unowned self] in self.writer?.close() },
+                            flush: { [unowned self] runs in CallHold.flush(runs, root: self.root, segmentSec: self.segmentSec, report: self.report) },
+                            report: report)
         queue.sync {
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
             // silenced only one of two live instances (spike Q2). Bundle-ID taps need macOS 26.
@@ -291,11 +306,10 @@ final class SystemAudioRecorder {
                     return hold
                 }
                 let writer = SegmentWriter(root: root, segmentSec: segmentSec, sampleRate: format.mSampleRate, report: report)
-                // Released audio goes to the call hold while a call waits for its notice.
+                // Released audio is routed by when it was captured (CallRouter).
                 let hold = PCMHold(holdMs: SystemAudioRecorder.holdMs, sampleRate: format.mSampleRate,
-                                   deliver: { [unowned self] chunk in
-                                       if let call = self.callHold { call.store(chunk, sourceRate: writer.sampleRate) } else { writer.append(chunk) }
-                                   }, onDrop: writer.close)
+                                   deliver: { [unowned self] chunk in self.router.deliver(chunk, sourceRate: writer.sampleRate) },
+                                   onDrop: writer.close)
                 self.writer = writer
                 self.hold = hold
                 return hold
@@ -311,7 +325,9 @@ final class SystemAudioRecorder {
             timer.setEventHandler {
                 // tick returns the release limit, read before it checks arrivals and capped at
                 // the last completed classification pass (Codex review of PR 3b-2, rounds 4-5).
-                runner.sink.release(now: runner.tick(poll: true))
+                let limit = runner.tick(poll: true)
+                runner.sink.release(now: limit)
+                if let hold = self.hold { self.router.settle(frontier: hold.frontier(limit: limit)) }
                 watcher.tick(known: runner.knownDenied())
             }
             timer.resume()
@@ -326,47 +342,36 @@ final class SystemAudioRecorder {
             guard let runner, let timer else { return }
             timer.cancel()
             runner.finish(tailCheck: true)
-            // Never written without a notice: a stop while a call is held drops it.
-            if let call = callHold { discard(call, reason: "stop") }
+            // Everything is delivered: a call still waiting for its notice is dropped.
+            router.stop()
             writer?.close()
             self.timer = nil
             self.runner = nil
         }
     }
 
-    /// A call started: close the open segment so no call audio is in it, and hold from here.
+    /// A call started: audio captured from now on is the call's, held in memory.
     func holdCall() {
         queue.sync {
-            guard callHold == nil else { fail("call hold: a call is already held") }
-            writer?.close()
-            callHold = CallHold(maxSec: maxCallSec)
-            report("callHeld", ["t": round3(nowMs())])
+            guard router.canHold else { fail("call hold: a call is already held") }
+            router.hold(at: nowMs())
         }
     }
 
-    /// The notice was given: write what was held as `call` segments, then record as usual.
+    /// The notice was given: the call's audio, up to now, is written as `call` segments once
+    /// it has all been delivered; what comes after is system audio again.
     func releaseCall() {
         queue.sync {
-            guard let call = callHold else { fail("call release: no call is held") }
-            callHold = nil
-            let (heldSec, overflowed) = (call.heldSec, call.overflowed)
-            let segments = CallHold.flush(call.take(), root: root, segmentSec: segmentSec, report: report)
-            report("callReleased", ["segments": segments, "heldSec": round3(heldSec), "overflowed": overflowed])
+            guard router.canRelease else { fail("call release: no call is held") }
+            router.release(at: nowMs())
         }
     }
 
-    /// Declined or timed out: drop what was held, unwritten.
+    /// Declined or timed out: the call's audio, up to now, is dropped unwritten.
     func discardCall() {
         queue.sync {
-            guard let call = callHold else { fail("call discard: no call is held") }
-            discard(call, reason: "command")
+            guard router.canDiscard else { fail("call discard: no call is held") }
+            router.discard(at: nowMs())
         }
-    }
-
-    private func discard(_ call: CallHold, reason: String) {
-        callHold = nil
-        let heldSec = call.heldSec
-        _ = call.take()
-        report("callDiscarded", ["heldSec": round3(heldSec), "reason": reason])
     }
 }
