@@ -21,3 +21,8 @@ export function createKeyStore(options: {
     existsSync: (file: string) => boolean;
   };
 }): KeyStore;
+
+export function registerAssistantIpc(options: {
+  handle: (channel: string, fn: (args: { key?: string | number | null }) => boolean | void) => void;
+  keyStore: Pick<KeyStore, "set" | "has" | "clear">;
+}): void;

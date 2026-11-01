@@ -32,3 +32,18 @@ export function createKeyStore({ file, safeStorage, fs }) {
     },
   };
 }
+
+/**
+ * The page's key channels, through main.mjs's guarded handle(). Write-only (spec F4): a page
+ * can set the key, clear it, or ask whether there is one; nothing returns the key itself.
+ */
+export function registerAssistantIpc({ handle, keyStore }) {
+  handle("gs:assistant:hasApiKey", () => keyStore.has());
+  handle("gs:assistant:setApiKey", ({ key }) => {
+    if (typeof key !== "string") throw new Error("An API key is text");
+    keyStore.set(key);
+  });
+  handle("gs:assistant:clearApiKey", () => {
+    keyStore.clear();
+  });
+}

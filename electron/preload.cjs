@@ -80,6 +80,13 @@ const api = {
       return () => ipcRenderer.removeListener("gs:dayRecorder:event", listener);
     },
   },
+  // The Day Recorder assistant's API key (plan PR 6a, spec F4): write-only. A page can set or
+  // clear it, or ask whether one is saved; nothing returns the key.
+  assistant: {
+    setApiKey: (key) => invoke("gs:assistant:setApiKey", { key }),
+    clearApiKey: () => invoke("gs:assistant:clearApiKey"),
+    hasApiKey: () => invoke("gs:assistant:hasApiKey"),
+  },
   chrome: {
     setOverlay: (color, symbolColor) => invoke("gs:chrome:setOverlay", { color, symbolColor }),
   },
