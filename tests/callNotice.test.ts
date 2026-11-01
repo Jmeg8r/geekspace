@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EXTEND_MS, NOTICE_TIMEOUT_MS, createCallNotice, statusWithCall, type CallPrompt } from "../electron/callNotice.mjs";
 
 // WHAT: the call notice (plan PR 4b, spec R5 / F3). WHY tested: this is where "no call audio
-// is written without a notice" is decided. Without a notice the helper is only ever told to
-// discard, the mic stays off, and nothing is released; with one, the release carries the id
-// of the noticeGiven event that was written first. A declined call stays unrecorded until it
-// ends, across helper restarts and pauses (Codex 4b r1).
+// is written without a notice" is decided. Every helper starts held until its first audio-use
+// report; a call is held from its first sample; only "I told them" releases it, with the id of
+// the noticeGiven event written first; everything else keeps it held until it is dropped.
+// Calls belong to one helper: a new helper asks again (Codex 4b r2).
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -25,6 +25,7 @@ function harness(opts: { logFails?: boolean; slowLog?: boolean } = {}) {
       hold: () => void calls.push("hold"),
       release: (id: string) => void calls.push(`release ${id}`),
       discard: () => void calls.push("discard"),
+      clear: () => void calls.push("clear"),
     },
     logEvent: async (event: { kind: "noticeGiven" | "noticeDeclined"; detail: string }) => {
       calls.push(`log ${event.kind}`);
@@ -47,13 +48,74 @@ function harness(opts: { logFails?: boolean; slowLog?: boolean } = {}) {
     pendingLogs.shift()?.();
     await vi.advanceTimersByTimeAsync(0);
   };
-  return { notice, calls, prompts, micHeld, prompt, asking, finishLog, mic: () => micHeld.at(-1) ?? false };
+  /** A helper that has started and reported, with no call going on. */
+  const running = () => {
+    expect(notice.helperStarting()).toBe(true);
+    notice.audioReady();
+    calls.length = 0;
+  };
+  return { notice, calls, prompts, micHeld, prompt, asking, finishLog, running, mic: () => micHeld.at(-1) ?? false };
 }
 
-describe("createCallNotice", () => {
+describe("createCallNotice, a helper starting", () => {
+  it("always starts held, keeps the mic off until the first report, then clears the hold", () => {
+    const h = harness();
+    expect(h.notice.helperStarting()).toBe(true);
+    expect(h.notice.micHeld()).toBe(true);
+    h.notice.audioReady();
+    expect(h.calls).toEqual(["clear"]);
+    expect(h.notice.micHeld()).toBe(false);
+  });
+
+  it("a call already going on keeps the startup hold as its own, and is asked about", async () => {
+    const h = harness();
+    h.notice.helperStarting();
+    h.notice.callAppStarted("us.zoom.xos");
+    h.notice.audioReady();
+    expect(h.calls).toEqual([]);
+    expect(h.asking()).toMatchObject({ app: "us.zoom.xos" });
+    expect(h.notice.micHeld()).toBe(true);
+    await h.notice.given(h.asking().callId);
+    expect(h.calls).toEqual(["log noticeGiven", "release event-1"]);
+    expect(h.notice.micHeld()).toBe(false);
+  });
+
+  // Codex 4b r2 P1: decisions do not cross helpers. A call still going on is asked about again.
+  it("forgets the old helper's calls, and their late answers do nothing", async () => {
+    const h = harness({ slowLog: true });
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
+    const answered = h.notice.given(h.asking().callId);
+    h.notice.helperGone();
+    expect(h.prompt()).toBeNull();
+    h.notice.helperStarting();
+    await h.finishLog();
+    await answered;
+    expect(h.calls.filter((c) => c.startsWith("release"))).toEqual([]);
+    h.notice.callAppStarted("us.zoom.xos");
+    h.notice.audioReady();
+    expect(h.asking()).toMatchObject({ app: "us.zoom.xos" });
+  });
+
+  it("a declined call is asked about again after a restart, and stays held until answered", async () => {
+    const h = harness();
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
+    await h.notice.declined(h.asking().callId);
+    h.notice.helperGone();
+    expect(h.notice.helperStarting()).toBe(true);
+    h.notice.callAppStarted("us.zoom.xos");
+    h.notice.audioReady();
+    expect(h.asking()).toMatchObject({ app: "us.zoom.xos" });
+    expect(h.notice.micHeld()).toBe(true);
+  });
+});
+
+describe("createCallNotice, a call", () => {
   it("holds the call and asks, without releasing anything", () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     expect(h.calls).toEqual(["hold"]);
     expect(h.mic()).toBe(true);
     expect(h.asking()).toMatchObject({ app: "us.zoom.xos", canExtend: true, deadline: Date.now() + NOTICE_TIMEOUT_MS });
@@ -61,40 +123,45 @@ describe("createCallNotice", () => {
 
   it("I told them: writes noticeGiven first, then releases with its id, and the mic comes back", async () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     await h.notice.given(h.asking().callId);
     expect(h.calls).toEqual(["hold", "log noticeGiven", "release event-1"]);
     expect(h.mic()).toBe(false);
     expect(h.prompt()).toBeNull();
   });
 
-  it("Don't record this call: discards, and keeps the rest of the call unrecorded until it ends", async () => {
+  // Codex 4b r2 P1: no discard-then-hold gap; the declined call simply stays held.
+  it("Don't record this call: keeps it held, unwritten, and drops it when it ends", async () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     await h.notice.declined(h.asking().callId);
-    expect(h.calls).toEqual(["hold", "log noticeDeclined", "discard", "hold"]);
+    expect(h.calls).toEqual(["hold", "log noticeDeclined"]);
     expect(h.mic()).toBe(true);
     expect(h.prompt()).toBeNull();
     h.notice.callEnded();
-    expect(h.calls.at(-1)).toBe("discard");
+    expect(h.calls).toEqual(["hold", "log noticeDeclined", "discard"]);
     expect(h.mic()).toBe(false);
-    expect(h.calls.filter((c) => c.startsWith("release"))).toEqual([]);
   });
 
-  it("no answer by the deadline: discards, warns, and keeps the call unrecorded", async () => {
+  it("no answer by the deadline: keeps it held, warns, and drops it when it ends", async () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     await vi.advanceTimersByTimeAsync(NOTICE_TIMEOUT_MS);
-    expect(h.calls).toEqual(["hold", "log noticeDeclined", "discard", "hold"]);
+    expect(h.calls).toEqual(["hold", "log noticeDeclined"]);
     expect(h.prompt()).toMatchObject({ state: "timedOut" });
-    expect(h.mic()).toBe(true);
     h.notice.dismiss();
     expect(h.prompt()).toBeNull();
+    h.notice.callEnded();
+    expect(h.calls.at(-1)).toBe("discard");
   });
 
   it("gives one extension, and only one", async () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     const id = h.asking().callId;
     const first = h.asking().deadline;
     h.notice.extend(id);
@@ -104,19 +171,21 @@ describe("createCallNotice", () => {
     await vi.advanceTimersByTimeAsync(NOTICE_TIMEOUT_MS);
     expect(h.calls).toEqual(["hold"]);
     await vi.advanceTimersByTimeAsync(EXTEND_MS);
-    expect(h.calls).toContain("discard");
+    expect(h.calls).toContain("log noticeDeclined");
   });
 
   it("ignores an answer for another call", async () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     await h.notice.given("call-that-was-never-asked");
     expect(h.calls).toEqual(["hold"]);
   });
 
   it("can still be answered after the call ended, while the deadline holds", async () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     const id = h.asking().callId;
     h.notice.callEnded();
     expect(h.asking().callId).toBe(id);
@@ -127,11 +196,34 @@ describe("createCallNotice", () => {
 
   it("a notice that can't be written means the call is not recorded", async () => {
     const h = harness({ logFails: true });
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     await h.notice.given(h.asking().callId);
-    expect(h.calls).toEqual(["hold", "log noticeGiven", "discard", "hold"]);
+    expect(h.calls).toEqual(["hold", "log noticeGiven"]);
     expect(h.prompt()).toMatchObject({ state: "failed" });
-    expect(h.calls.filter((c) => c.startsWith("release"))).toEqual([]);
+    expect(h.mic()).toBe(true);
+    h.notice.callEnded();
+    expect(h.calls.at(-1)).toBe("discard");
+  });
+
+  it("an app joining an unanswered call is part of that call", () => {
+    const h = harness();
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
+    h.notice.callAppStarted("com.tinyspeck.slackmacgap");
+    expect(h.calls).toEqual(["hold"]);
+  });
+
+  // Codex 4b r2 P1: a new app can't ride on an earlier "I told them".
+  it("an app joining a told call is a new call, held and asked about", async () => {
+    const h = harness();
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
+    await h.notice.given(h.asking().callId);
+    h.notice.callAppStarted("com.microsoft.teams2");
+    expect(h.calls).toEqual(["hold", "log noticeGiven", "release event-1", "hold"]);
+    expect(h.asking()).toMatchObject({ app: "com.microsoft.teams2" });
+    expect(h.mic()).toBe(true);
   });
 
   it("a helper command that throws is logged, and the call is still asked about", () => {
@@ -144,119 +236,64 @@ describe("createCallNotice", () => {
         },
         release: () => {},
         discard: () => {},
+        clear: () => {},
       },
       logEvent: async () => "event-1",
       onPrompt: (p) => void prompts.push(p),
       onMicHeld: () => {},
       log: (m) => void logs.push(m),
     });
-    notice.callStarted("us.zoom.xos");
+    notice.helperStarting();
+    notice.audioReady();
+    notice.callAppStarted("us.zoom.xos");
     expect(logs.some((l) => l.includes("not running"))).toBe(true);
     expect(prompts.at(-1)).toMatchObject({ state: "asking" });
   });
 });
 
-// Codex 4b r1 P1: a call that starts while an earlier one is unresolved must get its own
-// notice, and the earlier answer must never cover it.
 describe("createCallNotice, a second call before the first is resolved", () => {
   it("an unanswered earlier call is dropped, and the new one is asked about on its own", async () => {
     const h = harness();
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     const first = h.asking().callId;
     h.notice.callEnded();
-    h.notice.callStarted("com.google.Chrome");
+    h.notice.callAppStarted("com.google.Chrome");
     await vi.advanceTimersByTimeAsync(0);
     // Held apart first, so not a sample of the second call is in the first's hold.
     expect(h.calls).toEqual(["hold", "hold", "log noticeDeclined", "discard"]);
     expect(h.asking()).toMatchObject({ app: "com.google.Chrome" });
-    expect(h.asking().callId).not.toBe(first);
     await h.notice.given(first);
     expect(h.calls.filter((c) => c.startsWith("release"))).toEqual([]);
-    expect(h.mic()).toBe(true);
   });
 
   it("a yes being written when the next call starts releases the first call only", async () => {
     const h = harness({ slowLog: true });
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     const answered = h.notice.given(h.asking().callId);
     h.notice.callEnded();
-    h.notice.callStarted("com.google.Chrome");
-    expect(h.calls).toEqual(["hold", "log noticeGiven", "hold"]);
+    h.notice.callAppStarted("com.google.Chrome");
     await h.finishLog();
     await answered;
     expect(h.calls).toEqual(["hold", "log noticeGiven", "hold", "release event-1"]);
     expect(h.asking()).toMatchObject({ app: "com.google.Chrome" });
-    expect(h.mic()).toBe(true);
   });
 
   it("a no being written when the next call starts drops the first call only", async () => {
     const h = harness({ slowLog: true });
-    h.notice.callStarted("us.zoom.xos");
+    h.running();
+    h.notice.callAppStarted("us.zoom.xos");
     const answered = h.notice.declined(h.asking().callId);
     h.notice.callEnded();
-    h.notice.callStarted("com.google.Chrome");
+    h.notice.callAppStarted("com.google.Chrome");
     await h.finishLog();
     await answered;
     expect(h.calls).toEqual(["hold", "log noticeDeclined", "hold", "discard"]);
     expect(h.asking()).toMatchObject({ app: "com.google.Chrome" });
-    expect(h.mic()).toBe(true);
   });
 });
 
-// Codex 4b r1 P1: a helper retry, a pause, or a restart must not forget a decision.
-describe("createCallNotice, across helper restarts", () => {
-  it("a helper starting while a call is declined starts held, and the call stays unrecorded", async () => {
-    const h = harness();
-    h.notice.callStarted("us.zoom.xos");
-    await h.notice.declined(h.asking().callId);
-    expect(h.notice.helperStarting()).toBe(true);
-    expect(h.mic()).toBe(true);
-    h.notice.callEnded();
-    expect(h.calls.at(-1)).toBe("discard");
-    expect(h.mic()).toBe(false);
-    expect(h.calls.filter((c) => c.startsWith("release"))).toEqual([]);
-  });
-
-  it("a helper starting while a call is being asked about starts held; the answer releases its audio", async () => {
-    const h = harness();
-    h.notice.callStarted("us.zoom.xos");
-    expect(h.notice.helperStarting()).toBe(true);
-    await h.notice.given(h.asking().callId);
-    expect(h.calls).toEqual(["hold", "log noticeGiven", "release event-1"]);
-  });
-
-  it("only the newest call survives a restart; an older one can't be released into the new helper", async () => {
-    const h = harness({ slowLog: true });
-    h.notice.callStarted("us.zoom.xos");
-    const answered = h.notice.given(h.asking().callId);
-    h.notice.callEnded();
-    h.notice.callStarted("com.google.Chrome");
-    expect(h.notice.helperStarting()).toBe(true);
-    await h.finishLog();
-    await answered;
-    // The first call's audio went with the old helper; nothing of it is in the new one.
-    expect(h.calls).toEqual(["hold", "log noticeGiven", "hold"]);
-    expect(h.asking()).toMatchObject({ app: "com.google.Chrome" });
-  });
-
-  it("a helper starting with no call, or a told one, starts unheld", async () => {
-    const h = harness();
-    expect(h.notice.helperStarting()).toBe(false);
-    h.notice.callStarted("us.zoom.xos");
-    await h.notice.given(h.asking().callId);
-    expect(h.notice.helperStarting()).toBe(false);
-  });
-
-  it("the deadline keeps running while the recorder is stopped", async () => {
-    const h = harness();
-    h.notice.callStarted("us.zoom.xos");
-    h.notice.helperStarting();
-    await vi.advanceTimersByTimeAsync(NOTICE_TIMEOUT_MS);
-    expect(h.prompt()).toMatchObject({ state: "timedOut" });
-  });
-});
-
-// The tray and the app say "Call — not saved yet" only while the question is open.
 describe("statusWithCall", () => {
   const open: CallPrompt = { state: "asking", callId: "c", app: "us.zoom.xos", deadline: 1, canExtend: true };
   it("marks Recording as held while the question is open", () => {

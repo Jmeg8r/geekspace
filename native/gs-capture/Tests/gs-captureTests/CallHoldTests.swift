@@ -280,6 +280,28 @@ final class CallRouterTests: XCTestCase {
         XCTAssertEqual(sink.flushed.count, 1)
     }
 
+    // Codex 4b r2: every helper starts held until its first audio-use report; with no call
+    // going on, `call clear` turns what was held into ordinary system audio.
+    func testClearWritesTheStartupHoldAsSystemAudio() {
+        let sink = Sink()
+        var systemRuns: [[Double]] = []
+        let router = CallRouter(maxSec: 60, startHeld: true,
+                                append: { sink.system.append($0.endMs - 10) },
+                                closeSystem: { sink.systemCloses += 1 },
+                                flush: { runs in sink.flushed.append(runs.map(\.startMs)); return runs.count },
+                                flushSystem: { runs in systemRuns.append(runs.map(\.startMs)); return runs.count },
+                                report: { sink.reports.append(($0, $1)) })
+        router.deliver(chunk(0), sourceRate: 16_000)
+        XCTAssertTrue(router.canClear)
+        router.clear(at: 20)
+        router.deliver(chunk(20), sourceRate: 16_000)
+        router.settle(frontier: 30)
+        XCTAssertEqual(systemRuns, [[0]])
+        XCTAssertTrue(sink.flushed.isEmpty, "no call- file: there was no call")
+        XCTAssertEqual(sink.system, [20])
+        XCTAssertEqual(events(sink), ["callHeld", "callCleared"])
+    }
+
     // Codex 4b r1 P1: a helper started while a call waits for its notice, or was declined,
     // holds from its first sample instead of recording the call as system audio.
     func testAStartHeldRouterHoldsFromTheFirstSample() {

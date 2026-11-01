@@ -151,6 +151,7 @@ switch (scenario) {
     beat = setInterval(() => line("heartbeat", { t: Date.now() }), 50);
     if (process.env.FAKE_STRAY_CALL) setTimeout(() => line("segment", callSegment(0)), 30);
     if (process.env.FAKE_AUDIO_USE) line("audioUse", { app: "us.zoom.xos", denylisted: false, input: true, output: true });
+    line("audioUseReady", { apps: process.env.FAKE_AUDIO_USE ? 1 : 0, t: Date.now() });
     // A command channel that breaks while capture goes on: fd 0 itself is closed, so the
     // supervisor's next write fails with EPIPE (destroying the stream would not close it).
     if (process.env.FAKE_CLOSE_STDIN) {
@@ -166,6 +167,10 @@ switch (scenario) {
           line("segment", callSegment(1));
           line("callReleased", { heldSec: 600, overflowed: false, segments: 2 });
         } else if (command === "call discard") line("callDiscarded", { heldSec: 42, reason: "command" });
+        else if (command === "call clear") {
+          line("segment", { day: "2026-10-20", end: 1_760_970_001_500, kind: "system", path: "2026-10-20/sys-102000-000-1760970000000.m4a", peak: 0.1, start: 1_760_970_000_000 });
+          line("callCleared", { heldSec: 1.5, segments: 1 });
+        }
         else {
           process.stderr.write(`gs-capture: unknown command ${command}\n`);
           process.exit(4);

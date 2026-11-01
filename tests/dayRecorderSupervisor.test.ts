@@ -476,3 +476,24 @@ describe("Day Recorder supervisor, start held", () => {
     expect(argv[1]).toContain("--start-held");
   });
 });
+
+// Codex 4b r2: every helper starts held until its first audio-use report; with no call going
+// on, the held start becomes ordinary system audio.
+describe("Day Recorder supervisor, the first report and the startup hold", () => {
+  it("parses audioUseReady and callCleared", () => {
+    expect(parseLine('{"v":1,"event":"audioUseReady","apps":2,"t":1}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callCleared","segments":1,"heldSec":1.5}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioUseReady","apps":"two","t":1}').ok).toBe(false);
+  });
+
+  it("says when the first report is in, and clears the startup hold into system segments", async () => {
+    let ready = 0;
+    const h = started(harness("call", { onAudioUseReady: () => void (ready += 1) }));
+    await until(() => ready === 1);
+    h.supervisor.clearCall();
+    await until(() => h.rows.length === 1);
+    expect(h.rows[0].args).toMatchObject({ kind: "system", path: expect.stringContaining("/sys-") });
+    expect(h.rows[0].args).not.toHaveProperty("noticeEventId");
+    await until(() => h.logs.some((l) => l.includes("startup hold cleared: 1 segment(s), 1.5 s")));
+  });
+});

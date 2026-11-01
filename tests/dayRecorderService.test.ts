@@ -68,6 +68,7 @@ function fakeSupervisors() {
       holdCall: () => void calls.push({ op: "holdCall" }),
       releaseCall: (id: string) => void calls.push({ op: `releaseCall ${id}` }),
       discardCall: () => void calls.push({ op: "discardCall" }),
+      clearCall: () => void calls.push({ op: "clearCall" }),
     };
   };
   return {
@@ -589,5 +590,18 @@ describe("Day Recorder service, calls", () => {
     await h.service.apply(on());
     h.sup.options()!.onAudioUse!({ v: 1, event: "audioUse", app: "us.zoom.xos", denylisted: false, input: true, output: false });
     expect(seen).toEqual(["us.zoom.xos"]);
+  });
+});
+
+describe("Day Recorder service, the first report", () => {
+  it("clears the startup hold on the live helper, and forwards audioUseReady", async () => {
+    const h = harness();
+    let ready = 0;
+    h.service.onAudioUseReady(() => void (ready += 1));
+    await h.service.apply(on());
+    h.service.calls.clear();
+    expect(h.sup.calls.map((c) => c.op).at(-1)).toBe("clearCall");
+    h.sup.options()!.onAudioUseReady!();
+    expect(ready).toBe(1);
   });
 });
