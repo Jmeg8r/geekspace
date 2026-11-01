@@ -80,6 +80,19 @@ describe("dayRecorder.addTranscript", () => {
     await t.mutation(api.dayRecorder.addTranscript, { segmentId, start: s.start, end: s.end, text: "I'll send the deck." });
     expect((await t.run((ctx) => ctx.db.get(segmentId)))?.status).toBe("transcribed");
   });
+
+  // Codex 5 r3: a write that committed but whose answer was lost is sent again (a retry, or the
+  // next start). The segment's result is already in, so the second write adds nothing.
+  it("adds no second transcript for a segment that already has its result", async () => {
+    const t = convexTest(schema, modules);
+    const segmentId = await t.mutation(api.dayRecorder.addSegment, segment());
+    const s = segment();
+    const row = { segmentId, start: s.start, end: s.end, text: "I'll send the deck." };
+    await t.mutation(api.dayRecorder.addTranscript, row);
+    await expect(t.mutation(api.dayRecorder.addTranscript, row)).resolves.toBeNull();
+    const rows = await t.run((ctx) => ctx.db.query("transcripts").collect());
+    expect(rows).toHaveLength(1);
+  });
 });
 
 // Codex review of PR 3b-1: the helper names no app when a denylisted app owned the menu bar

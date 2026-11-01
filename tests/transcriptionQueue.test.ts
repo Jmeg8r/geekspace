@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToolMissingError, WHISPER_MODELS, transcribeFile } from "../electron/meetingProcessor.mjs";
-import { RETRY_AFTER_MS, createTranscriptionQueue, type PendingSegment } from "../electron/transcriptionQueue.mjs";
+import { RETRY_AFTER_MS, STOP_GRACE_MS, createTranscriptionQueue, type PendingSegment } from "../electron/transcriptionQueue.mjs";
 
 // WHAT: local transcription of Day Recorder segments (plan PR 5, spec R7). WHY tested: every
 // closed segment must end as a transcript row, or as transcribed with nothing to say, or as
@@ -206,6 +206,38 @@ describe("createTranscriptionQueue", () => {
     h.queue.offer([seg(1)]);
     await h.queue.idle();
     expect(transcribe).not.toHaveBeenCalled();
+  });
+
+  // Codex 5 r3 P1: a disconnected Convex client keeps a mutation pending rather than failing
+  // it, so a row write with no answer held quit forever. Stop waits only so long; the segment
+  // is still closed in the backend, so the next start takes it again.
+  it("stops within its grace period when a row write never answers, and says so", async () => {
+    const logs: string[] = [];
+    const queue = createTranscriptionQueue({
+      transcribe: async () => ({ transcript: "SYNTHETIC" }),
+      resolvePath: (p: string) => `/media/${p}`,
+      addTranscript: () => new Promise<void>(() => {}),
+      setSegmentStatus: async () => {},
+      log: (m: string) => void logs.push(m),
+    });
+    queue.offer([seg(1)]);
+    await vi.advanceTimersByTimeAsync(0);
+    let stopped = false;
+    void queue.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS - 1);
+    expect(stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stopped).toBe(true);
+    expect(logs.join("\n")).toMatch(/seg-1.*next start/);
+    expect(logs.join("\n")).not.toContain("SYNTHETIC");
+  });
+
+  it("stops at once when nothing is running", async () => {
+    const h = harness(async () => ({ transcript: "SYNTHETIC" }));
+    let stopped = false;
+    void h.queue.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(true);
   });
 });
 
