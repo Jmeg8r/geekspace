@@ -85,12 +85,17 @@ final class CallHold {
             if event == "segment" { written += 1 }
             report(event, fields)
         }
-        // 100 ms pieces, so a segment rolls close to segmentSec.
+        // 100 ms pieces, cut short at a segment's end, so no segment runs past segmentSec
+        // (Codex review of PR 4a, round 3).
         let piece = Int(rate / 10)
+        let perSegment = Int((segmentSec * rate).rounded(.down))
         for run in runs {
             var offset = 0
+            var inSegment = 0
             while offset < run.samples.count {
-                let end = min(offset + piece, run.samples.count)
+                if inSegment == perSegment { inSegment = 0 }
+                let end = min(offset + piece, offset + perSegment - inSegment, run.samples.count)
+                inSegment += end - offset
                 let samples = run.samples[offset..<end].map { Float($0) / 32_767 }
                 writer.append(PCMChunk(endMs: run.startMs + Double(end) / rate * 1000, samples: samples))
                 offset = end
