@@ -134,6 +134,15 @@ describe("dayRecorder retention", () => {
     expect(expired.screenshots.map((s) => s._id)).toEqual([oldShot]);
   });
 
+  // Codex 5 r2 P1: a segment purged while it waited for transcription made the queue retry
+  // forever, because marking it failed was refused. Purged is terminal: a later status is a no-op.
+  it("leaves a purged segment purged when its transcription result arrives", async () => {
+    const { t, old, oldShot } = await aged();
+    await t.mutation(api.dayRecorder.markPurged, { segmentIds: [old], screenshotIds: [oldShot], at: NOW });
+    await expect(t.mutation(api.dayRecorder.setSegmentStatus, { segmentId: old, status: "failed" })).resolves.toBeNull();
+    expect((await t.run((ctx) => ctx.db.get(old)))?.status).toBe("purged");
+  });
+
   it("marks purged media, logs one purge event with the count, and keeps the text", async () => {
     const { t, old, oldShot } = await aged();
     await t.mutation(api.dayRecorder.markPurged, { segmentIds: [old], screenshotIds: [oldShot], at: NOW });

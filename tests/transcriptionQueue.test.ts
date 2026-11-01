@@ -162,6 +162,25 @@ describe("createTranscriptionQueue", () => {
     expect(transcribe).toHaveBeenCalledTimes(1);
   });
 
+  // Codex 5 r2 P1: an older segment offered while a newer one was being transcribed was sorted
+  // to the front and then removed as if it were done, and the newer one written twice.
+  it("keeps an older segment offered mid-transcription, and writes each segment once", async () => {
+    let release: () => void = () => {};
+    const order: string[] = [];
+    const h = harness(async (file) => {
+      order.push(file);
+      if (order.length === 1) await new Promise<void>((r) => (release = r));
+      return { transcript: "SYNTHETIC" };
+    });
+    h.queue.offer([seg(2)]);
+    await vi.advanceTimersByTimeAsync(0);
+    h.queue.offer([seg(1), seg(2)]);
+    release();
+    await h.queue.idle();
+    await h.queue.idle();
+    expect(h.rows.map((r) => r.segmentId).sort()).toEqual(["seg-1", "seg-2"]);
+  });
+
   it("refuses a path outside the media root as failed, without transcribing it", async () => {
     const transcribe = vi.fn(async () => ({ transcript: "SYNTHETIC" }));
     const statuses: string[] = [];
