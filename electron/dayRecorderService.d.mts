@@ -52,6 +52,7 @@ export type DayRecorderService = {
   calls: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void; clear: () => void };
   onAudioUseReady: (cb: () => void) => () => void;
   onCallHeld: (cb: (app: string) => void) => () => void;
+  onAudioClassified: (cb: (through: number) => void) => () => void;
   running: () => boolean;
   killSync: () => void;
 };

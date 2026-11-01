@@ -192,37 +192,51 @@ final class AudioUseWatcher {
     private var calls: AudioUse.CallTracker
     private let startHeld: Bool
     private let onCallStart: (String, Double) -> Void
+    private let now: () -> Double
+    private let readProcesses: (Set<AudioObjectID>) -> [AudioUse.Process]
+    /// Everything captured before this has been looked at by a poll: no call app or
+    /// never-record app started before it unseen. -infinity until the first poll.
+    private(set) var classifiedThrough = -Double.infinity
 
     /// `onCallStart(app, t)`: a call app started using audio at or after `t` (plan PR 4b).
     /// With `startHeld`, calls already going on at the first poll are the startup hold's.
+    /// `now` and `readProcesses` are replaceable for tests.
     init(denylist: [String], calls: AudioUse.CallTracker = AudioUse.CallTracker(apps: [], browsers: []),
          startHeld: Bool = false, onCallStart: @escaping (String, Double) -> Void = { _, _ in },
+         now: @escaping () -> Double = nowMs, readProcesses: ((Set<AudioObjectID>) -> [AudioUse.Process])? = nil,
          report: @escaping (String, [String: Any]) -> Void) {
         self.denylist = denylist
         self.calls = calls
         self.startHeld = startHeld
         self.onCallStart = onCallStart
+        self.now = now
+        self.readProcesses = readProcesses ?? { known in AudioUse.poll(denylist: denylist, known: known) }
         self.report = report
     }
 
-    /// Call often; polls at most every `pollMs`.
-    func tick(known: Set<AudioObjectID>) {
-        let now = nowMs()
-        guard now >= nextPoll else { return }
+    /// Call often; polls at most every `pollMs`, or now with `force` (the last poll at stop).
+    func tick(known: Set<AudioObjectID>, force: Bool = false) {
+        let now = self.now()
+        guard force || now >= nextPoll else { return }
         nextPoll = now + AudioUseWatcher.pollMs
-        let processes = AudioUse.poll(denylist: denylist, known: known)
+        let processes = readProcesses(known)
             .filter { !AudioUse.ignored($0, ownPid: ownPid, supervisorPid: supervisorPid) }
         let current = AudioUse.aggregate(processes)
         for change in AudioUse.changes(from: last, to: current) {
             report("audioUse", AudioUse.fields(change.key, change.state, t: now))
         }
         last = current
-        // Held from before this poll saw the app, so none of the call's opening audio is
-        // system audio (Codex review of PR 4b, round 3).
+        // Held from where the last poll had classified: the app was not using audio then, and
+        // nothing after it has been delivered (Codex review of PR 4b, rounds 3 and 4). However
+        // late this poll is, the call's opening audio is the call's.
         let started = calls.update(current)
         if announcedReady || !startHeld {
-            for app in started { onCallStart(app, now - SystemAudioRecorder.callLookbackMs) }
+            for app in started { onCallStart(app, classifiedThrough) }
         }
+        // The poll's lag (spike Q3) is the margin: an app that started just before this poll
+        // may not show yet.
+        classifiedThrough = now - AudioUse.detectionLagMs
+        report("audioClassified", ["through": round3(classifiedThrough)])
         // Once: everything using audio at start has now been reported. Until this line the
         // supervisor treats any app as possibly in a call (plan PR 4b), so it is a count only.
         if !announcedReady {

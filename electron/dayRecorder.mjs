@@ -44,6 +44,8 @@ const SHAPES = {
   callDiscarded: (m) => isNum(m.heldSec) && (m.reason === "command" || m.reason === "stop"),
   // Plan PR 4b: the first audio-use report is in; a startup hold cleared into system audio.
   audioUseReady: (m) => isNum(m.t) && isNum(m.apps),
+  // Codex #4b r4: how far the audio-use polls have looked; the mic's chunks wait for it.
+  audioClassified: (m) => isNum(m.through),
   callCleared: (m) => isNum(m.segments) && isNum(m.heldSec),
   // These are only logged, but what is logged is validated too (Codex #80 r2): counts must
   // be numbers and `trigger` one of its two values, so no line can smuggle text into a log.
@@ -150,6 +152,8 @@ export function createSupervisor({
   onAudioUseReady = () => {},
   // The helper held a call app's audio on its own (plan PR 4b): the app it saw start.
   onCallHeld = () => {},
+  // How far the helper's audio-use polls have classified (plan PR 4b): never logged.
+  onAudioClassified = () => {},
   // The apps the helper treats as calls, by callDetector.mjs's rule.
   calls = { apps: [...DEDICATED_CALL_APPS], browsers: [...BROWSERS] },
   env = process.env,
@@ -308,6 +312,9 @@ export function createSupervisor({
       case "callHeld":
         log(diagnostic(m));
         if (m.app !== undefined) onCallHeld(m.app);
+        return;
+      case "audioClassified":
+        onAudioClassified(m.through);
         return;
       case "audioUseReady":
         clearTimeout(readyTimer);

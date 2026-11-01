@@ -121,6 +121,8 @@ final class CallRouter {
     private final class Call {
         let hold: CallHold
         var fate = Fate.pending
+        /// The stop's unclassified tail: dropped without a callDiscarded line of its own.
+        var silent = false
         init(maxSec: Double) { hold = CallHold(maxSec: maxSec) }
     }
     /// From `fromMs` on, audio belongs to `call` (nil: system audio).
@@ -171,13 +173,30 @@ final class CallRouter {
     /// audio that resumed after `t` is the new call's instead, but a call held before it keeps
     /// what it held. `app` is the call app the helper saw start, when it held on its own.
     func hold(at t: Double, app: String? = nil) {
-        let floor = spans.last { $0.call != nil }?.fromMs ?? -.infinity
-        let from = max(t, floor)
-        while spans.count > 1, let last = spans.last, last.call == nil, last.fromMs > from { spans.removeLast() }
-        spans.append(Span(fromMs: from, call: Call(maxSec: maxSec)))
+        let from = begin(Call(maxSec: maxSec), at: t)
         var fields: [String: Any] = ["t": from.isFinite ? round3(from) : 0]
         if let app { fields["app"] = app }
         report("callHeld", fields)
+    }
+
+    /// Start `call`'s span at `t`, or where the last call's span began if that is later. System
+    /// audio that resumed after it is the new span's. Returns where the span begins.
+    private func begin(_ call: Call, at t: Double) -> Double {
+        let floor = spans.last { $0.call != nil }?.fromMs ?? -.infinity
+        let from = max(t, floor)
+        while spans.count > 1, let last = spans.last, last.call == nil, last.fromMs > from { spans.removeLast() }
+        spans.append(Span(fromMs: from, call: call))
+        return from
+    }
+
+    /// The helper is stopping: audio captured from `t` on was never classified (no poll can
+    /// say whether a call began in it), so it is dropped, and any call ends there (Codex
+    /// review of PR 4b, round 4).
+    func cutoff(at t: Double) {
+        let tail = Call(maxSec: maxSec)
+        tail.fate = .discard("stop")
+        tail.silent = true
+        _ = begin(tail, at: t)
     }
 
     func release(at t: Double) { resolve(.release, at: t) }
@@ -245,7 +264,7 @@ final class CallRouter {
             case .discard(let reason):
                 let heldSec = call.hold.heldSec
                 _ = call.hold.take()
-                report("callDiscarded", ["heldSec": round3(heldSec), "reason": reason])
+                if !call.silent { report("callDiscarded", ["heldSec": round3(heldSec), "reason": reason]) }
             case .clear:
                 let heldSec = call.hold.heldSec
                 let segments = flushSystem(call.hold.take())

@@ -25,6 +25,10 @@ const COPY = {
   cancelled: "The recorder stopped before the mic window started.",
 };
 
+// How long a stop waits for chunks still waiting on gs-capture's classification (it reports
+// every 100 ms poll), before dropping them.
+const SETTLE_MS = 2000;
+
 export function createMicController({
   askMic,
   createWindow,
@@ -34,6 +38,7 @@ export function createMicController({
   log,
   micConfig,
   stopTimeoutMs = STOP_TIMEOUT_MS,
+  settleMs = SETTLE_MS,
 }) {
   // Set by shutdown (quit): nothing starts again. WHY (Codex #89 r2): at quit the service is
   // still Recording, so the mic's own "off" re-emits Recording and the runtime calls start.
@@ -83,7 +88,14 @@ export function createMicController({
       failMic("denied", COPY.denied);
       return;
     }
-    writer = createWriter();
+    writer = createWriter({
+      // A write that failed while catching up with classification: loud, and the mic stops.
+      onError: (reason) => {
+        if (failed) return;
+        failMic("writeFailed", reason);
+        if (win) void closeWindow();
+      },
+    });
     win = createWindow({
       onGone: () => {
         if (!win) return;
@@ -114,6 +126,24 @@ export function createMicController({
     if (tearingDown) return tearingDown.then(settleOff);
     settleOff();
     return Promise.resolve();
+  }
+
+  async function settleWriter() {
+    if (!writer) return;
+    let timer;
+    const done = await Promise.race([
+      writer.settled().then(() => true),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), settleMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!done) log(`mic audio still waited for classification after ${settleMs} ms; the rest is dropped`);
+  }
+
+  /** gs-capture has classified everything before `through` (micSegments.mjs). */
+  function classified(through) {
+    writer?.classified(through);
   }
 
   /**
@@ -222,6 +252,8 @@ export function createMicController({
       onStopped = null;
       // The writer's own drain waits for the last segment's row. A window that crashed during
       // this stop has already started its teardown; that one is awaited, not skipped.
+      // Chunks wait for gs-capture's classification (micSegments.mjs); give it a moment.
+      await settleWriter();
       await writer?.drain();
       await teardown();
     })().finally(() => {
@@ -254,6 +286,7 @@ export function createMicController({
     start,
     stop,
     discard,
+    classified,
     shutdown,
     receive,
     ownsSender,

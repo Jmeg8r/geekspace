@@ -36,10 +36,12 @@ gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segm
 - `--call-apps` and `--browsers` (plan PR 4b, Codex review round 3) take bundle IDs, refused
   like the denylist's. The helper holds a call **itself**: when its audio-use poll sees a call
   app start (a `--call-apps` app using audio in or out, a `--browsers` app holding the mic),
-  everything captured from 250 ms before that poll on is the call's (`callHeld` with `app`).
-  250 ms is twice the poll's detection lag (spike Q3) and inside the 500 ms hold-back, so none
-  of it has been written yet. System audio that resumed after that point (an earlier call's
-  release) is the new call's instead; a call held earlier keeps what it held. Calls already
+  everything captured from where the previous poll had classified is the call's (`callHeld`
+  with `app`). System audio is delivered only up to the last poll's classified point (its time
+  less the 125 ms detection lag, spike Q3), so none of it has been written yet, however late a
+  poll runs (Codex review round 4). System audio that resumed after that point (an earlier
+  call's release) is the new call's instead; a call held earlier keeps what it held. At stop,
+  one last poll runs and what it could not classify is dropped. Calls already
   going on at a `--start-held` helper's first poll are the startup hold's. A call ends when
   its app uses neither input nor output; it starts again if the app comes back.
 - `--call-hold-max-sec` caps how much call audio is held (default 1800: the 15-minute notice
@@ -166,6 +168,10 @@ More detail on the fields:
   treats no `audioUseReady` within 10 s of `ready` as a failure (Not recording, the helper is
   stopped): until it comes the mic stays off and system audio stays held, and heartbeats
   don't count for it.
+- **`audioClassified`** (`through`, plan PR 4b) follows every audio-use poll, after that poll's
+  `audioUse` and `callHeld` lines: everything captured before `through` has been looked at. The
+  supervisor passes it to the mic writer, whose chunks wait in memory until it passes them, and
+  never logs it.
 - **`tapRebuilt` / `tailDropped`** carry only counts, levels and bundle IDs, never audio.
   **Their bundle fields can name a denylisted app** (`addedBundles`, `arrivedBundles`).
   They are diagnostics. The supervisor must not store or log them, or `audioUse`'s and

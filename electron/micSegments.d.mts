@@ -18,8 +18,12 @@ export type MicSegmentWriter = {
   handle: (message: IncomingMessage) => Handled;
   drain: () => Promise<void>;
   close: () => Promise<void>;
-  /** A call started: delete the open segments and those in their quarantine, with no row. */
+  /** A call or a never-record app: drop what waits and the open segments, and write nothing more. */
   discardOpen: () => void;
+  /** gs-capture has classified everything before `through`: write and finish up to it. */
+  classified: (through: number) => void;
+  /** Resolves once nothing waits for classification. */
+  settled: () => Promise<void>;
 };
 
 export function createMicSegmentWriter(options: {
@@ -32,6 +36,8 @@ export function createMicSegmentWriter(options: {
   now?: () => number;
   /** fs.writeSync, replaceable so tests can make writes short. */
   writeSync?: (fd: number, buf: Uint8Array, offset: number, length: number) => number;
-  /** How long a finished segment waits before its name and row; 0 (the default) is at once. */
-  quarantineMs?: number;
+  /** Hold chunks in memory until classified (the Day Recorder); off by default. */
+  waitForClassification?: boolean;
+  /** A write that fails while catching up, outside any message. */
+  onError?: (reason: string) => void;
 }): MicSegmentWriter;

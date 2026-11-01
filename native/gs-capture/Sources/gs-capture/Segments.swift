@@ -289,9 +289,12 @@ final class SystemAudioRecorder {
     // The PR 3a proven pair: poll every 100 ms, hold 500 ms (at least two polls).
     static let rebuildMs = 100.0
     static let holdMs = 500.0
-    /// How far back the helper's own call hold reaches: twice the poll's detection lag, inside
-    /// the hold-back, so the call's first samples have not been delivered yet (CallHoldTests).
-    static let callLookbackMs = 2 * AudioUse.detectionLagMs
+    /// What may be released: the tap's own limit, and no further than the audio-use poll has
+    /// classified (Codex review of PR 4b, round 4). A call app's hold begins where the last poll
+    /// classified, so nothing of a call has been delivered before it, however late polls run.
+    static func releaseLimit(tap: Double, classifiedThrough: Double) -> Double {
+        min(tap, classifiedThrough + holdMs)
+    }
 
     private let queue = DispatchQueue(label: "gs-capture.audio-control")
     private var timer: DispatchSourceTimer?
@@ -366,10 +369,12 @@ final class SystemAudioRecorder {
             timer.setEventHandler {
                 // tick returns the release limit, read before it checks arrivals and capped at
                 // the last completed classification pass (Codex review of PR 3b-2, rounds 4-5).
-                let limit = runner.tick(poll: true)
+                let tapLimit = runner.tick(poll: true)
+                // Poll first: its holds land before anything it classified is released.
+                watcher.tick(known: runner.knownDenied())
+                let limit = SystemAudioRecorder.releaseLimit(tap: tapLimit, classifiedThrough: watcher.classifiedThrough)
                 runner.sink.release(now: limit)
                 if let hold = self.hold { self.router.settle(frontier: hold.frontier(limit: limit)) }
-                watcher.tick(known: runner.knownDenied())
             }
             timer.resume()
             self.timer = timer
@@ -382,6 +387,11 @@ final class SystemAudioRecorder {
         queue.sync {
             guard let runner, let timer else { return }
             timer.cancel()
+            // One last poll, then what it could not classify is dropped, not released.
+            if let watcher {
+                watcher.tick(known: runner.knownDenied(), force: true)
+                router.cutoff(at: watcher.classifiedThrough)
+            }
             runner.finish(tailCheck: true)
             // Everything is delivered: a call still waiting for its notice is dropped.
             router.stop()

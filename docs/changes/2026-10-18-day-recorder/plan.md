@@ -1670,15 +1670,20 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     is lost is James's own voice before he answers.
   - **The helper holds a call itself (round 3).** Detection in the supervisor came a poll and a
     round trip late, so a call's opening audio reached a `sys-` file. The helper is given the
-    call apps (`--call-apps`, `--browsers`) and holds from 250 ms before the poll that saw the
-    app start (twice the poll's detection lag, inside the 500 ms hold-back).
-  - **A call discards the mic's open segment (round 3), and finished segments wait 2 s for
-    their name and row**, so a call that began before a segment's end is discarded with it.
-    **Up to one segment (5 minutes) of mic audio from just before a call is lost.** That is
-    the price of "nothing of a call on disk before its notice"; James can revisit it.
+    call apps (`--call-apps`, `--browsers`) and holds from where its previous poll had
+    classified. Round 4 showed a fixed lookback fails when a poll runs late (a long flush), so
+    system audio is delivered only up to what the last poll classified (`audioClassified`).
+  - **Mic chunks wait in memory until gs-capture has classified their time (round 4)**, and a
+    segment is finished only once its end is classified. A call or a never-record app seen
+    meanwhile discards what waits and the open segments, and nothing more is written for that
+    capture window. **Up to one segment (5 minutes) of mic audio from just before a call or a
+    never-record app is lost**, plus what still waits at a stop if classification doesn't
+    catch up within 2 s. That is the price of "nothing of a call on disk before its notice";
+    James can revisit it.
   - **Every helper starts held** until its first audio-use report, and calls belong to one
     helper: a restarted helper asks again (round 2). No report within 10 s of ready is Not
     recording (round 3).
+  - **Codex: round 5, by James's decision** after round 4 failed with five P1s (the L42 cap).
   - **Each hold of the helper's is a call of its own** unless the newest call is unanswered or
     declined, which it joins; an answer resolves every hold of its call. An app starting after
     a yes (even one still being saved), or leaving and coming back, is asked about again.

@@ -29,10 +29,6 @@ import { createMicSegmentWriter } from "./micSegments.mjs";
 const GEEKSPACE_DIR = path.join(app.getPath("appData"), "Geekspace");
 // MediaRecorder's timeslice: how often a chunk crosses to the main process.
 const MIC_TIMESLICE_MS = 1000;
-// A finished mic segment waits this long for its name and row, so a call that began before its
-// end and is seen a poll later is discarded with it (Codex review of PR 4b, round 3). Detection
-// takes at most a poll's lag (125 ms, spike Q3) plus a line through stdout.
-const MIC_QUARANTINE_MS = 2000;
 const REFUSED = { ok: false, error: "Refused: the request did not come from the mic capture window" };
 
 
@@ -98,8 +94,16 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     // macOS asks once, then answers from the saved choice; elsewhere there is no recorder.
     askMic: async () => process.platform !== "darwin" || systemPreferences.askForMediaAccess("microphone"),
     createWindow: ({ onGone }) => createCaptureWindow({ page: capturePage, onGone }),
-    createWriter: () =>
-      createMicSegmentWriter({ root: mediaRoot, addSegment: rows(api.dayRecorder.addSegment), log, quarantineMs: MIC_QUARANTINE_MS }),
+    // Mic chunks wait in memory until gs-capture has classified their time, so a call or a
+    // never-record app seen meanwhile discards them before any reach disk (Codex #4b r4).
+    createWriter: ({ onError }) =>
+      createMicSegmentWriter({
+        root: mediaRoot,
+        addSegment: rows(api.dayRecorder.addSegment),
+        log,
+        waitForClassification: true,
+        onError,
+      }),
     onState: (s) => {
       log(`mic: ${s.state}${s.state === "error" ? ` (${s.kind})` : ""}`);
       service.setMic(s);
@@ -144,11 +148,13 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     onDenylistedAudio: (active) => {
       denylistedAudio = active;
       log(active ? "room mic paused: a never-record app is using audio" : "room mic back: no never-record app is using audio");
-      syncMic();
+      // Its opening audio may be in what the mic holds: dropped, not finished (Codex #4b r4).
+      void (active ? mic.discard() : syncMic());
     },
   });
   service.onAudioUse((use) => detector.receive(use));
   service.onCallHeld((app) => notice.callHeld(app));
+  service.onAudioClassified((through) => mic.classified(through));
   service.onAudioUseReady(() => {
     audioReady = true;
     notice.audioReady();

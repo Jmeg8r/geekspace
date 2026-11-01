@@ -31,6 +31,7 @@ export type HelperMessage =
   | { v: 1; event: "callDiscarded"; heldSec: number; reason: "command" | "stop" }
   | { v: 1; event: "callCleared"; segments: number; heldSec: number }
   | { v: 1; event: "audioUseReady"; t: number; apps: number }
+  | { v: 1; event: "audioClassified"; through: number }
   | { v: 1; event: "audioUse"; app: string | null; denylisted: boolean; input: boolean; output: boolean }
   | { v: 1; event: "stopped"; reason: string }
   | { v: 1; event: "tapRebuilt" | "tailDropped" | "sampleRateChanged" | "sessionUnverified" };
@@ -73,6 +74,8 @@ export type SupervisorOptions = {
   onAudioUseReady?: () => void;
   /** The helper held a call app's audio on its own: the app it saw start. */
   onCallHeld?: (app: string) => void;
+  /** How far the helper's audio-use polls have classified. */
+  onAudioClassified?: (through: number) => void;
   /** The apps the helper treats as calls; callDetector.mjs's lists by default. */
   calls?: { apps: string[]; browsers: string[] };
   env?: NodeJS.ProcessEnv;
