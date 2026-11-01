@@ -27,7 +27,7 @@ export function RecorderIndicator() {
   // In the desktop app a failed status read is said, not hidden; a browser tab has no recorder.
   if (!copy && statusError && dayRecorderAvailable()) {
     return (
-      <p role="alert" className="no-drag px-3 pb-2 text-[11.5px] text-[var(--pal-red)]">
+      <p role="alert" className="no-drag px-3 pb-2 text-[11.5px] text-[color:var(--recorder-error)]">
         Day Recorder: {statusError}
       </p>
     );
@@ -58,7 +58,7 @@ export function RecorderIndicator() {
         </button>
       </div>
       {error && (
-        <p role="alert" className="px-1 pt-1 text-[11.5px] text-[var(--pal-red)]">
+        <p role="alert" className="px-1 pt-1 text-[11.5px] text-[color:var(--recorder-error)]">
           {error}
         </p>
       )}

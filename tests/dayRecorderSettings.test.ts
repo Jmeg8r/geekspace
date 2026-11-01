@@ -4,7 +4,6 @@ import {
   UNSUPPORTED,
   addBundleId,
   recorderSupported,
-  removeBundleId,
   shotSecError,
 } from "../src/lib/dayRecorderSettings";
 
@@ -33,12 +32,6 @@ describe("addBundleId", () => {
       ok: false,
       error: "com.apple.TextEdit is already on the list.",
     });
-  });
-});
-
-describe("removeBundleId", () => {
-  it("removes only that id", () => {
-    expect(removeBundleId(["a.b", "c.d", "e.f"], "c.d")).toEqual(["a.b", "e.f"]);
   });
 });
 

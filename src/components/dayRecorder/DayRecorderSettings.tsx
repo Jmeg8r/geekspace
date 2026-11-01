@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
 import { statusCopy } from "../../../electron/dayRecorderCopy.mjs";
@@ -7,9 +7,7 @@ import {
   ONBOARDING,
   UNSUPPORTED,
   addBundleId,
-  createListEditor,
   recorderSupported,
-  removeBundleId,
   shotSecError,
 } from "../../lib/dayRecorderSettings";
 import { isMacLike } from "../../lib/utils";
@@ -32,11 +30,9 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
   const { status, error: statusError } = useRecorderStatus();
   const [onboarding, setOnboarding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const denylistEditor = useMemo(() => createListEditor(async (denylist) => void (await update({ denylist }))), [update]);
-  const renderedDenylist = settings?.denylist;
-  useEffect(() => {
-    if (renderedDenylist) denylistEditor.sync(renderedDenylist);
-  }, [renderedDenylist, denylistEditor]);
+  // One atomic server change per edit, so no stale copy of the list can undo another edit.
+  const addToDenylist = useMutation(api.dayRecorder.addToDenylist);
+  const removeFromDenylist = useMutation(api.dayRecorder.removeFromDenylist);
 
   if (!settings) return null;
   if (!recorderSupported(isMacLike() ? "darwin" : "other", status)) {
@@ -56,9 +52,8 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
 
   const showError = (err: Error | string) => setError(err instanceof Error ? err.message : err);
 
-  const savedDenylist = settings.denylist;
-  function editDenylist(change: (list: string[]) => string[]) {
-    denylistEditor.edit(savedDenylist, change).then(() => setError(null), showError);
+  function editDenylist(edit: Promise<null>) {
+    edit.then(() => setError(null), showError);
   }
 
   function saveShotSec(shotSec: number) {
@@ -66,10 +61,10 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
   }
 
   return (
-    <Section
-      title="Day Recorder"
-      hint="Records your screen, system audio and mic on this Mac, and keeps it here. Media is deleted after 30 days."
-    >
+    <Section title="Day Recorder">
+      <p className="pb-2 text-[12px] text-ink">
+        Records your screen, system audio and mic on this Mac, and keeps it here. Media is deleted after 30 days.
+      </p>
       <div className="flex items-center justify-between py-1 text-[13px]">
         <span id="day-recorder-switch-label" className="text-ink">
           Record my day
@@ -80,13 +75,13 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
           aria-checked={settings.enabled}
           aria-labelledby="day-recorder-switch-label"
           onClick={() => (settings.enabled ? void enable(false) : setOnboarding(true))}
-          className={`relative h-5 w-9 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
-            settings.enabled ? "bg-accent" : "bg-border"
+          className={`relative h-5 w-9 rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
+            settings.enabled ? "border-accent bg-accent" : "border-ink-2 bg-transparent"
           }`}
         >
           <span
             aria-hidden="true"
-            className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${settings.enabled ? "left-[18px]" : "left-0.5"}`}
+            className={`absolute top-px h-4 w-4 rounded-full transition-all ${settings.enabled ? "left-[17px] bg-white" : "left-px bg-ink-2"}`}
           />
         </button>
       </div>
@@ -109,12 +104,16 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
       )}
 
       {error && (
-        <p role="alert" className="py-1 text-[12px] text-[var(--pal-red)]">
+        <p role="alert" className="py-1 text-[12px] text-[color:var(--recorder-error)]">
           {error}
         </p>
       )}
 
-      <Denylist list={settings.denylist} onEdit={editDenylist} />
+      <Denylist
+        list={settings.denylist}
+        onAdd={(id) => editDenylist(addToDenylist({ id }))}
+        onRemove={(id) => editDenylist(removeFromDenylist({ id }))}
+      />
       <ShotInterval value={settings.shotSec} onSave={saveShotSec} />
     </Section>
   );
@@ -150,8 +149,7 @@ function Onboarding({ onTurnOn, onCancel }: { onTurnOn: () => void; onCancel: ()
   );
 }
 
-/** Edits go through `onEdit` as changes, so each applies to the latest list (createListEditor). */
-function Denylist({ list, onEdit }: { list: string[]; onEdit: (change: (list: string[]) => string[]) => void }) {
+function Denylist({ list, onAdd, onRemove }: { list: string[]; onAdd: (id: string) => void; onRemove: (id: string) => void }) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputId = useId();
@@ -165,8 +163,7 @@ function Denylist({ list, onEdit }: { list: string[]; onEdit: (change: (list: st
     }
     setError(null);
     setDraft("");
-    const id = draft.trim();
-    onEdit((latest) => (latest.includes(id) ? latest : [...latest, id]));
+    onAdd(draft.trim());
   }
 
   return (
@@ -179,7 +176,7 @@ function Denylist({ list, onEdit }: { list: string[]; onEdit: (change: (list: st
           {list.map((id) => (
             <li key={id} className="flex items-center justify-between py-0.5 text-[12.5px]">
               <code>{id}</code>
-              <button type="button" onClick={() => onEdit((latest) => removeBundleId(latest, id))} aria-label={`Remove ${id} from the list`} className={BUTTON}>
+              <button type="button" onClick={() => onRemove(id)} aria-label={`Remove ${id} from the list`} className={BUTTON}>
                 Remove
               </button>
             </li>
@@ -202,7 +199,7 @@ function Denylist({ list, onEdit }: { list: string[]; onEdit: (change: (list: st
         </button>
       </div>
       {error && (
-        <p id={errorId} role="alert" className="pt-1 text-[12px] text-[var(--pal-red)]">
+        <p id={errorId} role="alert" className="pt-1 text-[12px] text-[color:var(--recorder-error)]">
           {error}
         </p>
       )}
@@ -245,7 +242,7 @@ function ShotInterval({ value, onSave }: { value: number; onSave: (v: number) =>
         </span>
       </div>
       {error && (
-        <p id={errorId} role="alert" className="pt-1 text-[12px] text-[var(--pal-red)]">
+        <p id={errorId} role="alert" className="pt-1 text-[12px] text-[color:var(--recorder-error)]">
           {error}
         </p>
       )}
