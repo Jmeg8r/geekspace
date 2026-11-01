@@ -252,12 +252,48 @@ final class CallRouterTests: XCTestCase {
         XCTAssertEqual(sink.system, [1_005])
     }
 
-    func testOutOfOrderCommandsAreRefused() {
+    func testReleaseAndDiscardNeedAHeldCall() {
         let sink = Sink(), router = makeRouter(sink)
         XCTAssertFalse(router.canRelease)
         XCTAssertFalse(router.canDiscard)
         router.hold(at: 1)
-        XCTAssertFalse(router.canHold)
         XCTAssertTrue(router.canRelease)
+    }
+
+    // Codex 4b r1 P1: a second call that starts before the first is answered must be held
+    // apart, so each call is released or dropped on its own notice.
+    func testASecondHoldSplitsAndCallsResolveOldestFirst() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        for start in stride(from: 1_000.0, to: 1_100, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.hold(at: 1_100)
+        for start in stride(from: 1_100.0, to: 1_200, by: 10) { router.deliver(chunk(start), sourceRate: 16_000) }
+        router.release(at: 1_150)
+        router.settle(frontier: 1_200)
+        XCTAssertEqual(sink.flushed, [[1_000]], "the first call alone, up to where the second began")
+        XCTAssertEqual(events(sink), ["callHeld", "callHeld", "callReleased"])
+        router.discard(at: 1_200)
+        router.deliver(chunk(1_200), sourceRate: 16_000)
+        router.settle(frontier: 1_210)
+        XCTAssertEqual(events(sink), ["callHeld", "callHeld", "callReleased", "callDiscarded"])
+        XCTAssertEqual(sink.system, [1_200])
+        XCTAssertEqual(sink.flushed.count, 1)
+    }
+
+    // Codex 4b r1 P1: a helper started while a call waits for its notice, or was declined,
+    // holds from its first sample instead of recording the call as system audio.
+    func testAStartHeldRouterHoldsFromTheFirstSample() {
+        let sink = Sink()
+        let router = CallRouter(maxSec: 60, startHeld: true,
+                                append: { sink.system.append($0.endMs - 10) },
+                                closeSystem: { sink.systemCloses += 1 },
+                                flush: { runs in sink.flushed.append(runs.map(\.startMs)); return runs.count },
+                                report: { sink.reports.append(($0, $1)) })
+        router.deliver(chunk(0), sourceRate: 16_000)
+        XCTAssertTrue(sink.system.isEmpty)
+        XCTAssertTrue(router.canDiscard)
+        router.discard(at: 20)
+        router.settle(frontier: 30)
+        XCTAssertEqual(events(sink), ["callHeld", "callDiscarded"])
     }
 }

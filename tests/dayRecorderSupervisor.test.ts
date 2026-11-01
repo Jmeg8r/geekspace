@@ -456,3 +456,23 @@ describe("Day Recorder supervisor, audioUse", () => {
     expect(h.logs.join("\n")).not.toContain("us.zoom.xos");
   });
 });
+
+// Codex 4b r1 P1: a helper started while a call waits for its notice, or was declined, must
+// hold from its first sample.
+describe("Day Recorder supervisor, start held", () => {
+  it("passes --start-held when asked, and not otherwise", async () => {
+    const argv: string[][] = [];
+    const spawnImpl: SupervisorOptions["spawnImpl"] = (command, args, options) => {
+      argv.push(args);
+      return spawn(command, args, options);
+    };
+    const held = started(harness("healthy", { spawnImpl }));
+    live.push(held.supervisor);
+    await until(() => held.states.some((s) => s.status === "recording"));
+    await held.supervisor.stop();
+    held.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300, startHeld: true });
+    await until(() => argv.length === 2);
+    expect(argv[0]).not.toContain("--start-held");
+    expect(argv[1]).toContain("--start-held");
+  });
+});
