@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EXTEND_MS, NOTICE_TIMEOUT_MS, createCallNotice, type CallPrompt } from "../electron/callNotice.mjs";
+import { EXTEND_MS, NOTICE_TIMEOUT_MS, createCallNotice, statusWithCall, type CallPrompt } from "../electron/callNotice.mjs";
 
 // WHAT: the call notice (plan PR 4b, spec R5 / F3). WHY tested: this is where "no call audio
 // is written without a notice" is decided. Without a notice the helper is only ever told to
@@ -166,5 +166,18 @@ describe("createCallNotice", () => {
     notice.callStarted("us.zoom.xos");
     expect(calls.some((c) => c.includes("not running"))).toBe(true);
     expect(calls).not.toContain("release");
+  });
+});
+
+// The tray and the app say "Call — not saved yet" only while the question is open.
+describe("statusWithCall", () => {
+  const asking: CallPrompt = { state: "asking", callId: "c", app: "us.zoom.xos", deadline: 1, canExtend: true };
+  it("marks Recording as held while the question is open", () => {
+    expect(statusWithCall({ status: "recording" }, asking)).toEqual({ status: "recording", call: "held" });
+  });
+  it("leaves every other case alone", () => {
+    expect(statusWithCall({ status: "recording" }, null)).toEqual({ status: "recording" });
+    expect(statusWithCall({ status: "recording" }, { state: "timedOut", callId: "c" })).toEqual({ status: "recording" });
+    expect(statusWithCall({ status: "paused" }, asking)).toEqual({ status: "paused" });
   });
 });

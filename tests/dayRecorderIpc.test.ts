@@ -3,6 +3,7 @@ import {
   type ControlHandler,
   DAY_RECORDER_EVENT,
   createDayRecorderControls,
+  forwardCallPrompt,
   forwardStatus,
   registerDayRecorderIpc,
 } from "../electron/dayRecorderIpc.mjs";
@@ -169,5 +170,25 @@ describe("forwardStatus", () => {
     expect(closed.webContents.send).not.toHaveBeenCalled();
     stop();
     expect(listeners.size).toBe(0);
+  });
+});
+
+describe("forwardCallPrompt", () => {
+  it("pushes each prompt to every open window, and stops when unsubscribed", () => {
+    let emit: ((p: CallPrompt | null) => void) | null = null;
+    const recorder = {
+      onCallPrompt: (cb: (p: CallPrompt | null) => void) => {
+        emit = cb;
+        return () => void (emit = null);
+      },
+    };
+    const sent: string[] = [];
+    const open = { isDestroyed: () => false, webContents: { send: (ch: string, p: { type: string }) => void sent.push(`${ch} ${p.type}`) } };
+    const closed = { isDestroyed: () => true, webContents: { send: () => void sent.push("closed") } };
+    const stop = forwardCallPrompt({ recorder, windows: () => [open, closed] });
+    emit!({ state: "timedOut", callId: "c" });
+    expect(sent).toEqual([`${DAY_RECORDER_EVENT} call`]);
+    stop();
+    expect(emit).toBeNull();
   });
 });
