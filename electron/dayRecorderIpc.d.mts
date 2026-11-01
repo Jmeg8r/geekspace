@@ -4,6 +4,9 @@ import type { RecorderStatus } from "./dayRecorderService.mjs";
 
 export const DAY_RECORDER_EVENT: "gs:dayRecorder:event";
 
+/** What the windows receive on DAY_RECORDER_EVENT. */
+export type DayRecorderEvent = { type: "status"; status: RecorderStatus } | { type: "call"; prompt: CallPrompt | null };
+
 export type SettingsPatch = { enabled?: boolean; paused?: boolean };
 
 export type DayRecorderControls = {
@@ -38,10 +41,15 @@ export function registerDayRecorderIpc(options: {
 
 export type StatusWindow = {
   isDestroyed: () => boolean;
-  webContents: { send: (channel: string, payload: unknown) => void };
+  webContents: { send: (channel: string, payload: DayRecorderEvent) => void };
 };
 
 export function forwardStatus(options: {
   service: { onStatus: (cb: (status: RecorderStatus) => void) => () => void };
+  windows: () => StatusWindow[];
+}): () => void;
+
+export function forwardCallPrompt(options: {
+  recorder: { onCallPrompt: (cb: (prompt: CallPrompt | null) => void) => () => void };
   windows: () => StatusWindow[];
 }): () => void;

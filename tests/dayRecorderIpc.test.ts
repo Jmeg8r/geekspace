@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type ControlHandler,
   DAY_RECORDER_EVENT,
+  type DayRecorderEvent,
   createDayRecorderControls,
   forwardCallPrompt,
   forwardStatus,
@@ -183,7 +184,7 @@ describe("forwardCallPrompt", () => {
       },
     };
     const sent: string[] = [];
-    const open = { isDestroyed: () => false, webContents: { send: (ch: string, p: { type: string }) => void sent.push(`${ch} ${p.type}`) } };
+    const open = { isDestroyed: () => false, webContents: { send: (ch: string, p: DayRecorderEvent) => void sent.push(`${ch} ${p.type}`) } };
     const closed = { isDestroyed: () => true, webContents: { send: () => void sent.push("closed") } };
     const stop = forwardCallPrompt({ recorder, windows: () => [open, closed] });
     emit!({ state: "timedOut", callId: "c" });

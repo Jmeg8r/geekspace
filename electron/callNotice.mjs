@@ -168,3 +168,8 @@ export function createCallNotice({ helper, logEvent, onPrompt, onMicHeld, log })
     micHeld: () => micHeld,
   };
 }
+
+/** The status the tray and the app show: Recording is "held" while the question is open. */
+export function statusWithCall(status, prompt) {
+  return status.status === "recording" && prompt?.state === "asking" ? { ...status, call: "held" } : status;
+}

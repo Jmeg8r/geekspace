@@ -1,4 +1,5 @@
 // WHAT: types for the call notice, so tests/ and the renderer can import them.
+import type { RecorderStatus } from "./dayRecorderService.mjs";
 
 export const NOTICE_TIMEOUT_MS: number;
 export const EXTEND_MS: number;
@@ -26,3 +27,5 @@ export function createCallNotice(options: {
   onMicHeld: (held: boolean) => void;
   log: (message: string) => void;
 }): CallNotice;
+
+export function statusWithCall(status: RecorderStatus, prompt: CallPrompt | null): RecorderStatus;

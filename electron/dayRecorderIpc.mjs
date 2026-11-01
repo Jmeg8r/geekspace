@@ -60,3 +60,12 @@ export function forwardStatus({ service, windows }) {
     }
   });
 }
+
+/** Push every call prompt change to the open windows (plan PR 4b). Returns the unsubscribe. */
+export function forwardCallPrompt({ recorder, windows }) {
+  return recorder.onCallPrompt((prompt) => {
+    for (const win of windows()) {
+      if (!win.isDestroyed()) win.webContents.send(DAY_RECORDER_EVENT, { type: "call", prompt });
+    }
+  });
+}

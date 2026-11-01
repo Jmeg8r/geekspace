@@ -39,7 +39,7 @@ import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { oneTurnAtATime } from "./agentShared.mjs";
 import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
-import { forwardStatus, registerDayRecorderIpc } from "./dayRecorderIpc.mjs";
+import { forwardCallPrompt, forwardStatus, registerDayRecorderIpc } from "./dayRecorderIpc.mjs";
 import { startDayRecorder } from "./dayRecorderRuntime.mjs";
 import { createQuitHold } from "./dayRecorderService.mjs";
 import {
@@ -516,6 +516,7 @@ app.whenReady().then(async () => {
     dayRecorder = recorder;
     // The view, not the service: the windows must not flash the passing `off` either.
     forwardStatus({ service: recorder.view, windows: appWindows });
+    forwardCallPrompt({ recorder, windows: appWindows });
     holdQuitForDayRecorder = createQuitHold({
       stop: () => recorder.stop(),
       quit: () => app.quit(),
