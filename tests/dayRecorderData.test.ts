@@ -80,6 +80,19 @@ describe("dayRecorder.addTranscript", () => {
     await t.mutation(api.dayRecorder.addTranscript, { segmentId, start: s.start, end: s.end, text: "I'll send the deck." });
     expect((await t.run((ctx) => ctx.db.get(segmentId)))?.status).toBe("transcribed");
   });
+
+  // Codex 5 r3: a write that committed but whose answer was lost is sent again (a retry, or the
+  // next start). The segment's result is already in, so the second write adds nothing.
+  it("adds no second transcript for a segment that already has its result", async () => {
+    const t = convexTest(schema, modules);
+    const segmentId = await t.mutation(api.dayRecorder.addSegment, segment());
+    const s = segment();
+    const row = { segmentId, start: s.start, end: s.end, text: "I'll send the deck." };
+    await t.mutation(api.dayRecorder.addTranscript, row);
+    await expect(t.mutation(api.dayRecorder.addTranscript, row)).resolves.toBeNull();
+    const rows = await t.run((ctx) => ctx.db.query("transcripts").collect());
+    expect(rows).toHaveLength(1);
+  });
 });
 
 // Codex review of PR 3b-1: the helper names no app when a denylisted app owned the menu bar
@@ -132,6 +145,15 @@ describe("dayRecorder retention", () => {
     const expired = await t.query(api.dayRecorder.expiredMedia, { now: NOW });
     expect(expired.segments.map((s) => s._id)).toEqual([old]);
     expect(expired.screenshots.map((s) => s._id)).toEqual([oldShot]);
+  });
+
+  // Codex 5 r2 P1: a segment purged while it waited for transcription made the queue retry
+  // forever, because marking it failed was refused. Purged is terminal: a later status is a no-op.
+  it("leaves a purged segment purged when its transcription result arrives", async () => {
+    const { t, old, oldShot } = await aged();
+    await t.mutation(api.dayRecorder.markPurged, { segmentIds: [old], screenshotIds: [oldShot], at: NOW });
+    await expect(t.mutation(api.dayRecorder.setSegmentStatus, { segmentId: old, status: "failed" })).resolves.toBeNull();
+    expect((await t.run((ctx) => ctx.db.get(old)))?.status).toBe("purged");
   });
 
   it("marks purged media, logs one purge event with the count, and keeps the text", async () => {

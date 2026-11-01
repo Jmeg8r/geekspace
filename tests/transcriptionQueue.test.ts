@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToolMissingError, WHISPER_MODELS, transcribeFile } from "../electron/meetingProcessor.mjs";
-import { RETRY_AFTER_MS, createTranscriptionQueue, type PendingSegment } from "../electron/transcriptionQueue.mjs";
+import { RETRY_AFTER_MS, STOP_GRACE_MS, createTranscriptionQueue, type PendingSegment } from "../electron/transcriptionQueue.mjs";
 
 // WHAT: local transcription of Day Recorder segments (plan PR 5, spec R7). WHY tested: every
 // closed segment must end as a transcript row, or as transcribed with nothing to say, or as
@@ -162,6 +162,25 @@ describe("createTranscriptionQueue", () => {
     expect(transcribe).toHaveBeenCalledTimes(1);
   });
 
+  // Codex 5 r2 P1: an older segment offered while a newer one was being transcribed was sorted
+  // to the front and then removed as if it were done, and the newer one written twice.
+  it("keeps an older segment offered mid-transcription, and writes each segment once", async () => {
+    let release: () => void = () => {};
+    const order: string[] = [];
+    const h = harness(async (file) => {
+      order.push(file);
+      if (order.length === 1) await new Promise<void>((r) => (release = r));
+      return { transcript: "SYNTHETIC" };
+    });
+    h.queue.offer([seg(2)]);
+    await vi.advanceTimersByTimeAsync(0);
+    h.queue.offer([seg(1), seg(2)]);
+    release();
+    await h.queue.idle();
+    await h.queue.idle();
+    expect(h.rows.map((r) => r.segmentId).sort()).toEqual(["seg-1", "seg-2"]);
+  });
+
   it("refuses a path outside the media root as failed, without transcribing it", async () => {
     const transcribe = vi.fn(async () => ({ transcript: "SYNTHETIC" }));
     const statuses: string[] = [];
@@ -187,6 +206,38 @@ describe("createTranscriptionQueue", () => {
     h.queue.offer([seg(1)]);
     await h.queue.idle();
     expect(transcribe).not.toHaveBeenCalled();
+  });
+
+  // Codex 5 r3 P1: a disconnected Convex client keeps a mutation pending rather than failing
+  // it, so a row write with no answer held quit forever. Stop waits only so long; the segment
+  // is still closed in the backend, so the next start takes it again.
+  it("stops within its grace period when a row write never answers, and says so", async () => {
+    const logs: string[] = [];
+    const queue = createTranscriptionQueue({
+      transcribe: async () => ({ transcript: "SYNTHETIC" }),
+      resolvePath: (p: string) => `/media/${p}`,
+      addTranscript: () => new Promise<void>(() => {}),
+      setSegmentStatus: async () => {},
+      log: (m: string) => void logs.push(m),
+    });
+    queue.offer([seg(1)]);
+    await vi.advanceTimersByTimeAsync(0);
+    let stopped = false;
+    void queue.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS - 1);
+    expect(stopped).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(stopped).toBe(true);
+    expect(logs.join("\n")).toMatch(/seg-1.*next start/);
+    expect(logs.join("\n")).not.toContain("SYNTHETIC");
+  });
+
+  it("stops at once when nothing is running", async () => {
+    const h = harness(async () => ({ transcript: "SYNTHETIC" }));
+    let stopped = false;
+    void h.queue.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(true);
   });
 });
 
