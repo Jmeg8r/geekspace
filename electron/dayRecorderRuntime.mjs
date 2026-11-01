@@ -167,6 +167,9 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   service.onAudioUse((use) => detector.receive(use));
   service.onCallHeld((app) => notice.callHeld(app));
   service.onAudioClassified((through) => mic.classified(through, helperGen));
+  // Unchecked time (Codex #4b r6): what the mic holds may include it, so it is dropped, and
+  // the mic starts afresh once the drop is done.
+  service.onAudioGap(() => void mic.discard().then(() => syncMic()));
   service.onAudioUseReady(() => {
     audioReady = true;
     notice.audioReady();

@@ -362,6 +362,7 @@ final class SystemAudioRecorder {
             // release: the call is held without a round trip through the supervisor.
             let watcher = AudioUseWatcher(denylist: denylist, calls: calls, startHeld: startHeld,
                                           onCallStart: { [unowned self] app, t in self.router.hold(at: t, app: app) },
+                                          onGap: { [unowned self] from, to in self.router.gap(from: from, to: to) },
                                           report: report)
             self.watcher = watcher
             let timer = DispatchSource.makeTimerSource(queue: queue)

@@ -168,6 +168,11 @@ More detail on the fields:
   treats no `audioUseReady` within 10 s of `ready` as a failure (Not recording, the helper is
   stopped): until it comes the mic stays off and system audio stays held, and heartbeats
   don't count for it.
+- **`audioGap`** (`from`, `to`, plan PR 4b, Codex review round 6) comes before a poll's
+  `audioClassified` when that poll ran more than 400 ms (four polls) after the last: an app
+  may have started and stopped using audio inside it unseen. System audio in [`from`, `to`)
+  is dropped (a held call keeps what it holds), and the supervisor has the mic discard what
+  waits and start again.
 - **`audioClassified`** (`through`, plan PR 4b) follows every audio-use poll, after that poll's
   `audioUse` and `callHeld` lines: everything captured before `through` has been looked at. The
   supervisor passes it to the mic writer, whose chunks wait in memory until it passes them, and

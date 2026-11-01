@@ -65,6 +65,7 @@ export function createDayRecorderService({
   const audioReadyListeners = new Set();
   const callHeldListeners = new Set();
   const classifiedListeners = new Set();
+  const gapListeners = new Set();
 
   function live() {
     if (!supervisor) throw new Error("The capture helper is not running");
@@ -217,6 +218,10 @@ export function createDayRecorderService({
         if (owner !== supervisor) return;
         for (const cb of classifiedListeners) cb(through);
       },
+      onAudioGap: (from, to) => {
+        if (owner !== supervisor) return;
+        for (const cb of gapListeners) cb(from, to);
+      },
     });
     supervisor = owner;
     runningKey = key;
@@ -290,6 +295,11 @@ export function createDayRecorderService({
     onAudioClassified(cb) {
       classifiedListeners.add(cb);
       return () => classifiedListeners.delete(cb);
+    },
+    /** The live helper's audio-use poll came late: that time was never checked. */
+    onAudioGap(cb) {
+      gapListeners.add(cb);
+      return () => gapListeners.delete(cb);
     },
     /** The call hold, on the live helper (plan PR 4b). Throws when none is running. */
     calls: {

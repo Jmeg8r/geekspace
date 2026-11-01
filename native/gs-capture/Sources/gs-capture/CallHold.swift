@@ -199,6 +199,18 @@ final class CallRouter {
         _ = begin(tail, at: t)
     }
 
+    /// Audio captured in [from, to) was never checked by an audio-use poll: system audio in it is
+    /// dropped, and system audio resumes at `to`. A held call keeps what it holds: its audio is
+    /// never written without a notice anyway (Codex review of PR 4b, round 6).
+    func gap(from: Double, to: Double) {
+        if let held = spans.last?.call, case .pending = held.fate { return }
+        let dropped = Call(maxSec: maxSec)
+        dropped.fate = .discard("gap")
+        dropped.silent = true
+        let start = begin(dropped, at: from)
+        if to > start { spans.append(Span(fromMs: to, call: nil)) }
+    }
+
     func release(at t: Double) { resolve(.release, at: t) }
 
     func discard(at t: Double, reason: String = "command") { resolve(.discard(reason), at: t) }

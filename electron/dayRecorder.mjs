@@ -46,6 +46,8 @@ const SHAPES = {
   audioUseReady: (m) => isNum(m.t) && isNum(m.apps),
   // Codex #4b r4: how far the audio-use polls have looked; the mic's chunks wait for it.
   audioClassified: (m) => isNum(m.through),
+  // Codex #4b r6: unchecked time, dropped; the mic discards what waits from it.
+  audioGap: (m) => isNum(m.from) && isNum(m.to),
   callCleared: (m) => isNum(m.segments) && isNum(m.heldSec),
   // These are only logged, but what is logged is validated too (Codex #80 r2): counts must
   // be numbers and `trigger` one of its two values, so no line can smuggle text into a log.
@@ -154,6 +156,8 @@ export function createSupervisor({
   onCallHeld = () => {},
   // How far the helper's audio-use polls have classified (plan PR 4b): never logged.
   onAudioClassified = () => {},
+  // An audio-use poll came late: [from, to) was never checked (plan PR 4b).
+  onAudioGap = () => {},
   // The apps the helper treats as calls, by callDetector.mjs's rule.
   calls = { apps: [...DEDICATED_CALL_APPS], browsers: [...BROWSERS] },
   env = process.env,
@@ -312,6 +316,10 @@ export function createSupervisor({
       case "callHeld":
         log(diagnostic(m));
         if (m.app !== undefined) onCallHeld(m.app);
+        return;
+      case "audioGap":
+        log(`audio-use poll gap: ${Math.round(m.to - m.from)} ms unchecked, its audio dropped`);
+        onAudioGap(m.from, m.to);
         return;
       case "audioClassified":
         onAudioClassified(m.through);
