@@ -247,3 +247,43 @@ describe("dayRecorder capture day vs capture time", () => {
     );
   });
 });
+
+// Codex 3e-2 r1–r3: saving the denylist whole from the page let a stale copy undo an edit,
+// so an app just denied, or one another window added, could lose its protection (R4). Each
+// edit is now one atomic change to the list as the server holds it.
+describe("dayRecorder denylist edits", () => {
+  const list = async (t: ReturnType<typeof convexTest>) => (await t.query(api.dayRecorder.getSettings, {})).denylist;
+
+  it("adds to the list as it is now, once", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.editor" });
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    expect(await list(t)).toEqual(["com.example.mail", "com.example.editor"]);
+  });
+
+  it("removes only that app, and keeps what another window added", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.editor" });
+    // Another window, between this window's edits.
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.notes" });
+    await t.mutation(api.dayRecorder.removeFromDenylist, { id: "com.example.mail" });
+    expect(await list(t)).toEqual(["com.example.editor", "com.example.notes"]);
+  });
+
+  it("removing an app that is not listed changes nothing", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    await t.mutation(api.dayRecorder.removeFromDenylist, { id: "com.example.other" });
+    expect(await list(t)).toEqual(["com.example.mail"]);
+  });
+
+  it("refuses an invalid bundle id at the boundary", async () => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.addToDenylist, { id: "not a bundle id" })).rejects.toThrow(
+      'Invalid app bundle id "not a bundle id"'
+    );
+    await expect(t.mutation(api.dayRecorder.removeFromDenylist, { id: "../x" })).rejects.toThrow("Invalid app bundle id");
+  });
+});

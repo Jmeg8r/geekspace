@@ -15,6 +15,8 @@
   --active: rgba(54, 55, 55, 0.1);
   --border-c: #e6e7e9;
   --ink: #363737;
+  /* Day Recorder error text: red pulled toward ink, 4.5:1 or more on its surface (WCAG 1.4.3). */
+  --recorder-error: color-mix(in srgb, var(--pal-red) 70%, #363737);
   --ink-2: #848585;
   --ink-3: #b6b6b6;
   --accent: #e9724c;
@@ -47,6 +49,7 @@
   --active: rgba(255, 255, 255, 0.1);
   --border-c: rgba(255, 255, 255, 0.09);
   --ink: #ededf2;
+  --recorder-error: color-mix(in srgb, var(--pal-red) 70%, #ededf2);
   --ink-2: #9d9db4;
   --ink-3: #65657f;
   --accent: #ff6b35;

@@ -17,6 +17,7 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
+import { RecorderIndicator } from "../dayRecorder/RecorderIndicator";
 import { SidebarRecordingDot } from "../meetings/RecorderWidget";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -83,6 +84,7 @@ export function Sidebar() {
         </div>
         <span className="text-[14px] font-bold tracking-tight">Geekspace</span>
       </div>
+      <RecorderIndicator />
 
       {/* Primary nav */}
       <div className="px-2">

@@ -1,4 +1,4 @@
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
 import {
@@ -75,6 +75,33 @@ export const updateSettings = mutation({
     const existing = await settingsDoc(ctx);
     if (existing) await ctx.db.patch(existing._id, patch);
     else await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, ...patch });
+  },
+});
+
+// WHY not a whole list from the page: a page saving the list it last rendered can undo an
+// edit made since, by itself or another window, and an app just denied would be captured
+// again (R4; Codex review of PR 3e-2). Each of these is one atomic change to the list as it
+// is stored now.
+async function editDenylist(ctx: MutationCtx, change: (list: string[]) => string[]) {
+  const existing = await settingsDoc(ctx);
+  const dayRecorderDenylist = change(existing?.dayRecorderDenylist ?? []);
+  if (existing) await ctx.db.patch(existing._id, { dayRecorderDenylist });
+  else await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, dayRecorderDenylist });
+}
+
+export const addToDenylist = mutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    assertBundleId(id);
+    await editDenylist(ctx, (list) => (list.includes(id) ? list : [...list, id]));
+  },
+});
+
+export const removeFromDenylist = mutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    assertBundleId(id);
+    await editDenylist(ctx, (list) => list.filter((entry) => entry !== id));
   },
 });
 
