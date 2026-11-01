@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL, PRICES, costOf, createDayAssistant, type AssistantInput } from "../electron/dayAssistant.mjs";
+import { MODEL, PRICES, costOf, createDayAssistant, type AssistantInput, type AssistantRequest } from "../electron/dayAssistant.mjs";
 import { createKeyStore, registerAssistantIpc } from "../electron/assistantKey.mjs";
 
 // WHAT: the Day Recorder's assistant (plan PR 6a, spec R8, R10, F4). WHY tested: it is the only
@@ -28,17 +28,26 @@ type Reply = {
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 };
 
-function harness(opts: { reply?: Reply | (() => Promise<Reply>); key?: string | null; cap?: { capUsd: number | null; spentUsd: number; reached: boolean }; input?: AssistantInput } = {}) {
-  const requests: object[] = [];
+type ParseParams = AssistantRequest;
+type UsageRow = { day: string; inputTokens: number; outputTokens: number; costUsd: number };
+
+function harness(
+  opts: {
+    reply?: Reply;
+    replyFn?: () => Promise<Reply>;
+    key?: string | null;
+    cap?: { capUsd: number | null; spentUsd: number; reached: boolean };
+    input?: AssistantInput;
+  } = {}
+) {
+  const requests: ParseParams[] = [];
   const applied: object[][] = [];
-  const usage: object[] = [];
+  const usage: UsageRow[] = [];
   const events: { kind: string; detail?: string }[] = [];
   const logs: string[] = [];
   let watermark = Date.now() - 900_000;
   const reply: Reply =
-    typeof opts.reply === "object" && opts.reply
-      ? opts.reply
-      : {
+    opts.reply ?? {
           parsed_output: { actions: [{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, source: "t1" }] },
           stop_reason: "end_turn",
           model: MODEL,
@@ -47,9 +56,9 @@ function harness(opts: { reply?: Reply | (() => Promise<Reply>); key?: string | 
   const client = {
     beta: {
       messages: {
-        parse: vi.fn(async (params: object) => {
+        parse: vi.fn(async (params: ParseParams) => {
           requests.push(params);
-          return typeof opts.reply === "function" ? opts.reply() : reply;
+          return opts.replyFn ? opts.replyFn() : reply;
         }),
       },
     },
@@ -59,7 +68,7 @@ function harness(opts: { reply?: Reply | (() => Promise<Reply>); key?: string | 
     convex: {
       input: async () => opts.input ?? INPUT,
       applyActions: async (actions: object[]) => void applied.push(actions),
-      recordUsage: async (row: object) => void usage.push(row),
+      recordUsage: async (row: UsageRow) => void usage.push(row),
       capStatus: async () => opts.cap ?? { capUsd: 5, spentUsd: 0, reached: false },
       logEvent: async (e: { kind: string; detail?: string }) => void events.push(e),
       watermark: async () => watermark,
@@ -165,7 +174,7 @@ describe("createDayAssistant.runBatch", () => {
 
   it("keeps the window for the next batch when the call fails, without recording any cost", async () => {
     const h = harness({
-      reply: async () => {
+      replyFn: async () => {
         throw new Error("network down");
       },
     });
@@ -196,7 +205,7 @@ describe("createDayAssistant.runBatch", () => {
   it("never runs two batches at once", async () => {
     let finish: () => void = () => {};
     const h = harness({
-      reply: () =>
+      replyFn: () =>
         new Promise<Reply>((resolve) => {
           finish = () => resolve({ parsed_output: { actions: [] }, stop_reason: "end_turn", model: MODEL, usage: { input_tokens: 1, output_tokens: 1 } });
         }),

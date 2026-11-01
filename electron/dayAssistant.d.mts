@@ -18,9 +18,20 @@ export type AssistantInput = {
   screenshots: { _id: string; takenAt: number; appBundleId?: string; ocrText: string }[];
 };
 
+/** What the assistant sends (the fields it sets on client.beta.messages.parse). */
+export type AssistantRequest = {
+  model: string;
+  max_tokens: number;
+  betas: string[];
+  fallbacks: "default";
+  output_config: { effort: string; format: object };
+  system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[];
+  messages: { role: "user"; content: string }[];
+};
+
 /** The parts of the SDK client the assistant uses. */
 export type AssistantClient = {
-  beta: { messages: { parse: (params: object) => Promise<{ parsed_output: { actions: object[] } | null; stop_reason: string; model: string; usage: Usage }> } };
+  beta: { messages: { parse: (params: AssistantRequest) => Promise<{ parsed_output: { actions: object[] } | null; stop_reason: string; model: string; usage: Usage }> } };
 };
 
 export type DayAssistant = { runBatch: () => Promise<void> };
