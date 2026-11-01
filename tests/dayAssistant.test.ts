@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL, PRICES, costOf, createDayAssistant, type AssistantInput } from "../electron/dayAssistant.mjs";
-import { createKeyStore } from "../electron/assistantKey.mjs";
+import { createKeyStore, registerAssistantIpc } from "../electron/assistantKey.mjs";
 
 // WHAT: the Day Recorder's assistant (plan PR 6a, spec R8, R10, F4). WHY tested: it is the only
 // code that sends captured text to a cloud model and turns the reply into tasks and blocks, so
@@ -264,5 +264,22 @@ describe("createKeyStore", () => {
     expect(() => store.set("has spaces in it")).toThrow(/key/);
     const plain = createKeyStore({ file: "/x/key.bin", safeStorage: { ...f.safeStorage, isEncryptionAvailable: () => false }, fs: f.fsImpl });
     expect(() => plain.set("sk-ant-SYNTHETIC")).toThrow(/Keychain/);
+  });
+});
+
+// Plan PR 6a, spec F4: the key goes in from Settings and never comes back out.
+describe("registerAssistantIpc", () => {
+  it("registers only the write-only key channels, through the guarded handle()", async () => {
+    const handlers = new Map<string, (args: { key?: string | number | null }) => boolean | void>();
+    const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn(), get: vi.fn(() => "sk-ant-SYNTHETIC") };
+    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store });
+    expect([...handlers.keys()].sort()).toEqual(["gs:assistant:clearApiKey", "gs:assistant:hasApiKey", "gs:assistant:setApiKey"]);
+    expect(handlers.get("gs:assistant:hasApiKey")!({})).toBe(true);
+    expect(handlers.get("gs:assistant:setApiKey")!({ key: "sk-ant-SYNTHETIC" })).toBeUndefined();
+    expect(store.set).toHaveBeenCalledWith("sk-ant-SYNTHETIC");
+    expect(() => handlers.get("gs:assistant:setApiKey")!({ key: 42 })).toThrow(/key/);
+    handlers.get("gs:assistant:clearApiKey")!({});
+    expect(store.clear).toHaveBeenCalledOnce();
+    expect(store.get).not.toHaveBeenCalled();
   });
 });
