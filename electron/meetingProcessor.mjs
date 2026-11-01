@@ -13,13 +13,25 @@ import { downloadVerifiedFile, verifiedFile } from "./verifiedDownload.mjs";
 const EXE = process.platform === "win32" ? ".exe" : "";
 
 const MODEL_DIR = path.join(os.homedir(), ".geekspace", "whisper-models");
-const MODEL_NAME = "ggml-base.en.bin";
-const MODEL_URL = `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${MODEL_NAME}`;
 // WHY pinned: a size check alone accepted any file over 100 MB as the model.
-// Hugging Face LFS metadata (x-linked-size / x-linked-etag), checked 2026-10-15 against
-// both the CDN and an installed copy.
-const MODEL_SIZE = 147_964_211;
-const MODEL_SHA256 = "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002";
+// Hugging Face LFS metadata (x-linked-size / x-linked-etag): base.en checked 2026-10-15,
+// small.en 2026-11-01, each against the CDN and an installed copy.
+// Meetings uses base.en; the Day Recorder uses small.en (spec R7, spike Q6).
+export const WHISPER_MODELS = {
+  "base.en": { file: "ggml-base.en.bin", size: 147_964_211, sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002" },
+  "small.en": { file: "ggml-small.en.bin", size: 487_614_201, sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d" },
+};
+const MEETINGS_MODEL = "base.en";
+const MODEL_NAME = WHISPER_MODELS[MEETINGS_MODEL].file;
+const modelUrl = (file) => `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${file}`;
+
+/** A tool or model the transcription needs is not installed: not a fault of the audio. */
+export class ToolMissingError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ToolMissingError";
+  }
+}
 // WHY win32 gets a 4th dir: whisper.cpp ships no winget package, so
 // ~/.geekspace/tools is the documented drop-dir for whisper-cli.exe. The three
 // mac dirs stay exactly as-is and in order on every platform.
@@ -68,10 +80,11 @@ async function findTool(names) {
 }
 
 // WHY cache: hashing 148 MB takes a moment and toolStatus runs on every Meetings visit.
-// Keyed by inode, size and mtime, so a replaced or truncated file is hashed again.
-let modelCheck = { key: "", ok: false };
-async function modelVerified() {
-  const file = path.join(MODEL_DIR, MODEL_NAME);
+// Keyed by model, inode, size and mtime, so a replaced or truncated file is hashed again.
+const modelChecks = new Map();
+async function modelVerified(model = MEETINGS_MODEL) {
+  const { file: name, size, sha256 } = WHISPER_MODELS[model];
+  const file = path.join(MODEL_DIR, name);
   let key;
   try {
     const st = await fs.lstat(file);
@@ -80,10 +93,10 @@ async function modelVerified() {
     if (err.code === "ENOENT") return false;
     throw err;
   }
-  if (modelCheck.key !== key) {
-    modelCheck = { key, ok: await verifiedFile(file, MODEL_SIZE, MODEL_SHA256) };
+  if (modelChecks.get(model)?.key !== key) {
+    modelChecks.set(model, { key, ok: await verifiedFile(file, size, sha256) });
   }
-  return modelCheck.ok;
+  return modelChecks.get(model).ok;
 }
 
 export async function toolStatus() {
@@ -93,20 +106,22 @@ export async function toolStatus() {
   return { ffmpeg: Boolean(ffmpeg), whisper: Boolean(whisper), model, modelName: MODEL_NAME };
 }
 
-let modelDownload = null;
-/** Download the whisper model (progress 0-100). Concurrent callers share one download. */
-export async function ensureModel(onProgress) {
-  if (modelDownload) return modelDownload;
-  modelDownload = (async () => {
-    if (await modelVerified()) return true;
+const modelDownloads = new Map();
+/** Download a whisper model (progress 0-100). Concurrent callers share one download. */
+export async function ensureModel(onProgress, model = MEETINGS_MODEL) {
+  if (modelDownloads.has(model)) return modelDownloads.get(model);
+  const { file, size, sha256 } = WHISPER_MODELS[model];
+  const download = (async () => {
+    if (await modelVerified(model)) return true;
     await fs.mkdir(MODEL_DIR, { recursive: true });
-    await downloadVerifiedFile(MODEL_URL, path.join(MODEL_DIR, MODEL_NAME), MODEL_SIZE, MODEL_SHA256, onProgress);
+    await downloadVerifiedFile(modelUrl(file), path.join(MODEL_DIR, file), size, sha256, onProgress);
     return true;
   })();
+  modelDownloads.set(model, download);
   try {
-    return await modelDownload;
+    return await download;
   } finally {
-    modelDownload = null;
+    modelDownloads.delete(model);
   }
 }
 
@@ -381,75 +396,78 @@ export async function notesFromTranscript(transcript, meetingType, ollamaUrl, ol
 }
 
 /**
- * Full pipeline. `audio` is a Buffer/Uint8Array of the recorded webm.
- * onProgress({ phase, pct }) fires throughout.
+ * Transcribe any audio file ffmpeg reads with whisper.cpp, entirely on this Mac. Shared by
+ * Meetings and the Day Recorder (plan PR 5). A missing tool or model is a ToolMissingError;
+ * silence and no speech are results, not errors, because a quiet stretch of a day is normal.
  */
-export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaModel }, onProgress) {
+export async function transcribeFile({ input, model = MEETINGS_MODEL }, onProgress) {
   const status = await toolStatus();
   if (!status.ffmpeg) {
-    throw new Error(
+    throw new ToolMissingError(
       process.platform === "win32"
         ? "ffmpeg not found — `winget install Gyan.FFmpeg`"
         : "ffmpeg not found — `brew install ffmpeg`"
     );
   }
   if (!status.whisper) {
-    throw new Error(
+    throw new ToolMissingError(
       process.platform === "win32"
         ? "whisper.cpp not found — download the whisper.cpp Windows release zip and drop whisper-cli.exe into %USERPROFILE%\\.geekspace\\tools"
         : "whisper.cpp not found — `brew install whisper-cpp`"
     );
   }
-  if (!status.model) {
+  if (!(await modelVerified(model))) {
     onProgress?.({ phase: "model", pct: 0 });
-    await ensureModel((pct) => onProgress?.({ phase: "model", pct }));
+    await ensureModel((pct) => onProgress?.({ phase: "model", pct }), model);
   }
   const ffmpeg = await findTool(["ffmpeg"]);
   const whisper = await findTool(["whisper-cli", "whisper-cpp"]);
-  const modelPath = path.join(MODEL_DIR, MODEL_NAME);
+  const modelPath = path.join(MODEL_DIR, WHISPER_MODELS[model].file);
 
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "gs-meeting-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "gs-transcribe-"));
   try {
-    const webm = path.join(tmp, "in.webm");
     const wav = path.join(tmp, "out.wav");
-    await fs.writeFile(webm, Buffer.from(audio));
-
     onProgress?.({ phase: "transcribing", pct: 0 });
-    await convertToWhisperWav(ffmpeg, webm, wav);
-
-    // WHY here, before whisper: a dead input device (e.g. Bluetooth speakers
-    // selected as the system input) yields a perfectly valid but silent stream.
-    // whisper turns that into hallucinated filler ("you you you…") after a full
-    // transcription run, which then summarizes into plausible-looking nonsense.
-    // Checking the signal itself fails in seconds with an actionable message,
-    // and catches every silent-input cause rather than one hallucination shape.
+    await convertToWhisperWav(ffmpeg, input, wav);
+    // WHY before whisper: a dead or silent input yields valid but silent audio, which whisper
+    // turns into hallucinated filler after a full run. Measuring the signal takes seconds.
     const level = await measureVolume(ffmpeg, wav);
-    if (isSilentAudio(level)) {
-      // WHY the platform split: mirrors the renderer's copy (isMacLike in
-      // src/lib/utils.ts) so the sound settings path names what the user sees.
-      const soundSettings =
-        process.platform === "darwin"
-          ? "System Settings → Sound → Input"
-          : "Settings → System → Sound → Input";
-      throw new Error(
-        `No audio captured — the recording is silent (peak ${fmtDb(level.peakDb)}, ` +
-          `average ${fmtDb(level.meanDb)}). Check ${soundSettings} ` +
-          `and select your microphone, then record again.`
-      );
-    }
-
-    const transcript = await runWhisper(whisper, modelPath, wav, (pct) =>
-      onProgress?.({ phase: "transcribing", pct })
-    );
-    if (isNoSpeech(transcript)) {
-      throw new Error("No speech detected in the recording");
-    }
-
-    onProgress?.({ phase: "summarizing", pct: 0 });
-    return notesFromTranscript(transcript, meetingType ?? "general", ollamaUrl, ollamaModel, (pct) =>
-      onProgress?.({ phase: "summarizing", pct })
-    );
+    if (isSilentAudio(level)) return { silent: true, level };
+    const transcript = await runWhisper(whisper, modelPath, wav, (pct) => onProgress?.({ phase: "transcribing", pct }));
+    if (isNoSpeech(transcript)) return { noSpeech: true };
+    return { transcript };
   } finally {
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/**
+ * The whole meeting pipeline: transcribe the recording, then summarize it.
+ * onProgress({ phase, pct }) fires throughout.
+ */
+export async function processMeeting({ audio, meetingType, ollamaUrl, ollamaModel }, onProgress) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "gs-meeting-"));
+  let result;
+  try {
+    const webm = path.join(tmp, "in.webm");
+    await fs.writeFile(webm, Buffer.from(audio));
+    result = await transcribeFile({ input: webm, model: MEETINGS_MODEL }, onProgress);
+  } finally {
+    await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
+  }
+  if (result.silent) {
+    // WHY the platform split: mirrors the renderer's copy (isMacLike in src/lib/utils.ts) so
+    // the sound settings path names what the user sees.
+    const soundSettings = process.platform === "darwin" ? "System Settings → Sound → Input" : "Settings → System → Sound → Input";
+    throw new Error(
+      `No audio captured — the recording is silent (peak ${fmtDb(result.level.peakDb)}, ` +
+        `average ${fmtDb(result.level.meanDb)}). Check ${soundSettings} ` +
+        `and select your microphone, then record again.`
+    );
+  }
+  if (result.noSpeech) throw new Error("No speech detected in the recording");
+  onProgress?.({ phase: "summarizing", pct: 0 });
+  return notesFromTranscript(result.transcript, meetingType ?? "general", ollamaUrl, ollamaModel, (pct) =>
+    onProgress?.({ phase: "summarizing", pct })
+  );
 }

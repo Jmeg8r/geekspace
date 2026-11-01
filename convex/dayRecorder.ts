@@ -173,6 +173,20 @@ export const setSegmentStatus = mutation({
   },
 });
 
+// The transcription queue's input (plan PR 5): closed segments, oldest first.
+const MAX_PENDING = 100;
+export const pendingSegments = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    const n = Math.max(1, Math.min(MAX_PENDING, Math.floor(limit ?? 20)));
+    const rows = await ctx.db
+      .query("captureSegments")
+      .withIndex("by_status_start", (q) => q.eq("status", "closed"))
+      .take(n);
+    return rows.map((r) => ({ _id: r._id, path: r.path, start: r.start, end: r.end }));
+  },
+});
+
 export const addTranscript = mutation({
   args: {
     segmentId: v.id("captureSegments"),
