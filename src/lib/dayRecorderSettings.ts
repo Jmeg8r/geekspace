@@ -38,28 +38,52 @@ export function shotSecError(value: number): string | null {
  * not to a saved copy that has not caught up, and saves run one after another, in order.
  * WHY: two quick edits from the same stale copy each replaced the whole list, so the later
  * one undid the earlier (Codex review of PR 3e-2): an app just denied became capturable.
+ * The edited list is kept until `sync` sees the page render it, because a save can finish
+ * before the saved list reaches the page (round 2).
  */
 export function createListEditor(save: (list: string[]) => Promise<void>) {
   let latest: string[] | null = null;
   let outstanding = 0;
   let queue: Promise<void> = Promise.resolve();
 
+  const start = (list: string[]): Promise<void> => {
+    try {
+      return save(list);
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  };
+
   return {
+    /** The saved list the page renders now: once it shows the edits, they are the base again. */
+    sync(saved: string[]) {
+      if (outstanding === 0 && latest && sameList(saved, latest)) latest = null;
+    },
     edit(saved: string[], change: (list: string[]) => string[]): Promise<void> {
       const next = change(latest ?? saved);
       latest = next;
       // With nothing pending the save starts now; otherwise after the one before it.
-      const run = outstanding === 0 ? save(next) : queue.then(() => save(next));
+      const run = outstanding === 0 ? start(next) : queue.then(() => start(next));
       outstanding += 1;
-      const settle = () => {
+      const settle = (failed: boolean) => () => {
         outstanding -= 1;
-        // Nothing pending: the saved list is the truth again, including after a failure.
-        if (outstanding === 0) latest = null;
+        // A failed save was never taken: with nothing else pending, the saved list is the truth.
+        if (failed && outstanding === 0) latest = null;
       };
-      queue = run.then(settle, settle);
+      queue = run.then(settle(false), settle(true));
       return run;
     },
   };
+}
+
+function sameList(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
+/** The recorder runs on macOS only; an `unsupported` status says so too. */
+export function recorderSupported(platform: string, status: { status: string } | null): boolean {
+  if (status?.status === "unsupported") return false;
+  return platform === "darwin" || platform.startsWith("Mac");
 }
 
 export const UNSUPPORTED = "Recording your day needs macOS. Geekspace on this computer can't capture.";
