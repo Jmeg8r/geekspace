@@ -1,5 +1,5 @@
 // WHAT: types for the Day Recorder service, so tests/ can import it.
-import type { CaptureSink, Supervisor, SupervisorOptions } from "./dayRecorder.mjs";
+import type { CaptureSink, HelperMessage, Supervisor, SupervisorOptions } from "./dayRecorder.mjs";
 import type { GateResult } from "./dayRecorderGates.mjs";
 import type { MicState } from "./micController.mjs";
 
@@ -14,7 +14,8 @@ export type RecorderSettings = { enabled: boolean; paused: boolean; denylist: st
 export type RecorderStatus =
   | { status: "off" | "paused" | "starting" | "stopping" | "unsupported" }
   /** `mic` is the mic's own state once it has one (micController.mjs). */
-  | { status: "recording"; mic?: MicState }
+  /** `call: "held"` while a call waits for its notice (plan PR 4b). */
+  | { status: "recording"; mic?: MicState; call?: "held" }
   | { status: "blocked"; error: string }
   /** `retryInMs` is set while an automatic retry is pending. */
   | { status: "notRecording"; error: string; retryInMs?: number };
@@ -44,6 +45,9 @@ export type DayRecorderService = {
   status: () => RecorderStatus;
   setMic: (mic: MicState) => void;
   onStatus: (cb: (status: RecorderStatus) => void) => () => void;
+  onAudioUse: (cb: (message: Extract<HelperMessage, { event: "audioUse" }>) => void) => () => void;
+  /** The call hold on the live helper; each throws when no helper is running. */
+  calls: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void };
   running: () => boolean;
   killSync: () => void;
 };

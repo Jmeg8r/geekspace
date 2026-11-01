@@ -56,6 +56,12 @@ export function createDayRecorderService({
   // its own (James, 2026-10-31), so Recording with a mic error is still Recording.
   let mic = null;
   const listeners = new Set();
+  const audioUseListeners = new Set();
+
+  function live() {
+    if (!supervisor) throw new Error("The capture helper is not running");
+    return supervisor;
+  }
 
   function setStatus(next) {
     status = next.status === "recording" && mic ? { ...next, mic } : next;
@@ -181,6 +187,10 @@ export function createDayRecorderService({
       sink: { addScreenshot: convex.addScreenshot, addSegment: convex.addSegment },
       log,
       onState: (st) => onSupervisorState(owner, st),
+      onAudioUse: (m) => {
+        if (owner !== supervisor) return;
+        for (const cb of audioUseListeners) cb(m);
+      },
     });
     supervisor = owner;
     runningKey = key;
@@ -235,6 +245,16 @@ export function createDayRecorderService({
     onStatus(cb) {
       listeners.add(cb);
       return () => listeners.delete(cb);
+    },
+    onAudioUse(cb) {
+      audioUseListeners.add(cb);
+      return () => audioUseListeners.delete(cb);
+    },
+    /** The call hold, on the live helper (plan PR 4b). Throws when none is running. */
+    calls: {
+      hold: () => live().holdCall(),
+      release: (noticeEventId) => live().releaseCall(noticeEventId),
+      discard: () => live().discardCall(),
     },
     running: () => supervisor?.running() ?? false,
     killSync() {

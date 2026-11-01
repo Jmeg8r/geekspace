@@ -133,6 +133,8 @@ export function createSupervisor({
   sink,
   log,
   onState,
+  // audioUse lines, for call detection and the room-mic pause (plan PR 4b).
+  onAudioUse = () => {},
   env = process.env,
   spawnImpl = spawn,
   silentLimitMs = SILENT_LIMIT_MS,
@@ -268,7 +270,7 @@ export function createSupervisor({
         sawStopped = true;
         return;
       case "audioUse":
-        // Consumed by the mic pause and call detection (plan PR 4).
+        onAudioUse(m);
         return;
       default: {
         const line = diagnostic(m);

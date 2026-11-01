@@ -33,7 +33,14 @@ function harness(opts: { logFails?: boolean } = {}) {
     onMicHeld: (held) => void micHeld.push(held),
     log: () => {},
   });
-  return { notice, calls, prompts, micHeld, prompt: () => prompts.at(-1) ?? null };
+  const prompt = () => prompts.at(-1) ?? null;
+  /** The current prompt, which must be the question. */
+  const asking = () => {
+    const p = prompt();
+    if (p?.state !== "asking") throw new Error(`expected the question, got ${p?.state ?? "nothing"}`);
+    return p;
+  };
+  return { notice, calls, prompts, micHeld, prompt, asking };
 }
 
 describe("createCallNotice", () => {
@@ -43,7 +50,7 @@ describe("createCallNotice", () => {
     expect(h.calls).toEqual(["hold"]);
     expect(h.micHeld.at(-1)).toBe(true);
     expect(h.prompt()).toMatchObject({ state: "asking", app: "us.zoom.xos", canExtend: true });
-    expect(h.prompt()?.deadline).toBe(Date.now() + NOTICE_TIMEOUT_MS);
+    expect(h.asking().deadline).toBe(Date.now() + NOTICE_TIMEOUT_MS);
   });
 
   it("I told them: writes noticeGiven first, then releases with its id, and the mic comes back", async () => {
@@ -84,11 +91,11 @@ describe("createCallNotice", () => {
     const h = harness();
     h.notice.callStarted("us.zoom.xos");
     const id = h.prompt()!.callId;
-    const first = h.prompt()!.deadline;
+    const first = h.asking().deadline;
     h.notice.extend(id);
     expect(h.prompt()).toMatchObject({ state: "asking", canExtend: false, deadline: first + EXTEND_MS });
     h.notice.extend(id);
-    expect(h.prompt()!.deadline).toBe(first + EXTEND_MS);
+    expect(h.asking().deadline).toBe(first + EXTEND_MS);
     await vi.advanceTimersByTimeAsync(NOTICE_TIMEOUT_MS);
     expect(h.calls).toEqual(["hold"]);
     await vi.advanceTimersByTimeAsync(EXTEND_MS);

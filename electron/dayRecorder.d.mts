@@ -64,6 +64,8 @@ export type SupervisorOptions = {
   sink: CaptureSink;
   log: (message: string) => void;
   onState: (state: SupervisorState) => void;
+  /** Each audioUse line, as parsed (plan PR 4b). */
+  onAudioUse?: (message: Extract<HelperMessage, { event: "audioUse" }>) => void;
   env?: NodeJS.ProcessEnv;
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   silentLimitMs?: number;

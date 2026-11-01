@@ -13,11 +13,21 @@ export type DayRecorderControls = {
 
 export function createDayRecorderControls(updateSettings: (patch: SettingsPatch) => Promise<void>): DayRecorderControls;
 
-export type ControllableRecorder = DayRecorderControls & { view: { status: () => RecorderStatus } };
+export type NoticeAnswers = {
+  given: (callId: string) => Promise<void>;
+  declined: (callId: string) => Promise<void>;
+  extend: (callId: string) => void;
+  dismiss: () => void;
+};
+
+export type ControllableRecorder = DayRecorderControls & {
+  view: { status: () => RecorderStatus };
+  notice: NoticeAnswers;
+};
 
 /** What a page can send. setEnabled checks `enabled` itself, so a wrong type is refused there. */
-export type ControlArgs = { enabled?: boolean | string | number | null | object };
-export type ControlHandler = (args: ControlArgs) => RecorderStatus | Promise<void>;
+export type ControlArgs = { enabled?: boolean | string | number | null | object; callId?: string | number | null | object };
+export type ControlHandler = (args: ControlArgs) => RecorderStatus | void | Promise<void>;
 
 export function registerDayRecorderIpc(options: {
   handle: (channel: string, fn: ControlHandler) => void;
