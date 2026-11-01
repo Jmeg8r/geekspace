@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL, PRICES, costOf, createDayAssistant, type AssistantInput, type AssistantRequest } from "../electron/dayAssistant.mjs";
+import {
+  MODEL,
+  PRICES,
+  STOP_GRACE_MS,
+  assistantClient,
+  costOf,
+  createDayAssistant,
+  type AssistantInput,
+  type AssistantRequest,
+} from "../electron/dayAssistant.mjs";
 import { createKeyStore, registerAssistantIpc } from "../electron/assistantKey.mjs";
 
 // WHAT: the Day Recorder's assistant (plan PR 6a, spec R8, R10, F4). WHY tested: it is the only
@@ -22,14 +31,20 @@ const INPUT: AssistantInput = {
 };
 
 type Reply = {
-  parsed_output: { actions: object[] } | null;
+  content: { type: "text"; text: string }[];
   stop_reason: string;
   model: string;
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 };
 
-type ParseParams = AssistantRequest;
-type UsageRow = { day: string; inputTokens: number; outputTokens: number; costUsd: number };
+const reply = (actions: object[], usage = { input_tokens: 2_000, output_tokens: 300 }): Reply => ({
+  content: [{ type: "text", text: JSON.stringify({ actions }) }],
+  stop_reason: "end_turn",
+  model: MODEL,
+  usage,
+});
+
+type Open = { _id: string; status: "inFlight" | "settled"; proposals: { proposal: object; state: string }[] };
 
 function harness(
   opts: {
@@ -38,45 +53,65 @@ function harness(
     key?: string | null;
     cap?: { capUsd: number | null; spentUsd: number; reached: boolean };
     input?: AssistantInput;
+    begin?: () => string | null;
+    settleFails?: number;
+    applyFails?: boolean;
+    open?: Open[];
   } = {}
 ) {
-  const requests: ParseParams[] = [];
-  const applied: object[][] = [];
-  const usage: UsageRow[] = [];
+  const requests: AssistantRequest[] = [];
+  const calls: string[] = [];
+  const begun: { reservedUsd: number; transcriptIds: string[]; screenshotIds: string[] }[] = [];
+  const settled: { requestId: string; costUsd: number; proposals: object[] }[] = [];
   const events: { kind: string; detail?: string }[] = [];
   const logs: string[] = [];
-  let watermark = Date.now() - 900_000;
-  const reply: Reply =
-    opts.reply ?? {
-          parsed_output: { actions: [{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, source: "t1" }] },
-          stop_reason: "end_turn",
-          model: MODEL,
-          usage: { input_tokens: 2_000, output_tokens: 300 },
-        };
+  let settleFails = opts.settleFails ?? 0;
+  let open = opts.open ?? [];
   const client = {
-    beta: {
-      messages: {
-        parse: vi.fn(async (params: ParseParams) => {
-          requests.push(params);
-          return opts.replyFn ? opts.replyFn() : reply;
-        }),
-      },
+    messages: {
+      create: vi.fn(async (params: AssistantRequest) => {
+        requests.push(params);
+        return opts.replyFn ? opts.replyFn() : (opts.reply ?? reply([{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, source: "t1" }]));
+      }),
     },
   };
   const assistant = createDayAssistant({
     client: () => (opts.key === null ? null : client),
     convex: {
-      input: async () => opts.input ?? INPUT,
-      applyActions: async (actions: object[]) => void applied.push(actions),
-      recordUsage: async (row: UsageRow) => void usage.push(row),
+      ensureStart: async ({ at }: { at: number }) => {
+        calls.push(`start ${at}`);
+        return at;
+      },
+      unread: async () => opts.input ?? INPUT,
       capStatus: async () => opts.cap ?? { capUsd: 5, spentUsd: 0, reached: false },
+      beginRequest: async (args: { reservedUsd: number; transcriptIds: string[]; screenshotIds: string[] }) => {
+        begun.push(args);
+        return opts.begin ? opts.begin() : "req1";
+      },
+      settleRequest: async (args: { requestId: string; costUsd: number; proposals: object[] }) => {
+        if (settleFails > 0) {
+          settleFails -= 1;
+          throw new Error("backend down");
+        }
+        settled.push(args);
+        open = [{ _id: args.requestId, status: "settled", proposals: args.proposals.map((proposal) => ({ proposal, state: "pending" })) }];
+      },
+      failRequest: async ({ requestId }: { requestId: string }) => void calls.push(`fail ${requestId}`),
+      openRequests: async () => open,
+      applyProposal: async ({ requestId, index }: { requestId: string; index: number }) => {
+        if (opts.applyFails) throw new Error("refused");
+        calls.push(`apply ${requestId}#${index}`);
+        open = open.map((r) => (r._id === requestId ? { ...r, proposals: r.proposals.map((p, i) => (i === index ? { ...p, state: "applied" } : p)) } : r));
+      },
+      refuseProposal: async ({ requestId, index }: { requestId: string; index: number }) => {
+        calls.push(`refuse ${requestId}#${index}`);
+        open = open.map((r) => (r._id === requestId ? { ...r, proposals: r.proposals.map((p, i) => (i === index ? { ...p, state: "refused" } : p)) } : r));
+      },
       logEvent: async (e: { kind: string; detail?: string }) => void events.push(e),
-      watermark: async () => watermark,
-      setWatermark: async (t: number) => void (watermark = t),
     },
     log: (m: string) => void logs.push(m),
   });
-  return { assistant, client, requests, applied, usage, events, logs, watermark: () => watermark };
+  return { assistant, client, requests, calls, begun, settled, events, logs };
 }
 
 describe("costOf", () => {
@@ -94,15 +129,31 @@ describe("costOf", () => {
 });
 
 describe("createDayAssistant.runBatch", () => {
-  it("sends the new text, applies the allowed actions with their sources, and records the cost", async () => {
+  it("sends the unread text, settles its cost with the proposals, then applies them", async () => {
     const h = harness();
     await h.assistant.runBatch();
     expect(h.requests).toHaveLength(1);
-    const body = JSON.stringify(h.requests[0]);
-    expect(body).toContain("SYNTHETIC: send the deck to Dana by Friday");
-    expect(h.applied).toEqual([[{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, sourceSegmentId: "seg1" }]]);
-    expect(h.usage).toEqual([{ day: "2026-11-02", inputTokens: 2_000, outputTokens: 300, costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, MODEL) }]);
-    expect(h.watermark()).toBe(Date.now());
+    expect(JSON.stringify(h.requests[0])).toContain("SYNTHETIC: send the deck to Dana by Friday");
+    expect(h.begun[0]).toMatchObject({ transcriptIds: ["tr1"], screenshotIds: ["shot1"] });
+    expect(h.settled).toEqual([
+      {
+        requestId: "req1",
+        day: expect.any(String),
+        inputTokens: 2_000,
+        outputTokens: 300,
+        costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, MODEL),
+        proposals: [{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, sourceSegmentId: "seg1" }],
+      },
+    ]);
+    expect(h.calls).toContain("apply req1#0");
+  });
+
+  it("[P1] starts from the beginning of the local day, not a rolling 15 minutes", async () => {
+    const h = harness();
+    await h.assistant.runBatch();
+    const midnight = new Date(Date.now());
+    midnight.setHours(0, 0, 0, 0);
+    expect(h.calls[0]).toBe(`start ${midnight.getTime()}`);
   });
 
   it("does nothing without an API key", async () => {
@@ -126,108 +177,161 @@ describe("createDayAssistant.runBatch", () => {
     expect(h.requests).toEqual([]);
   });
 
-  it("rejects an action outside the allowed set, logs it, and applies the rest", async () => {
-    const h = harness({
-      reply: {
-        parsed_output: {
-          actions: [
-            { type: "deleteEverything", target: "all" },
-            { type: "createTask", title: "Book the retro", estimateMin: 15 },
-          ],
-        },
-        stop_reason: "end_turn",
-        model: MODEL,
-        usage: { input_tokens: 10, output_tokens: 10 },
-      },
-    });
+  it("[P1] reserves the call's worst case inside what is left, and sizes max_tokens to fit", async () => {
+    const h = harness({ cap: { capUsd: 1, spentUsd: 0.9, reached: false } });
     await h.assistant.runBatch();
-    expect(h.applied).toEqual([[{ type: "createTask", title: "Book the retro", estimateMin: 15 }]]);
+    expect(h.begun).toHaveLength(1);
+    expect(h.begun[0].reservedUsd).toBeLessThanOrEqual(0.1 + 1e-9);
+    const dearestOut = Math.max(...Object.values(PRICES).map((p) => p.output)) / 1_000_000;
+    expect(h.requests[0].max_tokens * dearestOut).toBeLessThan(h.begun[0].reservedUsd + 1e-9);
+  });
+
+  it("[P1] makes no call when what is left can't cover one, and says so", async () => {
+    const h = harness({ cap: { capUsd: 0.05, spentUsd: 0.0499, reached: false } });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+    expect(h.events.some((e) => e.kind === "capPaused")).toBe(true);
+  });
+
+  it("[P1] makes no call when the backend refuses the reservation", async () => {
+    const h = harness({ begin: () => null });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+  });
+
+  it("rejects an action outside the allowed set, logs it without its content, and keeps the rest", async () => {
+    const h = harness({ reply: reply([{ type: "deleteEverything", target: "all" }, { type: "createTask", title: "Book the retro", estimateMin: 15 }]) });
+    await h.assistant.runBatch();
+    expect(h.settled[0].proposals).toEqual([{ type: "createTask", title: "Book the retro", estimateMin: 15 }]);
     expect(h.logs.some((l) => l.includes("rejected 1 action"))).toBe(true);
     expect(h.logs.join("\n")).not.toContain("deleteEverything");
   });
 
-  it("drops a source the batch never had, keeping the action", async () => {
+  it("drops a source the batch never had, and maps a screenshot source to its id", async () => {
     const h = harness({
-      reply: {
-        parsed_output: { actions: [{ type: "createTask", title: "Ping Ravi", estimateMin: 10, source: "t99" }] },
-        stop_reason: "end_turn",
-        model: MODEL,
-        usage: { input_tokens: 10, output_tokens: 10 },
-      },
+      reply: reply([
+        { type: "createTask", title: "Ping Ravi", estimateMin: 10, source: "t99" },
+        { type: "draftLinear", issueRef: "GS-12", body: "SYNTHETIC update", source: "s1" },
+      ]),
     });
     await h.assistant.runBatch();
-    expect(h.applied).toEqual([[{ type: "createTask", title: "Ping Ravi", estimateMin: 10 }]]);
+    expect(h.settled[0].proposals).toEqual([
+      { type: "createTask", title: "Ping Ravi", estimateMin: 10 },
+      { type: "draftLinear", issueRef: "GS-12", body: "SYNTHETIC update", sourceScreenshotId: "shot1" },
+    ]);
   });
 
-  it("maps a screenshot source to its screenshot id", async () => {
-    const h = harness({
-      reply: {
-        parsed_output: { actions: [{ type: "draftLinear", issueRef: "GS-12", body: "SYNTHETIC update", source: "s1" }] },
-        stop_reason: "end_turn",
-        model: MODEL,
-        usage: { input_tokens: 10, output_tokens: 10 },
-      },
-    });
+  it("[P1] a reply that isn't valid structured output is still paid for and settled, with no proposals", async () => {
+    const h = harness({ reply: { content: [{ type: "text", text: "not json" }], stop_reason: "end_turn", model: MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
     await h.assistant.runBatch();
-    expect(h.applied).toEqual([[{ type: "draftLinear", issueRef: "GS-12", body: "SYNTHETIC update", sourceScreenshotId: "shot1" }]]);
+    expect(h.settled).toHaveLength(1);
+    expect(h.settled[0].costUsd).toBeGreaterThan(0);
+    expect(h.settled[0].proposals).toEqual([]);
   });
 
-  it("keeps the window for the next batch when the call fails, without recording any cost", async () => {
+  it("a refusal is settled too, with nothing applied", async () => {
+    const h = harness({ reply: { content: [], stop_reason: "refusal", model: MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
+    await h.assistant.runBatch();
+    expect(h.settled[0].proposals).toEqual([]);
+  });
+
+  it("a call that fails frees its reservation, with nothing settled and nothing logged of the text", async () => {
     const h = harness({
       replyFn: async () => {
         throw new Error("network down");
       },
     });
-    const before = h.watermark();
     await h.assistant.runBatch();
-    expect(h.watermark()).toBe(before);
-    expect(h.usage).toEqual([]);
+    expect(h.calls).toContain("fail req1");
+    expect(h.settled).toEqual([]);
     expect(h.logs.join("\n")).not.toContain("SYNTHETIC");
   });
 
-  it("moves past a refused or unparseable reply (it was paid for) and applies nothing", async () => {
-    const h = harness({
-      reply: { parsed_output: null, stop_reason: "refusal", model: MODEL, usage: { input_tokens: 100, output_tokens: 5 } },
-    });
+  it("[P1] a settle that fails is written first next time, before any new call", async () => {
+    const h = harness({ settleFails: 1 });
     await h.assistant.runBatch();
-    expect(h.applied).toEqual([]);
-    expect(h.usage).toHaveLength(1);
-    expect(h.watermark()).toBe(Date.now());
+    expect(h.settled).toEqual([]);
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    expect(h.settled).toHaveLength(1);
   });
 
-  it("moves past an empty window without a call", async () => {
+  it("[P1] applies an earlier call's kept proposals before making a new one", async () => {
+    const h = harness({
+      open: [{ _id: "req0", status: "settled", proposals: [{ proposal: { type: "createTask", title: "Old", estimateMin: 5 }, state: "pending" }] }],
+    });
+    await h.assistant.runBatch();
+    expect(h.calls.indexOf("apply req0#0")).toBeGreaterThanOrEqual(0);
+    expect(h.calls.indexOf("apply req0#0")).toBeLessThan(h.calls.indexOf("apply req1#0"));
+  });
+
+  it("refuses a proposal Geekspace won't take, so it isn't tried forever", async () => {
+    const h = harness({ applyFails: true });
+    await h.assistant.runBatch();
+    expect(h.calls).toContain("refuse req1#0");
+  });
+
+  it("makes no call when nothing is unread", async () => {
     const h = harness({ input: { transcripts: [], screenshots: [] } });
     await h.assistant.runBatch();
     expect(h.requests).toEqual([]);
-    expect(h.watermark()).toBe(Date.now());
+    expect(h.begun).toEqual([]);
   });
 
-  it("never runs two batches at once", async () => {
+  it("never runs two batches at once, and stop waits for the one running", async () => {
     let finish: () => void = () => {};
     const h = harness({
       replyFn: () =>
         new Promise<Reply>((resolve) => {
-          finish = () => resolve({ parsed_output: { actions: [] }, stop_reason: "end_turn", model: MODEL, usage: { input_tokens: 1, output_tokens: 1 } });
+          finish = () => resolve(reply([]));
         }),
     });
     const first = h.assistant.runBatch();
     await vi.advanceTimersByTimeAsync(0);
     await h.assistant.runBatch();
+    let stopped = false;
+    const stopping = h.assistant.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
     finish();
     await first;
+    await stopping;
     expect(h.requests).toHaveLength(1);
+    expect(h.settled).toHaveLength(1);
   });
 
-  it("asks with structured output, a cap on output, and the refusal fallback", async () => {
+  it("stop gives up on a call that never answers after its grace, and says so", async () => {
+    const h = harness({ replyFn: () => new Promise<Reply>(() => {}) });
+    void h.assistant.runBatch();
+    await vi.advanceTimersByTimeAsync(0);
+    let stopped = false;
+    void h.assistant.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS);
+    expect(stopped).toBe(true);
+    expect(h.logs.some((l) => l.includes("reservation"))).toBe(true);
+  });
+
+  it("asks with structured output and an output cap, on the model it names, without the fallback beta", async () => {
     const h = harness();
     await h.assistant.runBatch();
     expect(h.requests[0]).toMatchObject({
       model: MODEL,
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      output_config: { effort: expect.any(String), format: expect.anything() },
+      output_config: { effort: expect.any(String), format: { type: "json_schema", schema: expect.anything() } },
       max_tokens: expect.any(Number),
     });
+    expect(h.requests[0]).not.toHaveProperty("betas");
+    expect(h.requests[0]).not.toHaveProperty("fallbacks");
+  });
+});
+
+// Codex 6a r1 P1: the SDK took ANTHROPIC_LOG from the environment, and at debug it logs the
+// request: the whole batch of captured text.
+describe("assistantClient", () => {
+  it("[P1] never logs, whatever ANTHROPIC_LOG says", () => {
+    vi.stubEnv("ANTHROPIC_LOG", "debug");
+    const client = assistantClient("sk-ant-SYNTHETIC");
+    expect(client.logLevel).toBe("off");
+    vi.unstubAllEnvs();
   });
 });
 
