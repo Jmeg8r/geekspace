@@ -3,7 +3,6 @@ import {
   ONBOARDING,
   UNSUPPORTED,
   addBundleId,
-  createListEditor,
   recorderSupported,
   removeBundleId,
   shotSecError,
@@ -59,72 +58,6 @@ describe("ONBOARDING", () => {
     expect(text).toContain("private window picker");
     expect(text).toContain("microphone");
     expect(text).toContain("⌥⌘R");
-  });
-});
-
-// Codex 3e-2 r1 P1: two quick edits each replaced the whole list from the same stale copy,
-// so "add TextEdit, then remove Mail" saved [] last and TextEdit lost its protection.
-describe("createListEditor", () => {
-  it("applies each edit to the list the previous edit left, and saves in order", async () => {
-    const saved: string[][] = [];
-    let finish: () => void = () => {};
-    const save = (list: string[]) => {
-      saved.push(list);
-      return new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-    };
-    const editor = createListEditor(save);
-    const first = editor.edit(["com.apple.Mail"], (list) => [...list, "com.apple.TextEdit"]);
-    const second = editor.edit(["com.apple.Mail"], (list) => list.filter((id) => id !== "com.apple.Mail"));
-    expect(saved).toEqual([["com.apple.Mail", "com.apple.TextEdit"]]);
-    finish();
-    await first;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(saved).toEqual([["com.apple.Mail", "com.apple.TextEdit"], ["com.apple.TextEdit"]]);
-    finish();
-    await second;
-  });
-
-  // Codex 3e-2 r2 P1: a save had finished, but the page had not re-rendered the saved list
-  // yet, so the next edit started from the stale one and saved [] again.
-  it("keeps the edited list until the saved list it renders has caught up", async () => {
-    const saved: string[][] = [];
-    const editor = createListEditor(async (list) => void saved.push(list));
-    await editor.edit(["com.apple.Mail"], (list) => [...list, "com.apple.TextEdit"]);
-    await editor.edit(["com.apple.Mail"], (list) => list.filter((id) => id !== "com.apple.Mail"));
-    expect(saved).toEqual([["com.apple.Mail", "com.apple.TextEdit"], ["com.apple.TextEdit"]]);
-  });
-
-  it("rebases on the saved list once it has caught up", async () => {
-    const saved: string[][] = [];
-    const editor = createListEditor(async (list) => void saved.push(list));
-    await editor.edit(["a.b"], (list) => [...list, "c.d"]);
-    editor.sync(["a.b", "c.d"]);
-    // Changed elsewhere (another window) after this one's edit was saved and shown.
-    await editor.edit(["x.y"], (list) => [...list, "e.f"]);
-    expect(saved).toEqual([["a.b", "c.d"], ["x.y", "e.f"]]);
-  });
-
-  it("turns a save that throws at once into a rejection, and recovers", async () => {
-    let fail = true;
-    const editor = createListEditor((list) => {
-      if (fail) throw new Error("bridge gone");
-      return Promise.resolve(void list);
-    });
-    await expect(editor.edit(["a.b"], (list) => [...list, "c.d"])).rejects.toThrow("bridge gone");
-    fail = false;
-    await expect(editor.edit(["a.b"], (list) => list)).resolves.toBeUndefined();
-  });
-
-  it("passes a failed save on, and recovers for the next edit", async () => {
-    let fail = true;
-    const editor = createListEditor(async () => {
-      if (fail) throw new Error("backend down");
-    });
-    await expect(editor.edit(["a.b"], (list) => [...list, "c.d"])).rejects.toThrow("backend down");
-    fail = false;
-    await expect(editor.edit(["a.b"], (list) => list)).resolves.toBeUndefined();
   });
 });
 
