@@ -106,6 +106,8 @@ final class CallSegmentTests: XCTestCase {
 final class CallRouterTests: XCTestCase {
     final class Sink {
         var system: [Double] = []      // start ms of chunks written as system audio
+        var systemSamples = 0
+        var heldSamples: Int?
         var systemCloses = 0
         var flushed: [[Double]] = []   // per released call: start ms of its runs' samples
         var reports: [(String, [String: Any])] = []
@@ -118,7 +120,10 @@ final class CallRouterTests: XCTestCase {
 
     func makeRouter(_ sink: Sink) -> CallRouter {
         CallRouter(maxSec: 60,
-                   append: { sink.system.append($0.endMs - 10) },
+                   append: { chunk in
+                       sink.system.append(chunk.endMs - Double(chunk.samples.count) / 16)
+                       sink.systemSamples += chunk.samples.count
+                   },
                    closeSystem: { sink.systemCloses += 1 },
                    flush: { runs in
                        sink.flushed.append(runs.map(\.startMs))
@@ -204,6 +209,28 @@ final class CallRouterTests: XCTestCase {
         router.stop()
         XCTAssertEqual(sink.flushed.count, 1)
         XCTAssertEqual(events(sink), ["callHeld", "callReleased"])
+    }
+
+    // Codex 4a r2 P1: a chunk straddling a boundary was routed whole by its start, so up to
+    // 10 ms of call audio reached a sys- file.
+    func testAChunkStraddlingTheHoldIsSplitAtTheBoundary() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.deliver(chunk(995), sourceRate: 16_000)
+        router.release(at: 2_000)
+        router.settle(frontier: 2_000)
+        XCTAssertEqual(sink.systemSamples, 80, "only the 5 ms before the hold is system audio")
+        XCTAssertEqual(sink.flushed, [[1_000]], "the 5 ms after it starts the call")
+    }
+
+    func testAChunkStraddlingADiscardDropsOnlyTheCallPart() {
+        let sink = Sink(), router = makeRouter(sink)
+        router.hold(at: 1_000)
+        router.discard(at: 1_005)
+        router.deliver(chunk(1_000), sourceRate: 16_000)
+        router.settle(frontier: 1_010)
+        XCTAssertEqual(sink.systemSamples, 80)
+        XCTAssertEqual(sink.system, [1_005])
     }
 
     func testOutOfOrderCommandsAreRefused() {
