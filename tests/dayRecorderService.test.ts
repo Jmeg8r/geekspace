@@ -537,6 +537,18 @@ describe("Day Recorder service, mic state", () => {
     expect(h.service.running()).toBe(true);
   });
 
+  it("does not repeat Recording when the mic's state has not changed", async () => {
+    const h = harness();
+    await h.service.apply(on());
+    h.service.setMic({ state: "ok" });
+    const seen: string[] = [];
+    h.service.onStatus((s) => void seen.push(JSON.stringify(s)));
+    h.service.setMic({ state: "ok" });
+    expect(seen).toEqual([]);
+    h.service.setMic({ state: "silent", silentSec: 25 });
+    expect(seen).toHaveLength(1);
+  });
+
   it("leaves the mic out of every status but Recording", async () => {
     const h = harness();
     h.service.setMic({ state: "ok" });

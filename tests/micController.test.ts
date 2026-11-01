@@ -183,6 +183,13 @@ describe("createMicController", () => {
     expect(h.controller.ownsSender(null)).toBe(false);
   });
 
+  it("says nothing when stopped while already off (the live log printed mic: off on every status)", async () => {
+    const h = harness();
+    await h.controller.stop();
+    await h.controller.stop();
+    expect(h.states).toEqual([]);
+  });
+
   it("knows its own window, so main.mjs can leave it out of app-window lookups", async () => {
     const h = harness();
     await h.controller.start();

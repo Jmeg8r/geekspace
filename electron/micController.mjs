@@ -128,7 +128,8 @@ export function createMicController({
   function stop() {
     if (stopping) return stopping;
     if (!win) {
-      if (state.state !== "error") setState({ state: "off" });
+      // The runtime calls stop on every status but Recording; only a change is news.
+      if (state.state !== "error" && state.state !== "off") setState({ state: "off" });
       return Promise.resolve();
     }
     stopping = (async () => {

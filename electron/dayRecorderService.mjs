@@ -228,6 +228,7 @@ export function createDayRecorderService({
     shutdown,
     status: () => status,
     setMic(next) {
+      if (JSON.stringify(next) === JSON.stringify(mic)) return;
       mic = next;
       if (status.status === "recording") setStatus({ status: "recording" });
     },
