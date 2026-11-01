@@ -99,11 +99,11 @@ describe("createMicSegmentWriter", () => {
     expect(fs.readdirSync(root)).toEqual([]);
   });
 
-  it("refuses a chunk that is not bytes, or too big, and never writes it", () => {
+  it.each([["not bytes", "text"], ["too big", bytes("12345")]])("refuses a chunk that is %s, and never writes it", (_label, raw) => {
+    // Each case on its own segment: after one refusal the segment is dropped (Codex #89 r1).
     const h = harness({ maxChunkBytes: 4 });
     h.writer.handle({ type: "segmentStart", segment: 0, start: START });
-    expect(h.writer.handle({ type: "chunk", segment: 0, bytes: "text" }).ok).toBe(false);
-    expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("12345") }).ok).toBe(false);
+    expect(h.writer.handle({ type: "chunk", segment: 0, bytes: raw }).ok).toBe(false);
     expect(fs.readFileSync(path.join(root, DAY, `.partial-${NAME}`), "utf8")).toBe("");
   });
 

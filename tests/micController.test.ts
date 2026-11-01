@@ -243,6 +243,17 @@ describe("createMicController", () => {
       expect(h.errors).toHaveLength(2);
     });
 
+    it("a window closed because of a failure is not reopened by that close", async () => {
+      const h = harness({ handle: () => ({ ok: false, reason: "chunk is over the cap" }) });
+      await h.controller.start();
+      h.controller.receive(h.fromWindow(), { type: "chunk", segment: 0, bytes: new ArrayBuffer(1) });
+      h.controller.receive(h.fromWindow(), { type: "stopped" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.windows).toHaveLength(1);
+      expect(h.windows[0].destroyed()).toBe(true);
+      expect(h.states.at(-1)).toMatchObject({ state: "error", kind: "protocol" });
+    });
+
     it("a failure does not reopen the window on the next Recording status", async () => {
       // Found while fixing r1: the runtime calls start on every Recording status, and a mic
       // error itself re-emits Recording, so the window must not come back until a stop.
@@ -265,4 +276,28 @@ describe("createMicController", () => {
     expect(h.controller.isCaptureWindow(h.windows[0].win)).toBe(true);
     expect(h.controller.isCaptureWindow(fakeWindow().win)).toBe(false);
   });
+
+  // Found reviewing the Codex #89 r1 fix: two permission asks in flight opened two windows.
+  it("opens one window when a stop and a resume both land during the permission ask", async () => {
+    let grant!: (ok: boolean) => void;
+    const h = harness({ mic: new Promise<boolean>((r) => (grant = r)) });
+    void h.controller.start();
+    void h.controller.stop();
+    const resumed = h.controller.start();
+    grant(true);
+    await resumed;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.windows).toHaveLength(1);
+    expect(h.windows[0].destroyed()).toBe(false);
+  });
+
+  it("calls a window that stops on its own, with no error and no stop asked, a failure", async () => {
+    const h = harness();
+    await h.controller.start();
+    h.controller.receive(h.fromWindow(), { type: "stopped" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.states.at(-1)).toMatchObject({ state: "error", kind: "windowGone" });
+    expect(h.errors).toHaveLength(1);
+  });
 });
+
