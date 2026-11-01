@@ -293,3 +293,43 @@ describe("assistant usage and the daily cap", () => {
     ).rejects.toThrow();
   });
 });
+
+// Plan PR 6a: what the assistant reads, and where it left off.
+describe("assistant.input and the watermark", () => {
+  it("returns the transcripts and screenshot text in a time window, oldest first", async () => {
+    const t = await seeded();
+    const now = Date.now();
+    const day = new Date(now).toLocaleDateString("en-CA");
+    const mk = async (start: number, text: string) => {
+      const segmentId = await t.mutation(api.dayRecorder.addSegment, {
+        day,
+        kind: "mic",
+        path: `${day}/mic-${start}.webm`,
+        start,
+        end: start + 60_000,
+      });
+      await t.mutation(api.dayRecorder.addTranscript, { segmentId, start, end: start + 60_000, text });
+      return segmentId;
+    };
+    await mk(now - 50 * 60_000, "SYNTHETIC before the window");
+    const inside = await mk(now - 20 * 60_000, "SYNTHETIC inside the window");
+    await t.mutation(api.dayRecorder.addScreenshot, { day, path: `${day}/shot-1.heic`, takenAt: now - 10 * 60_000, ocrText: "SYNTHETIC screen text" });
+    const input = await t.query(api.assistant.input, { after: now - 30 * 60_000, until: now });
+    expect(input.transcripts.map((r) => r.text)).toEqual(["SYNTHETIC inside the window"]);
+    expect(input.transcripts[0].segmentId).toBe(inside);
+    expect(input.screenshots.map((r) => r.ocrText)).toEqual(["SYNTHETIC screen text"]);
+  });
+
+  it("refuses a window that ends before it starts", async () => {
+    const t = await seeded();
+    await expect(t.query(api.assistant.input, { after: 10, until: 5 })).rejects.toThrow(/window/);
+  });
+
+  it("keeps the watermark, and only moves it forward", async () => {
+    const t = await seeded();
+    expect(await t.query(api.assistant.watermark, {})).toBeNull();
+    await t.mutation(api.assistant.setWatermark, { at: 2_000_000_000_000 });
+    await t.mutation(api.assistant.setWatermark, { at: 1_900_000_000_000 });
+    expect(await t.query(api.assistant.watermark, {})).toBe(2_000_000_000_000);
+  });
+});
