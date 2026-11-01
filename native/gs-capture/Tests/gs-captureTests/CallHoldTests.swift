@@ -512,4 +512,17 @@ final class CallRouterTests: XCTestCase {
         router.settle(frontier: 1_300)
         XCTAssertEqual(cleared, 0.1, accuracy: 0.0001)
     }
+
+    // Codex 4b r8 P1: capture began before the watcher existed, so a stall between them was
+    // never counted. The watcher is told when capture began.
+    func testAStallBeforeTheWatcherExistsIsAGap() {
+        var t = 1_000.0
+        var gaps: [(Double, Double)] = []
+        let watcher = AudioUseWatcher(denylist: [], onGap: { gaps.append(($0, $1)) }, now: { t }, captureStartedAt: 0,
+                                      readProcesses: { _ in [] }, report: { _, _ in })
+        t = 1_020
+        watcher.tick(known: [])
+        XCTAssertEqual(gaps.count, 1, "1,020 ms since capture began")
+        XCTAssertEqual(gaps[0].0, -.infinity)
+    }
 }
