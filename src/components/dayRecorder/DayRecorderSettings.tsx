@@ -81,7 +81,7 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
         >
           <span
             aria-hidden="true"
-            className={`absolute top-px h-4 w-4 rounded-full transition-all ${settings.enabled ? "left-[17px] bg-white" : "left-px bg-ink-2"}`}
+            className={`absolute top-px h-4 w-4 rounded-full transition-all ${settings.enabled ? "left-[17px] bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.7)]" : "left-px bg-ink-2"}`}
           />
         </button>
       </div>
