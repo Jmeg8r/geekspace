@@ -5,20 +5,28 @@
 // what the helper writes can't depend on the renderer. Settings arrive by subscription, so
 // turning the recorder on, pausing it, or editing the denylist reaches the helper the same
 // way whether the change came from the renderer's controls (dayRecorderIpc.mjs) or not.
-import { app } from "electron";
+// The mic runs in a hidden window of its own while the recorder is recording (plan PR 3d-2).
+import { app, ipcMain, systemPreferences } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { ConvexClient } from "convex/browser";
 // The generated `api` is exactly `anyApi` (convex/_generated/api.js), and convex/ is not
 // packaged into the app, so the main process uses anyApi directly.
 import { anyApi as api } from "convex/server";
+import { createCaptureWindow } from "./captureWindow.mjs";
 import { contentFreeLogger, createFileLog, createSupervisor } from "./dayRecorder.mjs";
 import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired } from "./dayRecorderMedia.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
-import { createDayRecorderService } from "./dayRecorderService.mjs";
+import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
+import { createMicController } from "./micController.mjs";
+import { createMicSegmentWriter } from "./micSegments.mjs";
 
 const GEEKSPACE_DIR = path.join(app.getPath("appData"), "Geekspace");
+// MediaRecorder's timeslice: how often a chunk crosses to the main process.
+const MIC_TIMESLICE_MS = 1000;
+const REFUSED = { ok: false, error: "Refused: the request did not come from the mic capture window" };
+
 
 function helperPath() {
   // Packaged: Contents/Resources/gs-capture (package.json mac.extraResources).
@@ -28,8 +36,11 @@ function helperPath() {
     : path.join(app.getAppPath(), "native", "gs-capture", ".build", "release", "gs-capture");
 }
 
-/** Start following the Day Recorder settings. Returns a handle main.mjs stops on quit. */
-export function startDayRecorder({ convexUrl }) {
+/**
+ * Start following the Day Recorder settings. Returns a handle main.mjs stops on quit.
+ * `capturePage` is where the mic window's page is: the dev server, or dist/capture.html.
+ */
+export function startDayRecorder({ convexUrl, capturePage }) {
   const logDir = path.join(GEEKSPACE_DIR, "logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = createFileLog(path.join(logDir, "day-recorder.log"));
@@ -52,7 +63,7 @@ export function startDayRecorder({ convexUrl }) {
     convex: {
       addScreenshot: rows(api.dayRecorder.addScreenshot),
       addSegment: rows(api.dayRecorder.addSegment),
-      logEvent: (event) => rows(api.dayRecorder.logEvent)({ at: Date.now(), ...event }),
+      logEvent: (event) => logEvent(event),
     },
     purge: async () => {
       await purgeExpired({
@@ -65,6 +76,26 @@ export function startDayRecorder({ convexUrl }) {
     },
     log,
   });
+  const logEvent = (event) => rows(api.dayRecorder.logEvent)({ at: Date.now(), ...event });
+  const mic = createMicController({
+    // macOS asks once, then answers from the saved choice; elsewhere there is no recorder.
+    askMic: async () => process.platform !== "darwin" || systemPreferences.askForMediaAccess("microphone"),
+    createWindow: ({ onGone }) => createCaptureWindow({ page: capturePage, onGone }),
+    createWriter: () => createMicSegmentWriter({ root: mediaRoot, addSegment: rows(api.dayRecorder.addSegment), log }),
+    onState: (s) => {
+      log(`mic: ${s.state}${s.state === "error" ? ` (${s.kind})` : ""}`);
+      service.setMic(s);
+    },
+    micConfig: { segmentSec: SEGMENT_SEC, timesliceMs: MIC_TIMESLICE_MS },
+    recordError: (detail) =>
+      logEvent({ kind: "capError", detail }).catch((err) => log(`could not record a capError event (${err?.name ?? "Error"})`)),
+    log,
+  });
+  ipcMain.on("gs:mic:event", (event, message) => mic.receive(event.sender, message));
+  ipcMain.handle("gs:mic:config", (event) => mic.configFor(event.sender) ?? REFUSED);
+  // The mic follows the recorder: on while Recording, finished and closed otherwise.
+  service.onStatus((s) => void (s.status === "recording" ? mic.start() : mic.stop()));
+
   // The error is the helper's own failure message or a gate's copy, never captured content.
   // With it, this log alone times the R3 proofs (part2-runbook.md) until the UI lands in 3e.
   service.onStatus((s) =>
@@ -81,9 +112,14 @@ export function startDayRecorder({ convexUrl }) {
   return {
     service,
     ...createDayRecorderControls(rows(api.dayRecorder.updateSettings)),
+    isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
       unsubscribe();
+      // The mic first: its last segment's row needs the backend, like the helper's.
+      await mic.shutdown();
       await service.shutdown();
+      ipcMain.removeAllListeners("gs:mic:event");
+      ipcMain.removeHandler("gs:mic:config");
       await client.close();
       log("stopped");
       logFile.end();

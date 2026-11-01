@@ -1,6 +1,7 @@
 // WHAT: types for the Day Recorder service, so tests/ can import it.
 import type { CaptureSink, Supervisor, SupervisorOptions } from "./dayRecorder.mjs";
 import type { GateResult } from "./dayRecorderGates.mjs";
+import type { MicState } from "./micController.mjs";
 
 export const SEGMENT_SEC: number;
 export const PURGE_INTERVAL_MS: number;
@@ -11,7 +12,9 @@ export const RETRY_RESET_MS: number;
 export type RecorderSettings = { enabled: boolean; paused: boolean; denylist: string[]; shotSec: number };
 
 export type RecorderStatus =
-  | { status: "off" | "paused" | "starting" | "recording" | "stopping" | "unsupported" }
+  | { status: "off" | "paused" | "starting" | "stopping" | "unsupported" }
+  /** `mic` is the mic's own state once it has one (micController.mjs). */
+  | { status: "recording"; mic?: MicState }
   | { status: "blocked"; error: string }
   /** `retryInMs` is set while an automatic retry is pending. */
   | { status: "notRecording"; error: string; retryInMs?: number };
@@ -39,6 +42,7 @@ export type DayRecorderService = {
   apply: (settings: RecorderSettings) => Promise<void>;
   shutdown: () => Promise<void>;
   status: () => RecorderStatus;
+  setMic: (mic: MicState) => void;
   onStatus: (cb: (status: RecorderStatus) => void) => () => void;
   running: () => boolean;
   killSync: () => void;

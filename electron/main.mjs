@@ -55,6 +55,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const INDEX_FILE = path.join(__dirname, "../dist/index.html");
+// The Day Recorder's hidden mic window (plan PR 3d-2).
+const CAPTURE_FILE = path.join(__dirname, "../dist/capture.html");
 // The only pages that are "the app": the dev server's exact origin, or the built index.
 const APP_PAGES = { devServerUrl, indexFile: INDEX_FILE };
 
@@ -80,7 +82,7 @@ const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 
 app.on("second-instance", () => {
-  const w = BrowserWindow.getAllWindows()[0];
+  const w = appWindows()[0];
   if (w) {
     if (w.isMinimized()) w.restore();
     w.show();
@@ -199,7 +201,7 @@ handle("gs:chrome:setOverlay", ({ color, symbolColor }) => {
   if (process.platform !== "win32") return;
   const isHexColor = (s) => typeof s === "string" && /^#[0-9a-fA-F]{6}$/.test(s);
   if (!isHexColor(color) || !isHexColor(symbolColor)) return;
-  for (const win of BrowserWindow.getAllWindows()) {
+  for (const win of appWindows()) {
     if (typeof win.setTitleBarOverlay === "function") {
       win.setTitleBarOverlay({ color, symbolColor, height: 36 });
     }
@@ -502,9 +504,12 @@ app.whenReady().then(async () => {
   createWindow();
   // Follows the Day Recorder settings; it starts nothing until the recorder is turned on.
   try {
-    const recorder = startDayRecorder({ convexUrl: convexUrl() });
+    const recorder = startDayRecorder({
+      convexUrl: convexUrl(),
+      capturePage: { devServerUrl, file: CAPTURE_FILE },
+    });
     dayRecorder = recorder;
-    forwardStatus({ service: recorder.service, windows: () => BrowserWindow.getAllWindows() });
+    forwardStatus({ service: recorder.service, windows: appWindows });
     holdQuitForDayRecorder = createQuitHold({
       stop: () => recorder.stop(),
       quit: () => app.quit(),
@@ -518,7 +523,7 @@ app.whenReady().then(async () => {
   // Warm the reader connector (spawns aib-reader-mcp + tools/list).
   prewarmReader().catch(() => {});
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (appWindows().length === 0) createWindow();
   });
 });
 
@@ -533,6 +538,14 @@ let shuttingDown = false;
 // Kept for the process-exit kill, even while (and after) the recorder is stopping.
 let dayRecorder = null;
 let holdQuitForDayRecorder = null;
+
+/**
+ * The app's own windows, without the Day Recorder's hidden mic window. WHY: several lookups
+ * here take "the first window" as the app window, and the capture window must never be it.
+ */
+function appWindows() {
+  return BrowserWindow.getAllWindows().filter((w) => !dayRecorder?.isCaptureWindow(w));
+}
 // Registered before the recorder exists: until it starts, or if it failed to, they say so.
 registerDayRecorderIpc({ handle, recorder: () => dayRecorder });
 app.on("before-quit", (event) => {
@@ -542,7 +555,7 @@ app.on("before-quit", (event) => {
     event.preventDefault();
     return;
   }
-  const win = BrowserWindow.getAllWindows()[0];
+  const win = appWindows()[0];
   if (recordingActive && !leaveApproved && win) {
     event.preventDefault();
     void confirmLeaveWhileRecording(win);

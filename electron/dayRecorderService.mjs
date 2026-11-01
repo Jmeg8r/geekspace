@@ -52,11 +52,14 @@ export function createDayRecorderService({
   let retries = 0;
   let retryTimer = null;
   let recordingSince = null;
+  // The mic's own state (micController.mjs). It rides on Recording only: the mic degrades on
+  // its own (James, 2026-10-31), so Recording with a mic error is still Recording.
+  let mic = null;
   const listeners = new Set();
 
   function setStatus(next) {
-    status = next;
-    for (const cb of listeners) cb(next);
+    status = next.status === "recording" && mic ? { ...next, mic } : next;
+    for (const cb of listeners) cb(status);
   }
 
   function recordError(detail) {
@@ -224,6 +227,11 @@ export function createDayRecorderService({
     apply,
     shutdown,
     status: () => status,
+    setMic(next) {
+      if (JSON.stringify(next) === JSON.stringify(mic)) return;
+      mic = next;
+      if (status.status === "recording") setStatus({ status: "recording" });
+    },
     onStatus(cb) {
       listeners.add(cb);
       return () => listeners.delete(cb);

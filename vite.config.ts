@@ -1,3 +1,4 @@
+import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -18,5 +19,12 @@ export default defineConfig({
   build: {
     outDir: "dist",
     target: "es2022",
+    // Two pages: the app, and the Day Recorder's hidden mic window (plan PR 3d-2).
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        capture: path.resolve(__dirname, "capture.html"),
+      },
+    },
   },
 });

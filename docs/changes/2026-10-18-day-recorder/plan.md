@@ -1448,3 +1448,115 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **For 3e:** pause emits `stopping`, then `off`, then `paused`, because the supervisor's
     own `off` is passed through first. The UI should not flash Off on pause.
   - Evidence: `~/gs-part2-evidence/pr3d1-ipc-2026-10-31/status.log` (status lines only).
+- **2026-10-31, PR 3d-2, mic capture.** Built as planned, with these changes from plan.md:
+  - **`capture.html` is at the repo root, not under `electron/`.** It's a second Vite page
+    next to `index.html`, so `src/capture/main.ts` builds into `dist/capture.html`.
+  - **The capture window has its own module, `electron/captureWindow.mjs`,** so the app and
+    `probe:segment-decode` open the same window. It's hidden, sandboxed, and denies popups
+    and navigation. `backgroundThrottling` is off, because a hidden window's timers would
+    otherwise slow the segment clock and the silence meter.
+  - **`main.mjs` gains `appWindows()`.** Five lookups took "the first window" as the app
+    window: the meeting quit guard, second instance, activate, the title-bar overlay, and the
+    status push. The hidden window would have broken each of them.
+  - **The next recorder starts before the old one stops**, at every boundary, so the gap is
+    zero or a slight overlap rather than lost audio. One emit queue keeps a segment's last
+    chunk ahead of its `segmentEnd`.
+  - **An empty segment is the controller's call, not the writer's.** The probe's first run
+    flagged a clean stop as a mic failure: a stop just after a boundary leaves a final segment
+    with no audio yet. The writer now drops an empty segment (no file, no row) and reports it.
+    Mid-recording that is a dead mic (`noAudio`); at a stop it is not.
+  - **The mic degrades loudly (James, 2026-10-31).** A denied, missing, lost, silent or
+    misbehaving mic becomes the mic's own state on Recording plus a `capError`. Screens and
+    system audio carry on.
+  - **Sender check.** `micController` accepts `gs:mic:event` and `gs:mic:config` only from
+    its own window's `webContents`. `micSegments` checks every message before it touches the
+    disk: sizes are capped, start times must be near now, segments must be in order, and at
+    most two may be open.
+  - **Shared code.** `recorder.ts` exports `SILENCE_LEVEL` and `rmsLevel` (the same math,
+    moved). `meetingProcessor.mjs` exports `convertToWhisperWav` (the same ffmpeg command,
+    which `processMeeting` now calls), `findFfmpeg` and `measureVolume`. GitNexus rated this
+    HIGH because Meetings flows are touched; the Meetings suites pass unchanged (43 tests).
+  - **Opus averages about 129 kbps, so a 5-minute segment is about 4.8 MB,** not the 2 MB
+    estimated. The 64 MB per-segment cap still leaves room.
+  - **The mic prompt (`NSMicrophoneUsageDescription`) now names the Day Recorder.**
+- **2026-10-31, PR 3d-2, proofs.**
+  - **`probe:segment-decode`** (Chromium's fake device, 3 s segments): segment 2, copied
+    alone into an empty folder, decoded to 3.00 s of 16 kHz wav through
+    `convertToWhisperWav`, and was not silent. The boundary gap was about 0 ms. It passed 3
+    runs out of 3.
+    - **Check of the check:** the same path decodes a whole segment but refuses that segment
+      cut at its second Matroska Cluster, which is what a timeslice continuation is. So
+      PR #70's failure class is caught.
+    - A mutation that split one continuous recorder also failed the probe, but at the writer
+      ("segment 0 was not started"), so that run did not test the decode step.
+  - **Signed `npm run package` from `33aad2a`, real mic, real 300 s segments:**
+    - `setEnabled(true)` gave `mic: starting` then `ok` 448 ms later, and the status was
+      `{ status: "recording", mic: { state: "ok" } }`.
+    - Four segments landed exactly on the 5-minute boundaries, mode 600. Each decoded **alone**
+      to 299.94 or 300.00 s and was not silent.
+    - `pause()` finalized the open segment (70.44 s, decodes alone). The hidden window closed,
+      the helper stopped, and no partial was left.
+    - Each of the five files has exactly one `kind: "mic"` row in the backend store, checked
+      read-only by count.
+    - Evidence: `~/gs-part2-evidence/pr3d2-mic-2026-10-31/` (`decode.txt`, `status.log`).
+      Lengths and levels only; no audio left the machine.
+  - **The run found log noise:** `mic: off` on every non-recording status, and a repeated
+    `status: recording`. Fixed in `d2137ff`, which changes logging only.
+  - **Security review: no findings.** Two rejected candidates were closed anyway: a start far
+    off the clock (an Invalid Date day folder) and an unchecked `silentSec`.
+  - **Still to prove live, with James at the Mac:** a denied mic (revoke it in System
+    Settings) and an unplugged input. Unit tests cover both.
+  - **The verification trap this time:** the first wait-for-segments script reported "0
+    finished" because `touch -t` read a UTC time as local and set a marker about 4 hours in
+    the future. A file listing showed the segments were there.
+- **2026-10-31, PR 3d-2, Codex round 1: FAIL, 5 × P1 and 2 × P2.** All seven are fixed test-first
+  (red commits `e1de53e` and `ea6dc36`).
+  - **The controller works toward the latest request, not what happens to be open.** A
+    `wanted` flag: a stop while macOS is asking for permission cancels the start; a start
+    during a stop runs once the stop is done; two starts during one ask share it, so they
+    open one window, not two. A later stop waits for a teardown the window began itself
+    (device lost), so a quit can't close the backend before the last row is in. A failure
+    keeps the mic down until the next stop and start, because the runtime calls start on
+    every Recording status.
+  - **A window that says stopped unasked, with no error first, is a failure** (`windowGone`),
+    not a quiet mic off.
+  - **A broken segment is dropped.** A refused chunk, a failed or short write, or a chunk the
+    window could not read (`chunkFailed`) leaves the segment with no file and no row.
+    Writes loop until every byte has landed.
+  - **A recorder that will not start is never announced.** `segmentStart` goes out only after
+    `start()` returns. A failure at a boundary still finishes the old segment.
+  - **The capture window's startup is now `src/capture/micWindow.ts`**, split out of
+    `main.ts` so it can be tested without a DOM. The stop listener is registered first; a
+    stop during config or getUserMedia starts nothing, lets go of the mic, and still says
+    stopped.
+  - **A silent mic records one capError per episode** (`mic: no signal for N s`).
+  - **The decode probe now fails a boundary gap past 250 ms.** It passed after the fix, with a
+    gap of about -1 ms.
+  - **Two sessions worked on this round at once.** The handoff's author was still running, so
+    two sessions shared the worktree. The fix was splitting the work by hunk, not by file:
+    the controller and writer fixes were written in one session, the capture side and probe
+    in the other.
+- **2026-10-31, PR 3d-2, Codex rounds 2 and 3 (#89).**
+  - **Round 2 FAIL (4 × P1, 1 × P2), all closed in `223d89c`:**
+    - A stop sent before the page listened is now answered through `gs:mic:config`
+      (`configFor`, "cancelled").
+    - A teardown in progress is joined, never replaced.
+    - Quit goes through a final `mic.shutdown()`. It had reopened the mic, because the mic's
+      own `off` re-emits Recording.
+    - An unreadable final chunk's error is sent before `stopped`.
+    - The two-segment test now checks both segments.
+  - **Signed build from `223d89c`, quit while recording:** after the quit, the mic's `off`
+    re-emitted `status: recording`. Nothing reopened (no `mic: starting`), the log ended
+    `stopping`, `off`, `stopped`, and no processes were left. The 4 s final segment has its
+    row. The recorder was then turned off.
+  - **Round 3 FAIL (2 × P1, [P2] none):**
+    - A recorder error that lands after a stop request is now reported, not dropped by the
+      stop guard.
+    - **Mic file names gain the start's epoch ms:** `mic-HHMMSS-mmm-<epoch>.webm`. Local time
+      repeats in the fall-back hour, and 2026-11-01 01:20:00.005 EDT and EST had the same
+      name, so the second rename replaced the first recording. Finishing is now a no-clobber
+      `link` and `unlink`, so even an unexpected collision is refused and the earlier file
+      kept.
+  - **Same weakness, outside this PR:** gs-capture names `shot-` and `sys-` files with local
+    `HHmmss-SSS` (`Run.dayAndFile`), so a screenshot or system segment in the fall-back hour
+    can collide too. That needs its own fix in the Swift helper.
