@@ -31,10 +31,14 @@ const isNum = (x) => typeof x === "number" && Number.isFinite(x);
 const isSegment = (x) => Number.isSafeInteger(x) && x >= 0;
 const pad = (n, w = 2) => String(n).padStart(w, "0");
 
-/** `mic-HHMMSS-mmm.webm`, in local time like the helper's own `sys-` files. */
+/**
+ * `mic-HHMMSS-mmm-<epoch ms>.webm`: local time to read, then the start's epoch ms. WHY the
+ * epoch (Codex #89 r3): local time repeats in the fall-back hour, and two segments with one
+ * name would have the second replace the first.
+ */
 function fileName(start) {
   const d = new Date(start);
-  return `mic-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${pad(d.getMilliseconds(), 3)}.webm`;
+  return `mic-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${pad(d.getMilliseconds(), 3)}-${start}.webm`;
 }
 
 function asBytes(x) {
@@ -139,7 +143,15 @@ export function createMicSegmentWriter({
       fs.rmSync(s.partial, { force: true });
       return { ok: true, empty: true };
     }
-    fs.renameSync(s.partial, s.final);
+    // A hard link, then unlinking the partial: unlike rename, linking fails when the name is
+    // taken, so a finished recording can never be replaced. The partial stays for the sweep.
+    try {
+      fs.linkSync(s.partial, s.final);
+    } catch (err) {
+      if (err?.code !== "EEXIST") throw err;
+      return refuse(`segment ${segment}'s file name already exists; the earlier file is kept`);
+    }
+    fs.unlinkSync(s.partial);
     const row = { day: s.day, kind: "mic", path: `${s.day}/${s.name}`, start: s.start, end: endAt };
     const p = addSegment(row)
       .catch((err) =>

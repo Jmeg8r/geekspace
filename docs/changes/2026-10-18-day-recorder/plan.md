@@ -1536,3 +1536,27 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     two sessions shared the worktree. The fix was splitting the work by hunk, not by file:
     the controller and writer fixes were written in one session, the capture side and probe
     in the other.
+- **2026-10-31, PR 3d-2, Codex rounds 2 and 3 (#89).**
+  - **Round 2 FAIL (4 × P1, 1 × P2), all closed in `223d89c`:**
+    - A stop sent before the page listened is now answered through `gs:mic:config`
+      (`configFor`, "cancelled").
+    - A teardown in progress is joined, never replaced.
+    - Quit goes through a final `mic.shutdown()`. It had reopened the mic, because the mic's
+      own `off` re-emits Recording.
+    - An unreadable final chunk's error is sent before `stopped`.
+    - The two-segment test now checks both segments.
+  - **Signed build from `223d89c`, quit while recording:** after the quit, the mic's `off`
+    re-emitted `status: recording`. Nothing reopened (no `mic: starting`), the log ended
+    `stopping`, `off`, `stopped`, and no processes were left. The 4 s final segment has its
+    row. The recorder was then turned off.
+  - **Round 3 FAIL (2 × P1, [P2] none):**
+    - A recorder error that lands after a stop request is now reported, not dropped by the
+      stop guard.
+    - **Mic file names gain the start's epoch ms:** `mic-HHMMSS-mmm-<epoch>.webm`. Local time
+      repeats in the fall-back hour, and 2026-11-01 01:20:00.005 EDT and EST had the same
+      name, so the second rename replaced the first recording. Finishing is now a no-clobber
+      `link` and `unlink`, so even an unexpected collision is refused and the earlier file
+      kept.
+  - **Same weakness, outside this PR:** gs-capture names `shot-` and `sys-` files with local
+    `HHmmss-SSS` (`Run.dayAndFile`), so a screenshot or system segment in the fall-back hour
+    can collide too. That needs its own fix in the Swift helper.

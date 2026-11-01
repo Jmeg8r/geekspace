@@ -149,9 +149,10 @@ export function startMicCapture({
   }
 
   function fail(kind: MicErrorKind, message: string) {
-    if (stopping) return;
     send({ type: "error", kind, message });
-    void stop();
+    // During a stop the error is still said (Codex #89 r3): Chromium can queue a failed
+    // recorder's error behind a stop request. Only the stop itself is not asked for twice.
+    if (!stopping) void stop();
   }
 
   const boundary = setInterval(rollOver, segmentSec * 1000);
