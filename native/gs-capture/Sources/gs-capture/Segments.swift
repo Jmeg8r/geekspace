@@ -208,7 +208,7 @@ final class SegmentWriter {
         do {
             let readable = try AVAudioFile(forReading: partial)
             guard readable.length > 0 else { fail("segment \(path) has no audio after it was finalized") }
-            try FileManager.default.moveItem(at: partial, to: final)
+            try placeWithoutReplacing(partial, at: final)
         } catch {
             fail("cannot finalize segment \(path): \(error.localizedDescription)")
         }

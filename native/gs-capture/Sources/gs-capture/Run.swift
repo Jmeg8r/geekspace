@@ -100,14 +100,18 @@ enum Run {
         return blanked
     }
 
-    static func dayAndFile(_ date: Date, prefix: String = "shot", ext: String = "heic") -> (day: String, file: String) {
+    static func dayAndFile(_ date: Date, prefix: String = "shot", ext: String = "heic",
+                           timeZone: TimeZone = .current) -> (day: String, file: String) {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd"
         let day = formatter.string(from: date)
         formatter.dateFormat = "HHmmss-SSS"
-        return (day, "\(prefix)-\(formatter.string(from: date)).\(ext)")
+        // The local part is for people; the epoch makes the name unique, because local time
+        // repeats in the DST fall-back hour. Truncated, as SSS is.
+        let epochMs = Int64((date.timeIntervalSince1970 * 1000).rounded(.down))
+        return (day, "\(prefix)-\(formatter.string(from: date))-\(epochMs).\(ext)")
     }
 
     static func run(_ args: Args) async {
@@ -200,9 +204,10 @@ enum Run {
                 let dir = "\(root)/\(day)"
                 do {
                     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-                    // Atomic: a kill mid-write must never leave a truncated image behind.
-                    try Screen.encode(image, heic: true, quality: heicQuality)
-                        .write(to: URL(fileURLWithPath: "\(dir)/\(file)"), options: .atomic)
+                    // A kill mid-write must never leave a truncated image behind, and a
+                    // repeated name must never replace an earlier shot.
+                    try writeWithoutReplacing(Screen.encode(image, heic: true, quality: heicQuality),
+                                              to: URL(fileURLWithPath: "\(dir)/\(file)"))
                 } catch {
                     fail("cannot write \(day)/\(file): \(error.localizedDescription)")
                 }
