@@ -168,8 +168,11 @@ export const setSegmentStatus = mutation({
   handler: async (ctx, args) => {
     const segment = await ctx.db.get(args.segmentId);
     if (!segment) throw new Error(`Segment ${args.segmentId} does not exist`);
-    if (segment.status === "purged") throw new Error("A purged segment cannot change status");
+    // Purged is terminal: its media is gone. A result that arrives later changes nothing, and
+    // is not an error, or the transcription queue would retry it forever (Codex review of PR 5).
+    if (segment.status === "purged") return null;
     await ctx.db.patch(args.segmentId, { status: args.status });
+    return null;
   },
 });
 

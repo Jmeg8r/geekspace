@@ -79,11 +79,14 @@ export function createTranscriptionQueue({ transcribe, resolvePath, addTranscrip
 
   async function pump() {
     while (!stopped && waiting.length > 0 && Date.now() >= pausedUntil) {
-      const outcome = await take(waiting[0]);
-      if (outcome === "done") {
-        waiting.shift();
-        continue;
-      }
+      // Out of the list while it runs, so an offer that re-sorts the list can't displace it
+      // (Codex review of PR 5, round 2).
+      const item = waiting.shift();
+      const outcome = await take(item);
+      if (outcome === "done") continue;
+      // Back in its place, to be tried again.
+      waiting.push(item);
+      waiting.sort((a, b) => a.segment.start - b.segment.start);
       if (outcome === "pause") pausedUntil = Date.now() + RETRY_AFTER_MS;
       scheduleRetry();
       return;
