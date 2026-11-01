@@ -1601,3 +1601,38 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - **2026-10-31, PR 3e-1, Codex round 1: PASS ([P1] none, 1 × P2).** The ⌥⌘R notice was in
   the Recording tooltip only. It is now added to every state's tooltip (`ae3d22f` tests,
   `43aaadf` fix).
+- **2026-11-01, PR 3e-2, the recorder in the app.** Built as planned, with these changes:
+  - **One state copy for the tray and the app** (`electron/dayRecorderCopy.mjs`, no imports,
+    so the renderer loads it too). Mic errors that were raw protocol notes now read as
+    sentences; the detail stays in the log.
+  - **The indicator sits in the sidebar header**, as a dot and a word with a Pause/Resume
+    button, `role="status"` and polite. It is hidden while the recorder is off.
+  - **Settings, Day Recorder:** the switch (`role="switch"`), the current state (the FileVault
+    and Time Machine gates speak through it), the never-record list and the screenshot
+    interval, checked with the server's own validators. Turning it on first shows the
+    onboarding for both macOS prompts and the mic, non-modal, with focus moved to it. Off
+    macOS the section only says the recorder needs macOS.
+  - **Denylist edits are two atomic mutations**, `dayRecorder.addToDenylist` and
+    `removeFromDenylist`. Codex rounds 1–3 each found another way for a page saving the list
+    whole to undo an edit with a stale copy (an app just denied, or one another window added,
+    lost its protection). Each client-side guard moved the race; the server-side change
+    removed it. `updateSettings` still takes a whole list, for `day-recorder-ctl on
+    --denylist`.
+  - **Not built here:** a taken ⌥⌘R in Settings (the tray and the log say it, 3e-1), and the
+    Call held and Assistant paused states (PR 4 and PR 6).
+- **2026-11-01, PR 3e-2, proof on the signed build (`48d65f9`; `c85576c` after it is one CSS
+  class).** Driven over CDP:
+  - Settings showed the section; the switch is labelled "Record my day". Clicking it showed
+    the onboarding with focus on its heading, all four steps, and no modal around it.
+  - An invalid bundle id was refused with the server's message, `aria-invalid` and a
+    described-by alert. `dev.geekspace.probe` was added and removed through the UI; the list
+    went back to what it was.
+  - "Turn on" reached Recording; the sidebar showed a red dot, **Recording** and "Pause
+    recording"; Settings showed the state sentence. Pause went to **Paused** and "Resume
+    recording"; Resume went back to Recording. The switch turned it off and the indicator
+    went away. Quit: no app process, no helper. The recorder was left off.
+  - Evidence: `~/gs-part2-evidence/pr3e2-ui-2026-11-01/` (status lines and three cropped
+    shots of the section and the sidebar).
+- **2026-11-01, PR 3e-2, Codex: 4 rounds, ending PASS.** Round 1 FAIL (1 × P1, 3 × P2),
+  round 2 FAIL (1 × P1, 2 × P2), round 3 FAIL (2 × P1, 2 × P2), round 4 PASS ([P1] none,
+  1 × P2: the enabled thumb's contrast, fixed in `c85576c`).
