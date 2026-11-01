@@ -94,3 +94,15 @@ describe("runMicWindow", () => {
     ]);
   });
 });
+
+describe("runMicWindow, Codex #89 r2 [P1]", () => {
+  it("starts nothing when the main process says the recorder stopped before the page listened", async () => {
+    const h = harness({
+      config: Promise.resolve({ ok: false, cancelled: true, error: "The recorder stopped before the mic window started." }),
+    });
+    await runMicWindow(h.api, h.openMic);
+    expect(h.openMic).not.toHaveBeenCalled();
+    // Cancelled is not a failure: no error event, just stopped.
+    expect(h.events).toEqual([{ type: "stopped" }]);
+  });
+});

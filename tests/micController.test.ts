@@ -55,6 +55,7 @@ function harness(
     recordError: (detail) => void errors.push(detail),
     log: (m) => void logs.push(m),
     stopTimeoutMs: 1000,
+    micConfig: { segmentSec: 300, timesliceMs: 1000 },
   });
   const fromWindow = (i = 0) => windows[i].win.webContents;
   return { controller, windows, states, logs, handled, errors, writer, fromWindow, gone: () => gone?.() };
@@ -267,6 +268,53 @@ describe("createMicController", () => {
       await h.controller.stop();
       await h.controller.start();
       expect(h.windows).toHaveLength(2);
+    });
+  });
+
+  describe("Codex #89 r2 [P1]", () => {
+    it("answers the page's config request as cancelled when a stop came before it listened", async () => {
+      // The stop message goes out before the page has registered onStop, so it is lost; the
+      // config request the page makes first is where startup learns of it.
+      const h = harness();
+      await h.controller.start();
+      expect(h.controller.configFor(h.fromWindow())).toEqual({ ok: true, data: { segmentSec: 300, timesliceMs: 1000 } });
+      void h.controller.stop();
+      expect(h.controller.configFor(h.fromWindow())).toEqual({
+        ok: false,
+        cancelled: true,
+        error: "The recorder stopped before the mic window started.",
+      });
+      expect(h.controller.configFor({ id: 99 })).toBeNull();
+    });
+
+    it("a window crash during a requested stop still waits for the last row", async () => {
+      let finishClose!: () => void;
+      const h = harness({ close: () => new Promise<void>((r) => (finishClose = r)) });
+      await h.controller.start();
+      let stopped = false;
+      const stopping = h.controller.stop().then(() => (stopped = true));
+      h.gone();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(stopped).toBe(false);
+      finishClose();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
+
+    it("shutdown is final: the off it reports cannot start the mic again", async () => {
+      // At quit the service is still Recording, so the mic's own "off" re-emitted Recording,
+      // and the runtime's start opened a second window.
+      const windowsAtStart: number[] = [];
+      const h = harness();
+      await h.controller.start();
+      const down = h.controller.shutdown();
+      h.controller.receive(h.fromWindow(), { type: "stopped" });
+      await down;
+      windowsAtStart.push(h.windows.length);
+      await h.controller.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.windows).toHaveLength(windowsAtStart[0]);
+      expect(h.windows[0].destroyed()).toBe(true);
     });
   });
 

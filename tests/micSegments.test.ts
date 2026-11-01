@@ -66,16 +66,25 @@ describe("createMicSegmentWriter", () => {
   });
 
   it("keeps two segments apart while the old one finishes after the new one starts", async () => {
-    const h = harness();
-    h.writer.handle({ type: "segmentStart", segment: 0, start: START });
-    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("a") });
-    h.writer.handle({ type: "segmentStart", segment: 1, start: END });
-    h.writer.handle({ type: "chunk", segment: 1, bytes: bytes("b") });
-    h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("A") });
-    h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
+    // Codex #89 r2 [P2]: with the clock at START, segment 1 (at END) was refused as too far
+    // ahead, and the test checked only segment 0. The clock is now at the boundary.
+    const h = harness({ now: END });
+    const ok = { ok: true };
+    expect(h.writer.handle({ type: "segmentStart", segment: 0, start: START })).toEqual(ok);
+    expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("a") })).toEqual(ok);
+    expect(h.writer.handle({ type: "segmentStart", segment: 1, start: END })).toEqual(ok);
+    expect(h.writer.handle({ type: "chunk", segment: 1, bytes: bytes("b") })).toEqual(ok);
+    expect(h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("A") })).toEqual(ok);
+    expect(h.writer.handle({ type: "segmentEnd", segment: 0, end: END })).toEqual(ok);
+    expect(h.writer.handle({ type: "chunk", segment: 1, bytes: bytes("B") })).toEqual(ok);
+    expect(h.writer.handle({ type: "segmentEnd", segment: 1, end: END + 300_000 })).toEqual(ok);
     await h.writer.drain();
     expect(fs.readFileSync(path.join(root, DAY, NAME), "utf8")).toBe("aA");
-    expect(h.rows.map((r) => r.start)).toEqual([START]);
+    expect(fs.readFileSync(path.join(root, localDay(END), "mic-102500-005.webm"), "utf8")).toBe("bB");
+    expect(h.rows.map((r) => [r.start, r.end])).toEqual([
+      [START, END],
+      [END, END + 300_000],
+    ]);
   });
 
   it.each([

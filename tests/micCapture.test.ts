@@ -41,11 +41,17 @@ class FakeRecorder implements RecorderLike {
     const bytes = new TextEncoder().encode(text);
     this.ondataavailable?.({ data: { size: bytes.byteLength, arrayBuffer: async () => bytes.buffer } });
   }
+  /** Make the final chunk's bytes unreadable, as a Blob whose arrayBuffer() rejects. */
+  unreadableFinal = false;
   stop() {
     this.state = "inactive";
     // MediaRecorder delivers the last data, then stop, asynchronously.
     queueMicrotask(() => {
-      this.chunk(`final-${this.n}`);
+      if (this.unreadableFinal) {
+        this.ondataavailable?.({ data: { size: 3, arrayBuffer: () => Promise.reject(new Error("blob gone")) } });
+      } else {
+        this.chunk(`final-${this.n}`);
+      }
       this.onstop?.();
     });
   }
@@ -216,6 +222,16 @@ describe("startMicCapture, Codex #89 r1 [P1]", () => {
       { type: "error", kind: "recorderError", message: "A recorded chunk could not be read." },
     ]);
     expect(h.events.at(-1)).toEqual({ type: "stopped" });
+  });
+});
+
+describe("startMicCapture, Codex #89 r2 [P1]", () => {
+  it("reports an unreadable final chunk before it says stopped", async () => {
+    // The main process tears down on stopped, so an error queued behind it was never heard.
+    const h = harness();
+    h.recorders[0].unreadableFinal = true;
+    await h.capture.stop();
+    expect(h.events.slice(1).map((e) => e.type)).toEqual(["chunkFailed", "error", "segmentEnd", "stopped"]);
   });
 });
 
