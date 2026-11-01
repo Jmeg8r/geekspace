@@ -23,6 +23,7 @@
     "package:win": "npm run build && npm run prebake && electron-builder --win",
     "prebake": "node scripts/prebake-seed.mjs",
     "build:gs-capture": "node scripts/build-gs-capture.mjs",
+    "probe:call-hold": "node scripts/probe-call-hold.mjs",
     "fetch-backend": "node scripts/fetch-backend.mjs",
     "migrate:local-data": "node scripts/migrate-local-data.mjs",
     "deploy:local": "node scripts/deploy-local.mjs",
