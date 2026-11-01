@@ -22,7 +22,7 @@ function fakeHandle() {
 
 function fakeRecorder(status: RecorderStatus = { status: "off" }) {
   return {
-    service: { status: () => status },
+    view: { status: () => status },
     setEnabled: vi.fn(async () => {}),
     pause: vi.fn(async () => {}),
     resume: vi.fn(async () => {}),
@@ -41,7 +41,8 @@ describe("registerDayRecorderIpc", () => {
     ]);
   });
 
-  it("returns the service's status", async () => {
+  // The view, not the service: a page that asks mid-pause must not read the passing `off`.
+  it("returns the status view's status", async () => {
     const h = fakeHandle();
     registerDayRecorderIpc({ handle: h.handle, recorder: () => fakeRecorder({ status: "paused" }) });
     expect(await h.handlers.get("gs:dayRecorder:status")!({})).toEqual({ status: "paused" });
