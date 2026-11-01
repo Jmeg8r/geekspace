@@ -235,6 +235,19 @@ describe("startMicCapture, Codex #89 r2 [P1]", () => {
   });
 });
 
+describe("startMicCapture, Codex #89 r3 [P1]", () => {
+  it("still reports a recorder error that lands after a stop was asked for, before stopped", async () => {
+    // Chromium makes a failed recorder inactive and queues its error, data and stop events, so
+    // a stop request can get in first; the error must not be lost to the stop guard.
+    const h = harness();
+    const done = h.capture.stop();
+    h.recorders[0].onerror?.({ error: { name: "EncodingError" } });
+    await done;
+    expect(h.events.slice(1).map((e) => e.type)).toEqual(["error", "chunk", "segmentEnd", "stopped"]);
+    expect(h.events[1]).toEqual({ type: "error", kind: "recorderError", message: "The recorder failed (EncodingError)." });
+  });
+});
+
 describe("micErrorKind", () => {
   it.each([
     ["NotAllowedError", "denied"],

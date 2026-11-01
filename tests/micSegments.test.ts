@@ -22,7 +22,8 @@ afterEach(() => {
 const START = new Date(2026, 10, 1, 10, 20, 0, 5).getTime();
 const END = START + 300_000;
 const DAY = localDay(START);
-const NAME = "mic-102000-005.webm";
+// Local time for reading, then the epoch ms, which never repeats (Codex #89 r3).
+const NAME = `mic-102000-005-${START}.webm`;
 const bytes = (s: string) => new TextEncoder().encode(s).buffer;
 
 type WriteSync = (fd: number, buf: Uint8Array, offset: number, length: number) => number;
@@ -80,11 +81,51 @@ describe("createMicSegmentWriter", () => {
     expect(h.writer.handle({ type: "segmentEnd", segment: 1, end: END + 300_000 })).toEqual(ok);
     await h.writer.drain();
     expect(fs.readFileSync(path.join(root, DAY, NAME), "utf8")).toBe("aA");
-    expect(fs.readFileSync(path.join(root, localDay(END), "mic-102500-005.webm"), "utf8")).toBe("bB");
+    expect(fs.readFileSync(path.join(root, localDay(END), `mic-102500-005-${END}.webm`), "utf8")).toBe("bB");
     expect(h.rows.map((r) => [r.start, r.end])).toEqual([
       [START, END],
       [END, END + 300_000],
     ]);
+  });
+
+  describe("Codex #89 r3 [P1]: a finished recording is never overwritten", () => {
+    it("keeps both segments that start at the same local time in the fall-back hour", async () => {
+      // 01:20:00.005 EDT and 01:20:00.005 EST, an hour apart, on 2026-11-01 in New York.
+      const tz = process.env.TZ;
+      process.env.TZ = "America/New_York";
+      try {
+        const a = Date.parse("2026-11-01T05:20:00.005Z");
+        const b = Date.parse("2026-11-01T06:20:00.005Z");
+        const h = harness({ now: b });
+        for (const [segment, start, text] of [
+          [0, a, "first"],
+          [1, b, "second"],
+        ] as const) {
+          expect(h.writer.handle({ type: "segmentStart", segment, start })).toEqual({ ok: true });
+          h.writer.handle({ type: "chunk", segment, bytes: bytes(text) });
+          expect(h.writer.handle({ type: "segmentEnd", segment, end: start + 1000 })).toEqual({ ok: true });
+        }
+        await h.writer.drain();
+        expect(new Set(h.rows.map((r) => r.path)).size).toBe(2);
+        expect(h.rows.map((r) => fs.readFileSync(path.join(root, r.path), "utf8"))).toEqual(["first", "second"]);
+      } finally {
+        if (tz === undefined) delete process.env.TZ;
+        else process.env.TZ = tz;
+      }
+    });
+
+    it("refuses to finish onto a file that already exists, and leaves that file alone", async () => {
+      const h = harness();
+      fs.mkdirSync(path.join(root, DAY), { recursive: true });
+      fs.writeFileSync(path.join(root, DAY, NAME), "earlier recording");
+      h.writer.handle({ type: "segmentStart", segment: 0, start: START });
+      h.writer.handle({ type: "chunk", segment: 0, bytes: bytes("new") });
+      const result = h.writer.handle({ type: "segmentEnd", segment: 0, end: END });
+      await h.writer.drain();
+      expect(!result.ok && result.reason).toMatch(/exists/);
+      expect(fs.readFileSync(path.join(root, DAY, NAME), "utf8")).toBe("earlier recording");
+      expect(h.rows).toEqual([]);
+    });
   });
 
   it.each([
