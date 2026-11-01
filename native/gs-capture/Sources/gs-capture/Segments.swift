@@ -27,6 +27,10 @@ final class PCMHold: TapSink, @unchecked Sendable {
     private let onDrop: () -> Void
     private var pending: [PCMChunk] = []
     private var total = 0
+    /// Chunks a callback has stamped but not added yet, by token: their start. The frontier
+    /// must not pass them (Codex review of PR 4a, round 2).
+    private var inflight: [Int: Double] = [:]
+    private var nextToken = 0
 
     /// `onDrop` runs after a drop, so the writer can close the segment around the gap.
     init(holdMs: Double, sampleRate: Double, deliver: @escaping (PCMChunk) -> Void, onDrop: @escaping () -> Void) {
@@ -45,17 +49,40 @@ final class PCMHold: TapSink, @unchecked Sendable {
         guard let data = buffer.mData else { return }
         let floats = UnsafeBufferPointer(start: data.assumingMemoryBound(to: Float.self),
                                          count: Int(buffer.mDataByteSize) / MemoryLayout<Float>.size)
-        ingest(interleaved: floats, channels: tapChannels, at: nowMs())
+        let frames = floats.count / max(1, tapChannels)
+        // Stamped and registered under the lock, so the frontier sees it from that instant.
+        let (token, t) = lock.withLock { () -> (Int, Double) in
+            let t = nowMs()
+            return (register(endMs: t, frames: frames), t)
+        }
+        endIngest(token, PCMChunk(endMs: t, samples: PCMHold.downmix(floats, channels: tapChannels)))
     }
 
     /// The testable half of `ingest`: downmix to mono and hold.
     func ingest(interleaved: UnsafeBufferPointer<Float>, channels: Int, at t: Double) {
-        let mono = PCMHold.downmix(interleaved, channels: channels)
-        guard !mono.isEmpty else { return }
+        let token = beginIngest(at: t, frames: interleaved.count / max(1, channels))
+        endIngest(token, PCMChunk(endMs: t, samples: PCMHold.downmix(interleaved, channels: channels)))
+    }
+
+    /// A callback has stamped a chunk ending at `t`; until `endIngest`, the frontier waits for it.
+    func beginIngest(at t: Double, frames: Int) -> Int {
+        lock.withLock { register(endMs: t, frames: frames) }
+    }
+
+    func endIngest(_ token: Int, _ chunk: PCMChunk) {
         lock.withLock {
-            pending.append(PCMChunk(endMs: t, samples: mono))
-            total += mono.count
+            inflight.removeValue(forKey: token)
+            guard !chunk.samples.isEmpty else { return }
+            pending.append(chunk)
+            total += chunk.samples.count
         }
+    }
+
+    /// Under `lock`.
+    private func register(endMs: Double, frames: Int) -> Int {
+        nextToken += 1
+        inflight[nextToken] = endMs - Double(frames) / sampleRate * 1000
+        return nextToken
     }
 
     /// Mono is what transcription uses, and it halves what is held and written.
@@ -77,9 +104,12 @@ final class PCMHold: TapSink, @unchecked Sendable {
     /// with nothing held, the newest moment a delivered chunk could have ended.
     func frontier(limit: Double) -> Double {
         lock.withLock {
-            let released = limit - holdMs
-            guard let oldest = pending.first else { return released }
-            return min(released, oldest.endMs - Double(oldest.samples.count) / sampleRate * 1000)
+            var frontier = limit - holdMs
+            if let oldest = pending.first {
+                frontier = min(frontier, oldest.endMs - Double(oldest.samples.count) / sampleRate * 1000)
+            }
+            if let earliest = inflight.values.min() { frontier = min(frontier, earliest) }
+            return frontier
         }
     }
 

@@ -163,12 +163,31 @@ final class CallRouter {
         spans.append(Span(fromMs: t, call: nil))
     }
 
+    /// Each sample goes where its own capture time falls, so a chunk that straddles a hold,
+    /// release or discard is split there (Codex review of PR 4a, round 2).
     func deliver(_ chunk: PCMChunk, sourceRate: Double) {
-        let startMs = chunk.endMs - Double(chunk.samples.count) / sourceRate * 1000
-        let span = spans.last { $0.fromMs <= startMs } ?? spans[0]
-        guard let call = span.call else {
+        let n = chunk.samples.count
+        let startMs = chunk.endMs - Double(n) / sourceRate * 1000
+        var from = 0
+        while from < n {
+            let fromMs = startMs + Double(from) / sourceRate * 1000
+            let index = spans.lastIndex { $0.fromMs <= fromMs } ?? 0
+            var to = n
+            if index + 1 < spans.count {
+                // Samples that start before the next span's beginning stay in this one.
+                let boundary = ((spans[index + 1].fromMs - startMs) * sourceRate / 1000).rounded(.up)
+                to = min(n, max(from + 1, Int(boundary)))
+            }
+            let piece = PCMChunk(endMs: startMs + Double(to) / sourceRate * 1000, samples: Array(chunk.samples[from..<to]))
+            route(piece, to: spans[index].call, sourceRate: sourceRate)
+            from = to
+        }
+    }
+
+    private func route(_ piece: PCMChunk, to call: Call?, sourceRate: Double) {
+        guard let call else {
             routingCall = false
-            append(chunk)
+            append(piece)
             return
         }
         // The system segment ends where the call begins, so no call audio is in a sys- file.
@@ -177,7 +196,7 @@ final class CallRouter {
             routingCall = true
         }
         if case .discard = call.fate { return }
-        call.hold.store(chunk, sourceRate: sourceRate)
+        call.hold.store(piece, sourceRate: sourceRate)
     }
 
     /// Write or drop every call whose audio has all been delivered: everything captured

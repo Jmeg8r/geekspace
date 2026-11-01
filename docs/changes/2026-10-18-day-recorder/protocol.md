@@ -44,6 +44,12 @@ memory only** and reaches disk only after the notice.
   `"kind": "call"` and `call-HHmmss-SSS-<epochMs>.m4a` names (16 kHz mono AAC, at most
   `--segment-sec` each, a new file at any gap), then `callReleased`. Recording continues as
   usual (`sys-` segments) after it.
+- **Audio is routed by when it was captured**, sample by sample, against the moments the
+  commands arrived: up to 500 ms of audio is still held back for the denylist when a command
+  lands. A call is written (or dropped) once everything captured before its end has come out
+  of that hold-back, including chunks a tap callback is still adding. So a call's `segment`
+  lines and its `callReleased` can come after a `sys-` segment captured later; calls
+  themselves always settle in the order they were held.
 - `call discard`: declined or timed out. The held audio is dropped, never written. Writes
   `callDiscarded` with `"reason": "command"`.
 - A stop (signal) while a call is held drops it the same way, with `"reason": "stop"`.
