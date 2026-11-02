@@ -239,3 +239,23 @@ describe("assistant usage keeps cache tokens", () => {
     ).rejects.toThrow();
   });
 });
+
+// Spec R9: an image request finds its screenshot by id; one whose image was purged has none.
+describe("assistant.screenshot", () => {
+  it("returns where the image is, and nothing once it is purged or gone", async () => {
+    const t = await seeded(1);
+    const id = await t.run((ctx) =>
+      ctx.db.insert("screenshots", { day: DAY, path: `${DAY}/shot-1.heic`, takenAt: 1_000, appBundleId: "com.example.editor", ocrText: "SYNTHETIC" })
+    );
+    expect(await t.query(api.assistant.screenshot, { screenshotId: id })).toEqual({
+      _id: id,
+      path: `${DAY}/shot-1.heic`,
+      takenAt: 1_000,
+      appBundleId: "com.example.editor",
+    });
+    await t.run((ctx) => ctx.db.patch(id, { purgedAt: 2_000 }));
+    expect(await t.query(api.assistant.screenshot, { screenshotId: id })).toBeNull();
+    await t.run((ctx) => ctx.db.delete(id));
+    expect(await t.query(api.assistant.screenshot, { screenshotId: id })).toBeNull();
+  });
+});
