@@ -214,3 +214,48 @@ describe("assistant requests keep their own usage", () => {
     expect(row).toMatchObject({ costUsd: 0.0123, inputTokens: 456, outputTokens: 78, reservedUsd: 0.2 });
   });
 });
+
+// Codex 6a r6 P2: cached input tokens are kept on the request and in the day's total.
+describe("assistant usage keeps cache tokens", () => {
+  it("settling records cache writes and reads on the request and adds them to the day", async () => {
+    const t = await seeded(1);
+    const a = await t.mutation(api.assistant.beginRequest, { day: DAY, reservedUsd: 0.2, transcriptIds: [], screenshotIds: [] });
+    await t.mutation(api.assistant.settleRequest, { requestId: a!, costUsd: 0.003, inputTokens: 100, outputTokens: 20, cacheWriteTokens: 500, cacheReadTokens: 250, proposals: [] });
+    const b = await t.mutation(api.assistant.beginRequest, { day: DAY, reservedUsd: 0.2, transcriptIds: [], screenshotIds: [] });
+    await t.mutation(api.assistant.settleRequest, { requestId: b!, costUsd: 0.001, inputTokens: 10, outputTokens: 2, cacheWriteTokens: 0, cacheReadTokens: 750, proposals: [] });
+    expect(await t.run((ctx) => ctx.db.get(a!))).toMatchObject({ inputTokens: 100, cacheWriteTokens: 500, cacheReadTokens: 250 });
+    const day = await t.run((ctx) => ctx.db.query("assistantUsage").withIndex("by_day", (q) => q.eq("day", DAY)).unique());
+    expect(day).toMatchObject({ inputTokens: 110, outputTokens: 22, cacheWriteTokens: 500, cacheReadTokens: 1000 });
+  });
+
+  it("refuses a negative or fractional cache count", async () => {
+    const t = await seeded(1);
+    const id = await t.mutation(api.assistant.beginRequest, { day: DAY, reservedUsd: 0.2, transcriptIds: [], screenshotIds: [] });
+    await expect(
+      t.mutation(api.assistant.settleRequest, { requestId: id!, costUsd: 0, inputTokens: 1, outputTokens: 0, cacheWriteTokens: -1, cacheReadTokens: 0, proposals: [] })
+    ).rejects.toThrow();
+    await expect(
+      t.mutation(api.assistant.settleRequest, { requestId: id!, costUsd: 0, inputTokens: 1, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 1.5, proposals: [] })
+    ).rejects.toThrow();
+  });
+});
+
+// Spec R9: an image request finds its screenshot by id; one whose image was purged has none.
+describe("assistant.screenshot", () => {
+  it("returns where the image is, and nothing once it is purged or gone", async () => {
+    const t = await seeded(1);
+    const id = await t.run((ctx) =>
+      ctx.db.insert("screenshots", { day: DAY, path: `${DAY}/shot-1.heic`, takenAt: 1_000, appBundleId: "com.example.editor", ocrText: "SYNTHETIC" })
+    );
+    expect(await t.query(api.assistant.screenshot, { screenshotId: id })).toEqual({
+      _id: id,
+      path: `${DAY}/shot-1.heic`,
+      takenAt: 1_000,
+      appBundleId: "com.example.editor",
+    });
+    await t.run((ctx) => ctx.db.patch(id, { purgedAt: 2_000 }));
+    expect(await t.query(api.assistant.screenshot, { screenshotId: id })).toBeNull();
+    await t.run((ctx) => ctx.db.delete(id));
+    expect(await t.query(api.assistant.screenshot, { screenshotId: id })).toBeNull();
+  });
+});

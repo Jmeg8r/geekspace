@@ -32,8 +32,12 @@ export type AssistantRequest = {
   max_tokens: number;
   output_config: { effort: string; format: { type: "json_schema"; schema: object } };
   system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[];
-  messages: { role: "user"; content: string }[];
+  messages: { role: "user"; content: string | ContentBlock[] }[];
 };
+
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: "image/jpeg"; data: string } };
 
 type Reply = { content: { type: string; text?: string }[]; stop_reason: string; model: string; usage: Usage };
 
@@ -43,7 +47,24 @@ export type AssistantClient = { messages: { create: (params: AssistantRequest) =
 /** The SDK client for a key, with logging off whatever ANTHROPIC_LOG says. */
 export function assistantClient(apiKey: string): AssistantClient & { logLevel: string | undefined; maxRetries: number };
 
-export type DayAssistant = { runBatch: () => Promise<void>; stop: () => Promise<void> };
+/** Writes the imageSent event for a screenshot about to be sent (spec R9). */
+export type ImageSentLogger = (event: { screenshotId: string }) => Promise<void>;
+
+/** What came of an image request, in words for the page. */
+export type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
+
+export type DayAssistant = {
+  runBatch: () => Promise<void>;
+  /** The logger is required and comes first (spec R9): an unlogged send does not compile. */
+  sendImage: (logImageSent: ImageSentLogger, screenshotId: string) => Promise<ImageResult>;
+  stop: () => Promise<void>;
+};
+
+/** A screenshot as JPEG bytes (macOS: sips), made in `workDir` and swept from it. */
+export function screenshotJpeg(file: string, workDir: string): Promise<Buffer>;
+
+/** Make the image work folder owner-only and remove conversions a crash left in it. */
+export function sweepImageWork(workDir: string, now?: number): void;
 
 type Proposal = Record<string, string | number | { start: number; end: number } | undefined>;
 
@@ -67,14 +88,27 @@ export function createDayAssistant(options: {
       transcriptEnds?: number[];
       screenshotEnds?: number[];
     }) => Promise<string | null>;
-    settleRequest: (args: { requestId: string; costUsd: number; inputTokens: number; outputTokens: number; proposals: Proposal[] }) => Promise<void>;
+    settleRequest: (args: {
+      requestId: string;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      cacheWriteTokens: number;
+      cacheReadTokens: number;
+      proposals: Proposal[];
+    }) => Promise<void>;
     failRequest: (args: { requestId: string }) => Promise<void>;
     abandonRequest: (args: { requestId: string }) => Promise<void>;
     openRequests: () => Promise<OpenRequest[]>;
     applyProposal: (args: { requestId: string; index: number; tzOffsetMin?: number }) => Promise<void>;
     refuseProposal: (args: { requestId: string; index: number }) => Promise<void>;
     logEvent: (event: { kind: "capPaused"; detail: string }) => Promise<void>;
+    screenshot: (screenshotId: string) => Promise<{ _id: string; path: string; takenAt: number; appBundleId?: string } | null>;
   };
   log: (message: string) => void;
+  /** A screenshot's path, confined to the media root; throws for one outside it. */
+  resolvePath: (relativePath: string) => string;
+  /** A screenshot as JPEG bytes: screenshotJpeg with the media root's work folder. */
+  toJpeg: (file: string) => Promise<Buffer>;
   model?: string;
 }): DayAssistant;

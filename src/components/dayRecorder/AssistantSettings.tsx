@@ -1,11 +1,11 @@
 import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../../../convex/_generated/api";
-import { clearApiKey, hasApiKey, saveApiKey } from "../../lib/assistantBridge";
+import { clearApiKey, clearLinearKey, hasApiKey, hasLinearKey, saveApiKey, saveLinearKey } from "../../lib/assistantBridge";
 import { format } from "date-fns";
 
 // WHAT: the Day Recorder assistant's Settings (plan PR 6a, spec R8, F4, F6): the API key
-// (write-only), the daily cap, and how often it reads. It runs only with a key and a cap.
+// (write-only), the daily cap, and how often it reads; and the Linear key (plan PR 6b). It runs only with a key and a cap.
 // WHY the note about what is sent: transcript and screen text leave the Mac for Anthropic's
 // API (F6); images go only when asked for. Saying so is part of the switch.
 
@@ -20,33 +20,9 @@ export function AssistantSettings({ section: Section }: { section: SectionCompon
   const update = useMutation(api.dayRecorder.updateSettings);
   // The local day, the same key the main process records usage under.
   const cap = useQuery(api.assistant.capStatus, { day: format(new Date(), "yyyy-MM-dd") });
-  const [keySaved, setKeySaved] = useState<boolean | null>(null);
-  const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const keyId = useId();
-
-  useEffect(() => {
-    void hasApiKey().then((r) => (r.ok ? setKeySaved(r.data) : setError(r.error)));
-  }, []);
 
   if (!settings) return null;
-
-  async function saveKey() {
-    const r = await saveApiKey(draft);
-    if (!r.ok) {
-      setError(r.error);
-      return;
-    }
-    setDraft("");
-    setError(null);
-    setKeySaved(true);
-  }
-
-  async function removeKey() {
-    const r = await clearApiKey();
-    if (r.ok) setKeySaved(false);
-    else setError(r.error);
-  }
 
   function saveNumber(patch: { dailyCapUsd?: number; batchMin?: number }) {
     update(patch).then(
@@ -62,31 +38,15 @@ export function AssistantSettings({ section: Section }: { section: SectionCompon
         Anthropic's API; images only when you ask. It runs only with a key and a daily cap.
       </p>
 
-      <div className="py-1 text-[13px]">
-        <label htmlFor={keyId} className="block pb-1 text-ink">
-          Anthropic API key{" "}
-          <span className="text-ink">{keySaved === null ? "" : keySaved ? "(saved)" : "(none yet)"}</span>
-        </label>
-        <div className="flex gap-2">
-          <input
-            id={keyId}
-            type="password"
-            autoComplete="off"
-            value={draft}
-            placeholder={keySaved ? "Replace the saved key" : "sk-ant-…"}
-            onChange={(e) => setDraft(e.target.value)}
-            className={`${FIELD} min-w-0 flex-1`}
-          />
-          <button type="button" disabled={!draft.trim()} onClick={() => void saveKey()} className={BUTTON}>
-            Save
-          </button>
-          {keySaved && (
-            <button type="button" onClick={() => void removeKey()} className={BUTTON}>
-              Remove
-            </button>
-          )}
-        </div>
-      </div>
+      <KeyField label="Anthropic API key" placeholder="sk-ant-…" has={hasApiKey} save={saveApiKey} clear={clearApiKey} />
+      <KeyField
+        label="Linear API key"
+        hint="Used only when you approve a draft."
+        placeholder="lin_api_…"
+        has={hasLinearKey}
+        save={saveLinearKey}
+        clear={clearLinearKey}
+      />
 
       <NumberField
         label="Daily cap"
@@ -110,6 +70,84 @@ export function AssistantSettings({ section: Section }: { section: SectionCompon
         </p>
       )}
     </Section>
+  );
+}
+
+type Result<T> = { ok: true; data: T } | { ok: false; error: string };
+
+/** A write-only key: saved or not, replace or remove it; it is never shown. */
+function KeyField({
+  label,
+  hint,
+  placeholder,
+  has,
+  save,
+  clear,
+}: {
+  label: string;
+  hint?: string;
+  placeholder: string;
+  has: () => Promise<Result<boolean>>;
+  save: (key: string) => Promise<Result<void>>;
+  clear: () => Promise<Result<void>>;
+}) {
+  const [saved, setSaved] = useState<boolean | null>(null);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const id = useId();
+
+  useEffect(() => {
+    void has().then((r) => (r.ok ? setSaved(r.data) : setError(r.error)));
+  }, [has]);
+
+  async function onSave() {
+    const r = await save(draft);
+    if (!r.ok) {
+      setError(r.error);
+      return;
+    }
+    setDraft("");
+    setError(null);
+    setSaved(true);
+  }
+
+  async function onRemove() {
+    const r = await clear();
+    if (r.ok) setSaved(false);
+    else setError(r.error);
+  }
+
+  return (
+    <div className="py-1 text-[13px]">
+      <label htmlFor={id} className="block pb-1 text-ink">
+        {label} <span className="text-ink">{saved === null ? "" : saved ? "(saved)" : "(none yet)"}</span>
+      </label>
+      {hint && <p className="pb-1 text-[12px] text-ink">{hint}</p>}
+      <div className="flex gap-2">
+        <input
+          id={id}
+          type="password"
+          autoComplete="off"
+          value={draft}
+          placeholder={saved ? "Replace the saved key" : placeholder}
+          onChange={(e) => setDraft(e.target.value)}
+          className={`${FIELD} min-w-0 flex-1`}
+        />
+        <button type="button" disabled={!draft.trim()} onClick={() => void onSave()} className={BUTTON}>
+          Save
+        </button>
+        {saved && (
+          <button type="button" onClick={() => void onRemove()} className={BUTTON}>
+            Remove
+          </button>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="pt-1 text-[12px] text-[color:var(--recorder-error)]">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -118,8 +118,25 @@ describe("preload assistant namespace", () => {
     const fakeRequire = () => ({ contextBridge, ipcRenderer });
     vm.runInNewContext(fs.readFileSync(PRELOAD, "utf8"), { require: fakeRequire, process: { platform: "darwin" } });
     const assistant = exposed.geekspace.assistant;
-    expect(Object.keys(assistant).sort()).toEqual(["clearApiKey", "hasApiKey", "setApiKey"]);
+    expect(Object.keys(assistant).sort()).toEqual(["clearApiKey", "hasApiKey", "requestImage", "setApiKey"]);
+    await assistant.requestImage("shot-1");
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:assistant:requestImage", { screenshotId: "shot-1" });
     await assistant.setApiKey("sk-ant-SYNTHETIC");
     expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:assistant:setApiKey", { key: "sk-ant-SYNTHETIC" });
+  });
+});
+
+// Plan PR 6b, spec R12: the Linear key is write-only too, and a draft is approved by id only.
+describe("preload linear namespace", () => {
+  it("can set, clear and ask about the key, and approve a draft by id", async () => {
+    const exposed: Record<string, Namespaces> = {};
+    const ipcRenderer = { invoke: vi.fn(async () => ({ ok: true })), on: vi.fn(), removeListener: vi.fn() };
+    const contextBridge = { exposeInMainWorld: (key: string, api: Namespaces) => void (exposed[key] = api) };
+    const fakeRequire = () => ({ contextBridge, ipcRenderer });
+    vm.runInNewContext(fs.readFileSync(PRELOAD, "utf8"), { require: fakeRequire, process: { platform: "darwin" } });
+    const linear = exposed.geekspace.linear;
+    expect(Object.keys(linear).sort()).toEqual(["approve", "clearApiKey", "hasApiKey", "setApiKey"]);
+    await linear.approve("draft-1");
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:linear:approve", { draftId: "draft-1" });
   });
 });

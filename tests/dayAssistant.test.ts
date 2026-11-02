@@ -8,8 +8,14 @@ import {
   createDayAssistant,
   type AssistantInput,
   type AssistantRequest,
+  screenshotJpeg,
+  sweepImageWork,
 } from "../electron/dayAssistant.mjs";
 import { createKeyStore, registerAssistantIpc } from "../electron/assistantKey.mjs";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // WHAT: the Day Recorder's assistant (plan PR 6a, spec R8, R10, F4). WHY tested: it is the only
 // code that sends captured text to a cloud model and turns the reply into tasks and blocks, so
@@ -37,12 +43,15 @@ type Reply = {
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 };
 
-const reply = (actions: object[], usage = { input_tokens: 2_000, output_tokens: 300 }): Reply => ({
+const reply = (actions: object[], usage: Reply["usage"] = { input_tokens: 2_000, output_tokens: 300 }): Reply => ({
   content: [{ type: "text", text: JSON.stringify({ actions }) }],
   stop_reason: "end_turn",
   model: MODEL,
   usage,
 });
+
+// SYNTHETIC: stands in for a converted screenshot.
+const JPEG = Buffer.from("SYNTHETIC JPEG BYTES");
 
 type Open = { _id: string; status: "inFlight" | "settled"; proposals: { proposal: object; state: string }[] };
 
@@ -58,6 +67,8 @@ function harness(
     settleFails?: number;
     applyFails?: boolean;
     open?: Open[];
+    shot?: { _id: string; path: string; takenAt: number; appBundleId?: string } | null;
+    resolveFails?: boolean;
   } = {}
 ) {
   const requests: AssistantRequest[] = [];
@@ -73,6 +84,7 @@ function harness(
     messages: {
       create: vi.fn(async (params: AssistantRequest) => {
         requests.push(params);
+        calls.push("create");
         return opts.replyFn ? opts.replyFn() : (opts.reply ?? reply([{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, source: "t1" }]));
       }),
     },
@@ -114,6 +126,16 @@ function harness(
         open = open.map((r) => (r._id === requestId ? { ...r, proposals: r.proposals.map((p, i) => (i === index ? { ...p, state: "refused" } : p)) } : r));
       },
       logEvent: async (e: { kind: string; detail?: string }) => void events.push(e),
+      screenshot: async (screenshotId: string) =>
+        opts.shot === undefined ? { _id: screenshotId, path: "2026-11-02/shot-1.heic", takenAt: Date.now() - 60_000, appBundleId: "com.example.editor" } : opts.shot,
+    },
+    resolvePath: (rel: string) => {
+      if (opts.resolveFails) throw new Error("outside the media root");
+      return `/media/${rel}`;
+    },
+    toJpeg: async (file: string) => {
+      calls.push(`jpeg ${file}`);
+      return JPEG;
     },
     log: (m: string) => void logs.push(m),
   });
@@ -146,6 +168,8 @@ describe("createDayAssistant.runBatch", () => {
         requestId: "req1",
         inputTokens: 2_000,
         outputTokens: 300,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
         costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, MODEL),
         proposals: [{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, sourceSegmentId: "seg1" }],
       },
@@ -520,13 +544,15 @@ describe("createKeyStore", () => {
   });
 });
 
+type IpcHandler = Parameters<Parameters<typeof registerAssistantIpc>[0]["handle"]>[1];
+
 // Plan PR 6a, spec F4: the key goes in from Settings and never comes back out.
 describe("registerAssistantIpc", () => {
   it("registers only the write-only key channels, through the guarded handle()", async () => {
-    const handlers = new Map<string, (args: { key?: string | number | null }) => boolean | void>();
+    const handlers = new Map<string, IpcHandler>();
     const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn(), get: vi.fn(() => "sk-ant-SYNTHETIC") };
-    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store });
-    expect([...handlers.keys()].sort()).toEqual(["gs:assistant:clearApiKey", "gs:assistant:hasApiKey", "gs:assistant:setApiKey"]);
+    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => null });
+    expect([...handlers.keys()].sort()).toEqual(["gs:assistant:clearApiKey", "gs:assistant:hasApiKey", "gs:assistant:requestImage", "gs:assistant:setApiKey"]);
     expect(handlers.get("gs:assistant:hasApiKey")!({})).toBe(true);
     expect(handlers.get("gs:assistant:setApiKey")!({ key: "sk-ant-SYNTHETIC" })).toBeUndefined();
     expect(store.set).toHaveBeenCalledWith("sk-ant-SYNTHETIC");
@@ -534,5 +560,164 @@ describe("registerAssistantIpc", () => {
     handlers.get("gs:assistant:clearApiKey")!({});
     expect(store.clear).toHaveBeenCalledOnce();
     expect(store.get).not.toHaveBeenCalled();
+  });
+
+  it("asks for an image only by a screenshot id, and says so when the recorder is not running", async () => {
+    const handlers = new Map<string, IpcHandler>();
+    const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() };
+    const requestImage = vi.fn(async () => ({ ok: true as const, actions: 0 }));
+    let running = false;
+    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => (running ? { requestImage } : null) });
+    const ask = handlers.get("gs:assistant:requestImage")!;
+    await expect(Promise.resolve(ask({ screenshotId: "shot1" }))).resolves.toEqual({ ok: false, reason: "The Day Recorder isn't running" });
+    running = true;
+    await expect(Promise.resolve(ask({ screenshotId: "shot1" }))).resolves.toEqual({ ok: true, actions: 0 });
+    expect(requestImage).toHaveBeenCalledWith("shot1");
+    for (const bad of [42, "", "../shot", "a".repeat(65), null]) expect(() => ask({ screenshotId: bad })).toThrow(/screenshot/);
+    expect(requestImage).toHaveBeenCalledOnce();
+  });
+});
+
+// Codex 6a r6 P2: spec R8 logs every call's tokens, and cached input is input too.
+describe("the call's cache tokens", () => {
+  it("are settled alongside the uncached input and output", async () => {
+    const h = harness({
+      reply: reply([], { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 500, cache_read_input_tokens: 250 }),
+    });
+    await h.assistant.runBatch();
+    expect(h.settled[0]).toMatchObject({ inputTokens: 100, outputTokens: 20, cacheWriteTokens: 500, cacheReadTokens: 250 });
+  });
+
+  it("are settled as zero when the reply reports none", async () => {
+    const h = harness({ reply: reply([], { input_tokens: 100, output_tokens: 20 }) });
+    await h.assistant.runBatch();
+    expect(h.settled[0]).toMatchObject({ cacheWriteTokens: 0, cacheReadTokens: 0 });
+  });
+});
+
+// Plan PR 6, spec R9: an image goes to Claude only when James asks for it, and every send is
+// logged as imageSent before the request leaves; the logger is a required parameter.
+describe("sendImage", () => {
+  const logImageSent = (h: { calls: string[] }) => async ({ screenshotId }: { screenshotId: string }) => void h.calls.push(`imageSent ${screenshotId}`);
+
+  it("logs imageSent before the request, then sends that one screen as a JPEG", async () => {
+    const h = harness({ reply: reply([]) });
+    const result = await h.assistant.sendImage(logImageSent(h), "shot1");
+    expect(result).toEqual({ ok: true, actions: 0 });
+    expect(h.calls.indexOf("imageSent shot1")).toBeGreaterThan(-1);
+    expect(h.calls.indexOf("imageSent shot1")).toBeLessThan(h.calls.indexOf("create"));
+    expect(h.calls).toContain("jpeg /media/2026-11-02/shot-1.heic");
+    const content = h.requests[0].messages[0].content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toContainEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: JPEG.toString("base64") } });
+  });
+
+  it("sends nothing, and frees the reservation, when the log can't be written", async () => {
+    const h = harness({ reply: reply([]) });
+    const failing = async () => {
+      throw new Error("backend down");
+    };
+    const result = await h.assistant.sendImage(failing, "shot1");
+    expect(result.ok).toBe(false);
+    expect(h.requests).toHaveLength(0);
+    expect(h.calls).toContain("fail req1");
+  });
+
+  it("refuses a logger that is not a function, at run time too", async () => {
+    const h = harness({ reply: reply([]) });
+    // @ts-expect-error spec R9: the logger is a required function
+    await expect(h.assistant.sendImage(null, "shot1")).rejects.toThrow(/logger/);
+    expect(h.requests).toHaveLength(0);
+    expect(h.begun).toHaveLength(0);
+  });
+
+  it("does not compile without the logger", () => {
+    const h = harness();
+    // Never called: only the type check matters here.
+    const withoutLogger = () =>
+      // @ts-expect-error spec R9: sendImage(logger, screenshotId) takes the logger first, always
+      h.assistant.sendImage("shot1");
+    expect(withoutLogger).toBeInstanceOf(Function);
+  });
+
+  it("reserves the cap for the image, and sends nothing when the cap has no room", async () => {
+    const h = harness({ reply: reply([]) });
+    await h.assistant.sendImage(logImageSent(h), "shot1");
+    // At least the image tokens' worth, priced as cache writes (spec R8).
+    expect(h.begun[0].reservedUsd).toBeGreaterThan((5_000 * PRICES[MODEL].input * 1.25) / 1_000_000);
+    expect(h.begun[0]).toMatchObject({ transcriptIds: [], screenshotIds: [] });
+
+    const full = harness({ cap: { capUsd: 1, spentUsd: 1, reached: true } });
+    expect((await full.assistant.sendImage(logImageSent(full), "shot1")).ok).toBe(false);
+    expect(full.requests).toHaveLength(0);
+    expect(full.calls).not.toContain("imageSent shot1");
+    expect(full.events.map((e) => e.kind)).toContain("capPaused");
+  });
+
+  it("sends nothing without a key, for a screenshot that is gone, or for a path outside the media root", async () => {
+    for (const h of [harness({ key: null }), harness({ shot: null }), harness({ resolveFails: true })]) {
+      expect((await h.assistant.sendImage(logImageSent(h), "shot1")).ok).toBe(false);
+      expect(h.requests).toHaveLength(0);
+      expect(h.begun).toHaveLength(0);
+      expect(h.calls).not.toContain("imageSent shot1");
+    }
+  });
+
+  it("settles what the screen proposes, sourced to that screenshot", async () => {
+    const h = harness({ reply: reply([{ type: "createTask", title: "Reply to the Q4 thread", estimateMin: 10, source: "s1" }]) });
+    const result = await h.assistant.sendImage(logImageSent(h), "shot1");
+    expect(result).toEqual({ ok: true, actions: 1 });
+    expect(h.settled[0].proposals).toEqual([{ type: "createTask", title: "Reply to the Q4 thread", estimateMin: 10, sourceScreenshotId: "shot1" }]);
+    expect(h.calls).toContain("apply req1#0");
+  });
+
+  it("a batch never carries an image: images go only through sendImage", async () => {
+    const h = harness();
+    await h.assistant.runBatch();
+    expect(h.requests[0].messages[0].content).toEqual(expect.any(String));
+  });
+});
+
+// Codex 6b r2 P1: the JPEG made for an image request never outlives it, even across a crash;
+// r3 P1: two conversions at once, even from two instances, never see each other's file.
+describe("the image work folder", () => {
+  // Real files have real times; the fixed clock the other tests use would make all of them old.
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), "gs-image-test-"));
+
+  it("sweepImageWork removes what a crash left, keeps a conversion still running, and is owner-only", () => {
+    const root = scratch();
+    const work = path.join(root, ".sending");
+    fs.mkdirSync(path.join(work, "old"), { recursive: true });
+    fs.mkdirSync(path.join(work, "live"));
+    fs.writeFileSync(path.join(work, "old", "screen.jpg"), "SYNTHETIC leftover");
+    fs.writeFileSync(path.join(work, "live", "screen.jpg"), "SYNTHETIC in use");
+    const longAgo = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(path.join(work, "old"), longAgo, longAgo);
+    sweepImageWork(work);
+    expect(fs.readdirSync(work)).toEqual(["live"]);
+    expect(fs.statSync(work).mode & 0o777).toBe(0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform === "darwin")("two conversions at once each get their own image, and leave nothing", async () => {
+    const root = scratch();
+    const work = path.join(root, ".sending");
+    // SYNTHETIC: two plain colours of different sizes, made here.
+    const a = path.join(root, "a.heic");
+    const b = path.join(root, "b.heic");
+    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "200", "400", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", a]);
+    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "300", "500", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", b]);
+    const [ja, jb] = await Promise.all([screenshotJpeg(a, work), screenshotJpeg(b, work)]);
+    const size = (jpeg: Buffer) => {
+      const f = path.join(root, `check-${jpeg.length}.jpg`);
+      fs.writeFileSync(f, jpeg);
+      return execFileSync("/usr/bin/sips", ["-g", "pixelWidth", f]).toString().trim().split(/\s+/).at(-1);
+    };
+    expect([size(ja), size(jb)]).toEqual(["400", "500"]);
+    expect(fs.readdirSync(work)).toEqual([]);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });

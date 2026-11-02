@@ -22,7 +22,14 @@ export function createKeyStore(options: {
   };
 }): KeyStore;
 
+type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
+
 export function registerAssistantIpc(options: {
-  handle: (channel: string, fn: (args: { key?: string | number | null }) => boolean | void) => void;
+  handle: (
+    channel: string,
+    fn: (args: { key?: string | number | null; screenshotId?: string | number | null }) => boolean | void | ImageResult | Promise<ImageResult>
+  ) => void;
   keyStore: Pick<KeyStore, "set" | "has" | "clear">;
+  /** The running recorder's image requests; null when the recorder is not running. */
+  assistant: () => { requestImage: (screenshotId: string) => Promise<ImageResult> } | null;
 }): void;

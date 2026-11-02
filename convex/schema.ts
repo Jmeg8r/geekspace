@@ -308,6 +308,15 @@ export default defineSchema({
     issueRef: v.string(),
     body: v.string(),
     status: v.union(v.literal("pending"), v.literal("approved"), v.literal("sent"), v.literal("discarded")),
+    // The id the Linear comment is created under, fixed at the first claim, so a send that is
+    // tried again can't post a second comment (Codex review of PR 6b, round 1).
+    commentId: v.optional(v.string()),
+    // A send failed after the comment request left: whether Linear has it is not known, so
+    // the next approval asks Linear first. Cleared only by sending.
+    deliveryUnknown: v.optional(v.boolean()),
+    // The claim that holds an approved draft: only it may release the draft or mark it sent, so
+    // a late write from a claim that was taken over changes nothing (Codex 6b r3).
+    claimId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_status", ["status"]),
@@ -326,6 +335,9 @@ export default defineSchema({
     costUsd: v.optional(v.number()),
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
+    // Cached input, written and read; absent on calls settled before they were kept.
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
     // Where each item's part ends, in characters; absent: the whole item.
     transcriptEnds: v.optional(v.array(v.number())),
     screenshotEnds: v.optional(v.array(v.number())),
@@ -345,6 +357,8 @@ export default defineSchema({
     day: v.string(),
     inputTokens: v.number(),
     outputTokens: v.number(),
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
     costUsd: v.number(),
   }).index("by_day", ["day"]),
 });

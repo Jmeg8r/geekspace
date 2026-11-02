@@ -280,10 +280,13 @@ export const listActions = query({
 
 const draftStatus = v.union(v.literal("pending"), v.literal("approved"), v.literal("sent"), v.literal("discarded"));
 type DraftStatus = Doc<"externalDrafts">["status"];
-// Drafts only move forward. "sent" is final: nothing that left Geekspace can be unsent.
+// "sent" and "discarded" are final: nothing that left Geekspace can be unsent. The one step
+// back, a failed send from approved to pending, is releaseDraft's, which keeps whether the
+// send is in doubt; on to sent is markDraftSent's. Both need the claim that holds the draft.
 const NEXT = {
   pending: ["approved", "discarded"],
-  approved: ["sent", "discarded"],
+  // Sent, or back to pending, only through the claim that holds it (markDraftSent, releaseDraft).
+  approved: ["discarded"],
   sent: [],
   discarded: [],
 } satisfies Record<DraftStatus, readonly DraftStatus[]>;
@@ -297,6 +300,85 @@ export const listDrafts = query({
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .paginate(args.paginationOpts);
   },
+});
+
+/**
+ * Where a screenshot's image is, for an image request (spec R9); null once the image is purged
+ * or the row is gone. Never the OCR text: the request sends the image itself.
+ */
+export const screenshot = query({
+  args: { screenshotId: v.id("screenshots") },
+  handler: async (ctx, { screenshotId }) => {
+    const row = await ctx.db.get(screenshotId);
+    if (!row || row.purgedAt !== undefined) return null;
+    return { _id: row._id, path: row.path, takenAt: row.takenAt, ...(row.appBundleId !== undefined && { appBundleId: row.appBundleId }) };
+  },
+});
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// How long a claim holds a draft. A send makes at most three requests of 30 s each
+// (electron/linearDrafts.mjs), so a claim older than this was left by a crash or a write that
+// failed, and is taken again, in doubt (Codex review of PR 6b, round 2).
+const CLAIM_LEASE_MS = 5 * 60_000;
+
+/**
+ * James approved a draft: claim it for the Linear send (pending → approved), so two clicks
+ * can't both send it. The comment id is fixed at the first claim and kept for every later
+ * one (Codex review of PR 6b, round 1). A claim past its lease is taken again, in doubt, so
+ * the send checks with Linear first.
+ */
+export const claimDraft = mutation({
+  args: { draftId: v.id("externalDrafts"), commentId: v.string(), claimId: v.string() },
+  handler: async (ctx, { draftId, commentId, claimId }) => {
+    if (!UUID_V4.test(commentId)) throw new Error("The comment id must be a UUID v4");
+    if (!UUID_V4.test(claimId)) throw new Error("The claim id must be a UUID v4");
+    const draft = await ctx.db.get(draftId);
+    if (!draft) throw new Error(`Draft ${draftId} does not exist`);
+    const now = Date.now();
+    const abandoned = draft.status === "approved" && now - draft.updatedAt > CLAIM_LEASE_MS;
+    if (draft.status !== "pending" && !abandoned) throw new Error(`Cannot move a draft from ${draft.status} to approved`);
+    const id = draft.commentId ?? commentId;
+    const deliveryUnknown = draft.deliveryUnknown === true || abandoned;
+    await ctx.db.patch(draftId, { status: "approved", commentId: id, deliveryUnknown, claimId, updatedAt: now });
+    return { issueRef: draft.issueRef, body: draft.body, commentId: id, deliveryUnknown };
+  },
+});
+
+/** Whether `claimId` still holds the draft: false once it was released, sent or taken over. */
+async function heldBy(ctx: MutationCtx, draftId: Id<"externalDrafts">, claimId: string) {
+  const draft = await ctx.db.get(draftId);
+  if (!draft) throw new Error(`Draft ${draftId} does not exist`);
+  return draft.status === "approved" && draft.claimId === claimId ? draft : null;
+}
+
+/**
+ * The send did not finish: back in the queue. A send in doubt stays in doubt until it is sent.
+ * False, changing nothing, when this claim no longer holds the draft.
+ */
+export const releaseDraft = mutation({
+  args: { draftId: v.id("externalDrafts"), claimId: v.string(), deliveryUnknown: v.boolean() },
+  handler: async (ctx, { draftId, claimId, deliveryUnknown }) => {
+    const draft = await heldBy(ctx, draftId, claimId);
+    if (!draft) return false;
+    await ctx.db.patch(draftId, { status: "pending", deliveryUnknown: draft.deliveryUnknown === true || deliveryUnknown, updatedAt: Date.now() });
+    return true;
+  },
+});
+
+/** Linear has the comment: the draft is sent. False, changing nothing, for a claim taken over. */
+export const markDraftSent = mutation({
+  args: { draftId: v.id("externalDrafts"), claimId: v.string() },
+  handler: async (ctx, { draftId, claimId }) => {
+    if (!(await heldBy(ctx, draftId, claimId))) return false;
+    await ctx.db.patch(draftId, { status: "sent", deliveryUnknown: false, updatedAt: Date.now() });
+    return true;
+  },
+});
+
+/** One draft, for the Linear send that claimed it (electron/linearDrafts.mjs). */
+export const draft = query({
+  args: { draftId: v.id("externalDrafts") },
+  handler: async (ctx, args) => ctx.db.get(args.draftId),
 });
 
 export const setDraftStatus = mutation({
@@ -351,19 +433,24 @@ async function reservedUsd(ctx: QueryCtx, day: string): Promise<number> {
   return inFlight.reduce((sum, r) => sum + r.reservedUsd, 0);
 }
 
-async function addUsage(ctx: MutationCtx, day: string, inputTokens: number, outputTokens: number, costUsd: number) {
+type Usage = { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number; costUsd: number };
+const NO_TOKENS = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
+
+async function addUsage(ctx: MutationCtx, day: string, u: Usage) {
   const row = await ctx.db
     .query("assistantUsage")
     .withIndex("by_day", (q) => q.eq("day", day))
     .unique();
   if (row) {
     await ctx.db.patch(row._id, {
-      inputTokens: row.inputTokens + inputTokens,
-      outputTokens: row.outputTokens + outputTokens,
-      costUsd: row.costUsd + costUsd,
+      inputTokens: row.inputTokens + u.inputTokens,
+      outputTokens: row.outputTokens + u.outputTokens,
+      cacheWriteTokens: (row.cacheWriteTokens ?? 0) + u.cacheWriteTokens,
+      cacheReadTokens: (row.cacheReadTokens ?? 0) + u.cacheReadTokens,
+      costUsd: row.costUsd + u.costUsd,
     });
   } else {
-    await ctx.db.insert("assistantUsage", { day, inputTokens, outputTokens, costUsd });
+    await ctx.db.insert("assistantUsage", { day, ...u });
   }
 }
 
@@ -496,7 +583,7 @@ export const beginRequest = mutation({
     const now = Date.now();
     for (const r of await ctx.db.query("assistantRequests").withIndex("by_status", (q) => q.eq("status", "inFlight")).collect()) {
       if (now - r.at < ABANDON_MS) continue;
-      await addUsage(ctx, r.day, 0, 0, r.reservedUsd);
+      await addUsage(ctx, r.day, { ...NO_TOKENS, costUsd: r.reservedUsd });
       await ctx.db.patch(r._id, { status: "done" });
     }
     const settings = await globalSettings(ctx);
@@ -522,17 +609,29 @@ export const settleRequest = mutation({
     costUsd: v.number(),
     inputTokens: v.number(),
     outputTokens: v.number(),
+    // Absent means the reply reported none.
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
     proposals: v.array(proposal),
   },
   handler: async (ctx, args) => {
-    assertCost(args.costUsd);
-    assertCount("input tokens", args.inputTokens);
-    assertCount("output tokens", args.outputTokens);
+    const usage = {
+      costUsd: args.costUsd,
+      inputTokens: args.inputTokens,
+      outputTokens: args.outputTokens,
+      cacheWriteTokens: args.cacheWriteTokens ?? 0,
+      cacheReadTokens: args.cacheReadTokens ?? 0,
+    };
+    assertCost(usage.costUsd);
+    assertCount("input tokens", usage.inputTokens);
+    assertCount("output tokens", usage.outputTokens);
+    assertCount("cache write tokens", usage.cacheWriteTokens);
+    assertCount("cache read tokens", usage.cacheReadTokens);
     if (args.proposals.length > MAX_ACTIONS_PER_CALL) throw new Error(`At most ${MAX_ACTIONS_PER_CALL} proposals per call`);
     const req = await ctx.db.get(args.requestId);
     if (!req) throw new Error(`Request ${args.requestId} does not exist`);
     if (req.status !== "inFlight") return;
-    await addUsage(ctx, req.day, args.inputTokens, args.outputTokens, args.costUsd);
+    await addUsage(ctx, req.day, usage);
     const now = Date.now();
     for (const [i, id] of req.transcriptIds.entries()) {
       const row = await ctx.db.get(id);
@@ -543,9 +642,7 @@ export const settleRequest = mutation({
       if (row) await ctx.db.patch(id, readPatch(row.ocrText.length, row.readChars, req.screenshotEnds?.[i], now));
     }
     await ctx.db.patch(args.requestId, {
-      costUsd: args.costUsd,
-      inputTokens: args.inputTokens,
-      outputTokens: args.outputTokens,
+      ...usage,
       status: args.proposals.length > 0 ? "settled" : "done",
       proposals: args.proposals.map((p) => ({ proposal: p, state: "pending" as const })),
     });
@@ -571,7 +668,7 @@ export const abandonRequest = mutation({
   handler: async (ctx, { requestId }) => {
     const req = await ctx.db.get(requestId);
     if (req?.status !== "inFlight") return;
-    await addUsage(ctx, req.day, 0, 0, req.reservedUsd);
+    await addUsage(ctx, req.day, { ...NO_TOKENS, costUsd: req.reservedUsd });
     await ctx.db.patch(requestId, { status: "done" });
   },
 });

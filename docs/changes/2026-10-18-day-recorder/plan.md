@@ -1720,3 +1720,26 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     rolling 15 minutes. Earlier days are never read.
   - **The SDK client never logs** (`logLevel: "off"`, a silent logger), whatever
     `ANTHROPIC_LOG` says: at debug it logs the request, the whole batch.
+- **2026-11-02, PR 6b, Linear drafts, images on demand, cache tokens.** Built as planned (spec
+  R8, R9, R12), with these choices:
+  - **Linear drafts leave only on approval.** `electron/linearDrafts.mjs` claims a draft
+    (pending → approved), sends it with the Linear key from its own Keychain-encrypted file,
+    then marks it sent; a failed send puts it back to pending. Still unverified until a real
+    key is entered: whether Linear's `issue(id:)` takes an identifier like `ENG-123`.
+  - **An image request reads one screen and proposes from it**, under the same action schema
+    and through the same ledger as a batch: the cap is reserved (5,000 image tokens, the
+    most the model spends on a 2,576 px image), `imageSent` is written, then the request
+    leaves, and the reply is settled and applied with proposals sourced to that screenshot.
+    A log that fails sends nothing and frees the reservation. The spec says what may be
+    sent, not what Claude does with it; this reading keeps every send under R8.
+  - **HEIC becomes JPEG with macOS `sips`**, resized to 2,576 px on the long edge, in a
+    private temp folder removed after reading. The API does not take HEIC, and the recorder
+    is macOS-only (gs-capture is Swift), so this path is macOS-only by design.
+  - **The logger is required twice over:** `sendImage(logImageSent, screenshotId)` does not
+    type-check without it (a `@ts-expect-error` test, checked by mutation: making it
+    optional fails `tsc`), and a non-function logger throws before anything is reserved.
+  - **Cache tokens are kept** (Codex 6a round 6, P2): `cacheWriteTokens` and
+    `cacheReadTokens` on each request and in the day's total; `inputTokens` keeps the API's
+    meaning, the uncached input.
+  - **The page asks for an image by id only** (`gs:assistant:requestImage`, a document id or
+    nothing); the review UI that calls it is PR 6c.

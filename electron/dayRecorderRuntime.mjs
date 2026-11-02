@@ -20,7 +20,8 @@ import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMedia.mjs";
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
-import { assistantClient, createDayAssistant } from "./dayAssistant.mjs";
+import { createLinearDrafts } from "./linearDrafts.mjs";
+import { assistantClient, createDayAssistant, screenshotJpeg, sweepImageWork } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -48,7 +49,7 @@ function helperPath() {
  * `capturePage` is where the mic window's page is: the dev server, or dist/capture.html.
  * `showApp` brings the app window forward, for the menu bar's "Open Geekspace".
  */
-export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) {
+export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, linearKeyStore }) {
   const logDir = path.join(GEEKSPACE_DIR, "logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = createFileLog(path.join(logDir, "day-recorder.log"));
@@ -58,6 +59,15 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
   const mediaDir = path.join(GEEKSPACE_DIR, "day-recorder");
   // Off macOS the service never starts a helper, so it never needs the folder either.
   const mediaRoot = process.platform === "darwin" ? ensureMediaRoot(mediaDir) : mediaDir;
+  // Where an image request's JPEG is made; emptied now in case a crash left one (Codex 6b r2).
+  const imageWork = path.join(mediaRoot, ".sending");
+  if (process.platform === "darwin") {
+    try {
+      sweepImageWork(imageWork);
+    } catch (err) {
+      log(`assistant: could not empty the image work folder (${err?.code ?? err?.name ?? "Error"})`);
+    }
+  }
   const rows = (fn) => async (args) => {
     await client.mutation(fn, args);
   };
@@ -230,6 +240,23 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
       applyProposal: (args) => client.mutation(api.assistant.applyProposal, args),
       refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),
       logEvent: (event) => logEvent(event),
+      screenshot: (screenshotId) => client.query(api.assistant.screenshot, { screenshotId }),
+    },
+    resolvePath: (rel) => resolveMediaPath(mediaRoot, rel),
+    toJpeg: (file) => screenshotJpeg(file, imageWork),
+    log,
+  });
+  // Spec R9: the imageSent event is written before an image leaves; a failed write throws, and
+  // sendImage then sends nothing.
+  const logImageSent = ({ screenshotId }) => logEvent({ kind: "imageSent", screenshotId });
+  // Linear drafts (plan PR 6b, spec R12): sent only when James approves one.
+  const linear = createLinearDrafts({
+    keyStore: { get: () => linearKeyStore?.get() ?? null },
+    fetch: globalThis.fetch,
+    convex: {
+      claim: (draftId, commentId, claimId) => client.mutation(api.assistant.claimDraft, { draftId, commentId, claimId }),
+      release: (draftId, claimId, deliveryUnknown) => client.mutation(api.assistant.releaseDraft, { draftId, claimId, deliveryUnknown }),
+      markSent: (draftId, claimId) => client.mutation(api.assistant.markDraftSent, { draftId, claimId }),
     },
     log,
   });
@@ -281,6 +308,10 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) 
   });
 
   return {
+    linear,
+    assistant: {
+      requestImage: (screenshotId) => assistant.sendImage(logImageSent, screenshotId),
+    },
     service,
     view,
     notice: {
