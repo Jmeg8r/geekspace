@@ -116,6 +116,10 @@ const RawReply = z.object({ actions: z.array(z.unknown()) });
 
 // The end-of-day summary (plan PR 6c, spec R13): a short list, each line naming its source.
 const MAX_SUMMARY_ITEMS = 50;
+// Pages of each kind a summary reads (convex dayPage, 200 rows each): a day of screens every
+// 30 s is under 3,000, so this bound is never the limit in practice.
+const MAX_SUMMARY_PAGES = 50;
+export const SUMMARY_PAGE_ROWS = 200;
 const SummaryItem = z.object({ text: z.string().min(1).max(2000), source: SOURCE.optional() });
 const SummaryReply = z.object({ items: z.array(SummaryItem).max(MAX_SUMMARY_ITEMS) });
 const { parse: _parseSummary, ...SUMMARY_FORMAT } = zodOutputFormat(SummaryReply);
@@ -261,13 +265,24 @@ function replySummary(response, sources) {
     return null;
   }
   if (!parsed.success) return null;
-  return parsed.data.items.map(({ text: line, source }) => ({ text: line, ...(source ? (sources.get(source) ?? {}) : {}) }));
+  // Spec R13: every line links to its source. A line naming none, or naming no item that was
+  // sent, is left out and counted (Codex review of PR 6c, round 1).
+  const items = [];
+  let unsourced = 0;
+  for (const { text: line, source } of parsed.data.items) {
+    const found = source ? sources.get(source) : undefined;
+    if (found) items.push({ text: line, ...found });
+    else unsourced += 1;
+  }
+  return { items, unsourced };
 }
 
 // What a call is for: its instructions, its output format, and how its reply is read.
 const PROPOSE = {
   system: SYSTEM,
   format: FORMAT,
+  // What it proposes is applied once its record is written.
+  apply: true,
   read(response, sources, log) {
     const raw = response.stop_reason === "refusal" ? [] : replyActions(response);
     if (raw === null) log(`assistant: the reply was not valid output (${response.stop_reason}); it is paid for, and nothing is applied`);
@@ -280,6 +295,8 @@ const PROPOSE = {
 const SUMMARIZE = {
   system: SUMMARY_SYSTEM,
   format: SUMMARY_FORMAT,
+  // A summary changes nothing in Geekspace, not even what earlier calls left pending (Codex 6c r1).
+  apply: false,
   read(response, sources, log) {
     const items = response.stop_reason === "refusal" ? null : replySummary(response, sources);
     if (items === null) log(`assistant: the summary was not valid output (${response.stop_reason}); it is paid for, and nothing is saved`);
@@ -408,7 +425,7 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
   }
 
   /** A paid call whose record failed is written before anything new is sent. */
-  async function settlePending() {
+  async function settlePending({ apply = true } = {}) {
     if (!unsettled) return true;
     try {
       await convex.settleRequest(unsettled);
@@ -417,7 +434,7 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
       log(`assistant: a paid call is still not recorded (${err?.name ?? "Error"}); nothing new is sent until it is`);
       return false;
     }
-    await applyOpen();
+    if (apply) await applyOpen();
     return true;
   }
 
@@ -472,7 +489,7 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
       log(`assistant: could not record a paid call (${err?.name ?? "Error"}); it is written first next batch`);
       return { status: "unsettled", costUsd, value };
     }
-    const applied = await applyOpen();
+    const applied = job.apply ? await applyOpen() : 0;
     return { status: "done", applied, proposed: proposals.length, costUsd, value };
   }
 
@@ -623,9 +640,8 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
     const no = (reason) => ({ ok: false, reason });
     const anthropic = client();
     if (!anthropic) return no("No Anthropic API key is set");
-    if (!(await settlePending())) return no("A paid call is still being recorded; try again in a moment");
-    const record = await convex.dayRecord({ from, to });
-    if (record.transcripts.length + record.screenshots.length === 0) return no("Nothing was captured that day");
+    // Its record is written, but what it proposed waits for the next batch (Codex 6c r1).
+    if (!(await settlePending({ apply: false }))) return no("A paid call is still being recorded; try again in a moment");
     const now = Date.now();
     const today = localDay(now);
     const cap = await convex.capStatus(today);
@@ -634,22 +650,33 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
       return no(cap.capUsd === null ? "No daily cap is set" : "Today's cap is used up");
     }
     const left = cap.capUsd - cap.spentUsd;
-    // Packed oldest first, each item at the largest part that fits, as a batch is.
+    // The whole day, a page at a time (Codex 6c r1: the view's first 500 rows cover about four
+    // hours of screens), packed oldest first as a batch is: what was said, then the screens.
     const input = { transcripts: [], screenshots: [] };
     let bytes = utf8Bytes(material(input, now).text);
+    let seen = 0;
     let skipped = 0;
     for (const kind of ["transcripts", "screenshots"]) {
-      for (const row of record[kind]) {
-        const key = `${kind[0]}${input[kind].length + 1}`;
-        const chosen = PART_CHARS.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
-        if (chosen === undefined) {
-          skipped += 1;
-          continue;
+      let cursor = null;
+      for (let pageNo = 0; ; pageNo += 1) {
+        if (pageNo === MAX_SUMMARY_PAGES) return no("The day has more than a summary can read");
+        const page = await convex.dayPage({ from, to, kind, cursor });
+        for (const row of page.rows) {
+          seen += 1;
+          const key = `${kind[0]}${input[kind].length + 1}`;
+          const chosen = PART_CHARS.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
+          if (chosen === undefined) {
+            skipped += 1;
+            continue;
+          }
+          input[kind].push({ ...row, partChars: chosen });
+          bytes += utf8Bytes(itemLine(kind, row, key, chosen).line) + LINE_SLACK_BYTES;
         }
-        input[kind].push({ ...row, partChars: chosen });
-        bytes += utf8Bytes(itemLine(kind, row, key, chosen).line) + LINE_SLACK_BYTES;
+        if (page.done) break;
+        cursor = page.cursor;
       }
     }
+    if (seen === 0) return no("Nothing was captured that day");
     if (skipped) log(`assistant: ${skipped} item(s) left out of the summary for the cap`);
     const made = material(input, now);
     const sized = input.transcripts.length + input.screenshots.length > 0 ? fit(made.text, left, model) : null;
@@ -661,14 +688,17 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
     const outcome = await exchange(anthropic, { requestId, maxTokens: sized.maxTokens, content: made.text, sources: made.sources, job: SUMMARIZE });
     if (outcome.status === "failed") return no("Claude couldn't be reached; no summary was made");
     if (outcome.value === null) return no("Claude's answer wasn't a summary; it was paid for, and nothing was saved");
+    const { items, unsourced } = outcome.value;
+    if (unsourced) log(`assistant: ${unsourced} summary line(s) named no source and were left out`);
+    if (items.length === 0) return no("Claude's summary tied no line to the day's record; it was paid for, and nothing was saved");
     try {
-      await convex.saveSummary({ day, items: outcome.value });
+      await convex.saveSummary({ day, items });
     } catch (err) {
       log(`assistant: the summary of ${day} could not be saved (${err?.name ?? "Error"})`);
       return no("The summary was made but couldn't be saved");
     }
-    log(`assistant: summary of ${day}, ${outcome.value.length} item(s), $${outcome.costUsd.toFixed(4)}`);
-    return { ok: true, items: outcome.value.length };
+    log(`assistant: summary of ${day}, ${items.length} item(s), $${outcome.costUsd.toFixed(4)}`);
+    return { ok: true, items: items.length, unsourced, leftOut: skipped };
   }
 
   /** Run one on-request job after whatever is in flight, as the only one running. */

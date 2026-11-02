@@ -53,8 +53,11 @@ export type ImageSentLogger = (event: { screenshotId: string }) => Promise<void>
 /** What came of an image request, in words for the page. */
 export type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
 
+/** Rows per page when a summary reads the day (convex dayPage). */
+export const SUMMARY_PAGE_ROWS: number;
+
 /** What came of a summary request, in words for the page. */
-export type SummaryResult = { ok: true; items: number } | { ok: false; reason: string };
+export type SummaryResult = { ok: true; items: number; unsourced: number; leftOut: number } | { ok: false; reason: string };
 
 type DayRecordRows = {
   transcripts: { _id: string; segmentId: string; start: number; end: number; text: string }[];
@@ -114,7 +117,13 @@ export function createDayAssistant(options: {
     applyProposal: (args: { requestId: string; index: number; tzOffsetMin?: number }) => Promise<void>;
     refuseProposal: (args: { requestId: string; index: number }) => Promise<void>;
     logEvent: (event: { kind: "capPaused"; detail: string }) => Promise<void>;
-    dayRecord: (args: { from: number; to: number }) => Promise<DayRecordRows>;
+    /** One page of a day's transcripts or screens, oldest first (convex dayPage). */
+    dayPage: (args: {
+      from: number;
+      to: number;
+      kind: "transcripts" | "screenshots";
+      cursor: string | null;
+    }) => Promise<{ rows: DayRecordRows["transcripts"] | DayRecordRows["screenshots"]; done: boolean; cursor: string }>;
     saveSummary: (args: { day: string; items: { text: string; sourceSegmentId?: string; sourceScreenshotId?: string }[] }) => Promise<void>;
     screenshot: (screenshotId: string) => Promise<{ _id: string; path: string; takenAt: number; appBundleId?: string } | null>;
   };

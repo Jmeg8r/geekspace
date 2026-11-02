@@ -23,7 +23,7 @@ export function createKeyStore(options: {
 }): KeyStore;
 
 type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
-type SummaryResult = { ok: true; items: number } | { ok: false; reason: string };
+type SummaryResult = { ok: true; items: number; unsourced: number; leftOut: number } | { ok: false; reason: string };
 
 export function registerAssistantIpc(options: {
   handle: (

@@ -620,7 +620,7 @@ describe("registerAssistantIpc", () => {
 
   it("summarizes one local day, and refuses anything but a day and its window", async () => {
     const handlers = new Map<string, IpcHandler>();
-    const summarize = vi.fn(async () => ({ ok: true as const, items: 2 }));
+    const summarize = vi.fn(async () => ({ ok: true as const, items: 2, unsourced: 0, leftOut: 0 }));
     registerAssistantIpc({
       handle: (ch, fn) => void handlers.set(ch, fn),
       keyStore: { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() },
@@ -628,7 +628,7 @@ describe("registerAssistantIpc", () => {
     });
     const ask = handlers.get("gs:assistant:summarize")!;
     const from = Date.UTC(2026, 10, 2, 5);
-    await expect(Promise.resolve(ask({ day: "2026-11-02", from, to: from + 86_400_000 }))).resolves.toEqual({ ok: true, items: 2 });
+    await expect(Promise.resolve(ask({ day: "2026-11-02", from, to: from + 86_400_000 }))).resolves.toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0 });
     expect(summarize).toHaveBeenCalledWith("2026-11-02", from, from + 86_400_000);
     for (const bad of [
       { day: "Nov 2", from, to: from + 1 },

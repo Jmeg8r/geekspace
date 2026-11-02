@@ -805,7 +805,48 @@ const summaryItem = v.object({
   sourceScreenshotId: v.optional(v.id("screenshots")),
 });
 
-/** Keep a summary of a day (electron/dayAssistant.mjs summarize). */
+/**
+ * One page of a day's transcripts, oldest first: how a summary reads the whole day (Codex
+ * review of PR 6c, round 1), where the view shows only its first MAX_DAY_ROWS.
+ */
+export const dayTranscripts = query({
+  args: { from: v.number(), to: v.number(), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { from, to, paginationOpts }) => {
+    assertDayWindow(from, to);
+    assertPage(paginationOpts);
+    const result = await ctx.db
+      .query("transcripts")
+      .withIndex("by_start", (q) => q.gte("start", from).lt("start", to))
+      .paginate(paginationOpts);
+    return { ...result, page: result.page.map((r) => ({ _id: r._id, segmentId: r.segmentId, start: r.start, end: r.end, text: r.text })) };
+  },
+});
+
+/** One page of a day's screens, oldest first: the summary's read of them (see dayTranscripts). */
+export const dayScreens = query({
+  args: { from: v.number(), to: v.number(), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { from, to, paginationOpts }) => {
+    assertDayWindow(from, to);
+    assertPage(paginationOpts);
+    const result = await ctx.db
+      .query("screenshots")
+      .withIndex("by_takenAt", (q) => q.gte("takenAt", from).lt("takenAt", to))
+      .paginate(paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((r) => ({
+        _id: r._id,
+        takenAt: r.takenAt,
+        ocrText: r.ocrText,
+        purged: r.purgedAt !== undefined,
+        ...(r.appBundleId !== undefined && { appBundleId: r.appBundleId }),
+      })),
+    };
+  },
+});
+
+/** Keep a summary of a day (electron/dayAssistant.mjs summarize). Every item names exactly one
+ * source that exists (spec R13; Codex review of PR 6c, round 1). */
 export const saveSummary = mutation({
   args: { day: v.string(), items: v.array(summaryItem) },
   handler: async (ctx, { day, items }) => {
@@ -814,6 +855,9 @@ export const saveSummary = mutation({
     for (const item of items) {
       if (!item.text.trim()) throw new Error("A summary item is empty");
       assertText("Summary item", item.text, MAX_SUMMARY_TEXT);
+      const sources = [item.sourceSegmentId, item.sourceScreenshotId].filter((s) => s !== undefined);
+      if (sources.length !== 1) throw new Error("A summary item must name exactly one source");
+      if (!(await ctx.db.get(sources[0]))) throw new Error("A summary item names a source that does not exist");
     }
     return ctx.db.insert("daySummaries", { day, at: Date.now(), items });
   },

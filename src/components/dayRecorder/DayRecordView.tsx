@@ -236,14 +236,17 @@ type SummaryDoc = { items: { text: string; sourceSegmentId?: string; sourceScree
 function Summary({ day, from, to, summary, record }: { day: string; from: number; to: number; summary: SummaryDoc; record: DayRecordRows }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   async function make() {
     setBusy(true);
     setError(null);
+    setNote(null);
     const r = await summarizeDay(day, from, to);
     setBusy(false);
     if (!r.ok) setError(r.error);
     else if (!r.data.ok) setError(r.data.reason);
+    else setNote(summaryNote(r.data.unsourced, r.data.leftOut));
   }
 
   return (
@@ -275,9 +278,22 @@ function Summary({ day, from, to, summary, record }: { day: string; from: number
           No summary yet. Summarizing sends this day's transcripts and screen text to Anthropic, within the daily cap.
         </p>
       )}
+      {note && (
+        <p role="status" className="pt-1 text-[12px] text-ink-2">
+          {note}
+        </p>
+      )}
       <Alert text={error} />
     </section>
   );
+}
+
+/** What a summary could not cover, said plainly; null when it covered everything. */
+function summaryNote(unsourced: number, leftOut: number): string | null {
+  const parts = [];
+  if (leftOut) parts.push(`${leftOut} of the day's items didn't fit within today's cap and aren't in it`);
+  if (unsourced) parts.push(`${unsourced} line(s) Claude couldn't tie to the record were left out`);
+  return parts.length ? `This summary is partial: ${parts.join("; ")}.` : null;
 }
 
 /** The day as captured: what was said and what was on screen, oldest first. */

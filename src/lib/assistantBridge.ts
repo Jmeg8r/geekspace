@@ -13,7 +13,7 @@ interface KeyBridge {
 
 /** What came of an assistant request, in words for the page (electron/dayAssistant.mjs). */
 export type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
-export type SummaryResult = { ok: true; items: number } | { ok: false; reason: string };
+export type SummaryResult = { ok: true; items: number; unsourced: number; leftOut: number } | { ok: false; reason: string };
 
 interface AssistantBridge extends KeyBridge {
   requestImage(screenshotId: string): Promise<IpcResult<ImageResult>>;

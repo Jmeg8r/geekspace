@@ -132,25 +132,25 @@ describe("assistant day summaries", () => {
 });
 
 // Codex 6c r1 P1: the summary reads the whole day a page at a time, not the view's first 500.
-describe("assistant.dayPage", () => {
+describe("assistant.dayTranscripts and dayScreens", () => {
   it("pages one kind of the day's items, oldest first, to the end", async () => {
     const t = await seeded();
     const from = Date.UTC(2026, 10, 2, 5);
     for (let i = 0; i < 5; i++) await transcript(t, from + i * MIN, `SYNTHETIC ${i}`);
     await screen(t, from + HOUR, "SYNTHETIC screen");
-    const first = await t.query(api.assistant.dayPage, { from, to: from + 24 * HOUR, kind: "transcripts", paginationOpts: { numItems: 2, cursor: null } });
+    const first = await t.query(api.assistant.dayTranscripts, { from, to: from + 24 * HOUR, paginationOpts: { numItems: 2, cursor: null } });
     expect(first.page.map((r) => r.text)).toEqual(["SYNTHETIC 0", "SYNTHETIC 1"]);
     expect(first.isDone).toBe(false);
     let cursor = first.continueCursor;
     const rest: string[] = [];
     for (;;) {
-      const next = await t.query(api.assistant.dayPage, { from, to: from + 24 * HOUR, kind: "transcripts", paginationOpts: { numItems: 2, cursor } });
+      const next = await t.query(api.assistant.dayTranscripts, { from, to: from + 24 * HOUR, paginationOpts: { numItems: 2, cursor } });
       rest.push(...next.page.map((r) => r.text));
       if (next.isDone) break;
       cursor = next.continueCursor;
     }
     expect(rest).toEqual(["SYNTHETIC 2", "SYNTHETIC 3", "SYNTHETIC 4"]);
-    const screens = await t.query(api.assistant.dayPage, { from, to: from + 24 * HOUR, kind: "screenshots", paginationOpts: { numItems: 10, cursor: null } });
+    const screens = await t.query(api.assistant.dayScreens, { from, to: from + 24 * HOUR, paginationOpts: { numItems: 10, cursor: null } });
     expect(screens.page.map((r) => r.ocrText)).toEqual(["SYNTHETIC screen"]);
   });
 });
