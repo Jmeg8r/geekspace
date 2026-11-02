@@ -60,8 +60,11 @@ export type DayAssistant = {
   stop: () => Promise<void>;
 };
 
-/** A screenshot as JPEG bytes (macOS: sips). */
-export function screenshotJpeg(file: string): Promise<Buffer>;
+/** A screenshot as JPEG bytes (macOS: sips), made in `workDir` and swept from it. */
+export function screenshotJpeg(file: string, workDir: string): Promise<Buffer>;
+
+/** Empty the image work folder, creating it owner-only. */
+export function sweepImageWork(workDir: string): void;
 
 type Proposal = Record<string, string | number | { start: number; end: number } | undefined>;
 
@@ -105,6 +108,7 @@ export function createDayAssistant(options: {
   log: (message: string) => void;
   /** A screenshot's path, confined to the media root; throws for one outside it. */
   resolvePath: (relativePath: string) => string;
-  toJpeg?: (file: string) => Promise<Buffer>;
+  /** A screenshot as JPEG bytes: screenshotJpeg with the media root's work folder. */
+  toJpeg: (file: string) => Promise<Buffer>;
   model?: string;
 }): DayAssistant;

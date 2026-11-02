@@ -25,16 +25,21 @@ const COMMENT =
   "mutation Comment($id: String!, $issueId: String!, $body: String!) { commentCreate(input: { id: $id, issueId: $issueId, body: $body }) { success } }";
 // 4xx is Linear refusing the request, so nothing was done; a request timeout is not that.
 const REQUEST_TIMEOUT = 408;
+// Each request's deadline; three of them end well inside a claim's lease (convex/assistant.ts
+// CLAIM_LEASE_MS), so a claim still held past it was abandoned.
+const LINEAR_TIMEOUT_MS = 30_000;
+// How Linear says it has no entity by that id. Matched, never logged: messages can echo input.
+const NOT_FOUND_RE = /not found/i;
 
 /**
  * A failure safe to log and to show: a status or a code, never text Linear echoed.
  * `answered` is true when Linear's answer proves it did not act on the request.
  */
 class LinearError extends Error {
-  constructor(message, { answered = false, refused = false } = {}) {
+  constructor(message, { answered = false, notFound = false } = {}) {
     super(message);
     this.answered = answered;
-    this.refused = refused;
+    this.notFound = notFound;
   }
 }
 
@@ -46,6 +51,7 @@ export function createLinearDrafts({ keyStore, fetch, convex, log, newId = () =>
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: key },
         body: JSON.stringify({ query, variables }),
+        signal: AbortSignal.timeout(LINEAR_TIMEOUT_MS),
       });
     } catch (err) {
       throw new LinearError(`Linear couldn't be reached (${err?.code ?? err?.name ?? "network error"})`);
@@ -62,8 +68,9 @@ export function createLinearDrafts({ keyStore, fetch, convex, log, newId = () =>
     }
     if (Array.isArray(reply?.errors) && reply.errors.length > 0) {
       const code = reply.errors[0]?.extensions?.code;
+      const notFound = reply.errors.every((e) => typeof e?.message === "string" && NOT_FOUND_RE.test(e.message));
       // A refusal of a create may be Linear refusing an id it already has: not proof either way.
-      throw new LinearError(`Linear refused it (${typeof code === "string" ? code.slice(0, 40) : "error"})`, { refused: true });
+      throw new LinearError(`Linear refused it (${typeof code === "string" ? code.slice(0, 40) : "error"})`, { notFound });
     }
     return reply?.data ?? {};
   }
@@ -73,7 +80,8 @@ export function createLinearDrafts({ keyStore, fetch, convex, log, newId = () =>
     try {
       return (await graphql(key, FIND, { id: commentId })).comment?.id === commentId;
     } catch (err) {
-      if (err instanceof LinearError && err.refused) return false; // Linear has no comment by that id
+      // Only Linear saying it has no such comment proves it is not there (Codex 6b r2).
+      if (err instanceof LinearError && err.notFound) return false;
       throw err;
     }
   }

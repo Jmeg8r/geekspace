@@ -21,7 +21,7 @@ import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMe
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
 import { createLinearDrafts } from "./linearDrafts.mjs";
-import { assistantClient, createDayAssistant } from "./dayAssistant.mjs";
+import { assistantClient, createDayAssistant, screenshotJpeg, sweepImageWork } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -59,6 +59,15 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
   const mediaDir = path.join(GEEKSPACE_DIR, "day-recorder");
   // Off macOS the service never starts a helper, so it never needs the folder either.
   const mediaRoot = process.platform === "darwin" ? ensureMediaRoot(mediaDir) : mediaDir;
+  // Where an image request's JPEG is made; emptied now in case a crash left one (Codex 6b r2).
+  const imageWork = path.join(mediaRoot, ".sending");
+  if (process.platform === "darwin") {
+    try {
+      sweepImageWork(imageWork);
+    } catch (err) {
+      log(`assistant: could not empty the image work folder (${err?.code ?? err?.name ?? "Error"})`);
+    }
+  }
   const rows = (fn) => async (args) => {
     await client.mutation(fn, args);
   };
@@ -234,6 +243,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       screenshot: (screenshotId) => client.query(api.assistant.screenshot, { screenshotId }),
     },
     resolvePath: (rel) => resolveMediaPath(mediaRoot, rel),
+    toJpeg: (file) => screenshotJpeg(file, imageWork),
     log,
   });
   // Spec R9: the imageSent event is written before an image leaves; a failed write throws, and

@@ -14,8 +14,8 @@
 // read and its proposals are written together; then each proposal is applied once. A reply that
 // is not valid output is still paid for, and one whose write failed is written first next time.
 import { execFile } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import Anthropic from "@anthropic-ai/sdk";
@@ -189,15 +189,27 @@ function imageText(row, now) {
 }
 
 /**
- * A screenshot as JPEG bytes, for an image request. macOS only, as the recorder is: gs-capture
- * writes HEIC, which the API does not take, and sips (built into macOS) converts and resizes it.
- * The copy is written to a private temp folder and removed once read.
+ * Empty the image work folder (creating it, owner-only). Run before and after each conversion
+ * and when the recorder starts, so a copy a crash left behind goes at the next of those.
  */
-export async function screenshotJpeg(file) {
+export function sweepImageWork(workDir) {
+  fsSync.rmSync(workDir, { recursive: true, force: true });
+  fsSync.mkdirSync(workDir, { recursive: true, mode: 0o700 });
+  fsSync.chmodSync(workDir, 0o700);
+}
+
+/**
+ * A screenshot as JPEG bytes, for an image request. macOS only, as the recorder is: gs-capture
+ * writes HEIC, which the API does not take, and sips (built into macOS; it can only write to a
+ * file) converts and resizes it. The copy is made in `workDir`, inside the media root, so it
+ * sits under the same FileVault and backup protections as the screenshot (Codex 6b r2).
+ * Electron's nativeImage can't read HEIC, so there is no in-memory way.
+ */
+export async function screenshotJpeg(file, workDir) {
   if (process.platform !== "darwin") throw new Error("Screenshots are converted with sips, which only macOS has");
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gs-image-"));
+  sweepImageWork(workDir);
   try {
-    const out = path.join(dir, "screen.jpg");
+    const out = path.join(workDir, "screen.jpg");
     await promisify(execFile)(
       "/usr/bin/sips",
       ["-s", "format", "jpeg", "-s", "formatOptions", String(JPEG_QUALITY), "-Z", String(IMAGE_LONG_EDGE), file, "--out", out],
@@ -205,7 +217,7 @@ export async function screenshotJpeg(file) {
     );
     return await fs.readFile(out);
   } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+    sweepImageWork(workDir);
   }
 }
 
@@ -283,7 +295,7 @@ function replyActions(response) {
   }
 }
 
-export function createDayAssistant({ client, convex, log, resolvePath, toJpeg = screenshotJpeg, model = MODEL }) {
+export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, model = MODEL }) {
   let running = null;
   let stopped = false;
   let capNoticeDay = null;

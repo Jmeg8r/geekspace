@@ -315,11 +315,16 @@ export const screenshot = query({
 });
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// How long a claim holds a draft. A send makes at most three requests of 30 s each
+// (electron/linearDrafts.mjs), so a claim older than this was left by a crash or a write that
+// failed, and is taken again, in doubt (Codex review of PR 6b, round 2).
+const CLAIM_LEASE_MS = 5 * 60_000;
 
 /**
  * James approved a draft: claim it for the Linear send (pending → approved), so two clicks
  * can't both send it. The comment id is fixed at the first claim and kept for every later
- * one (Codex review of PR 6b, round 1).
+ * one (Codex review of PR 6b, round 1). A claim past its lease is taken again, in doubt, so
+ * the send checks with Linear first.
  */
 export const claimDraft = mutation({
   args: { draftId: v.id("externalDrafts"), commentId: v.string() },
@@ -327,10 +332,13 @@ export const claimDraft = mutation({
     if (!UUID_V4.test(commentId)) throw new Error("The comment id must be a UUID v4");
     const draft = await ctx.db.get(draftId);
     if (!draft) throw new Error(`Draft ${draftId} does not exist`);
-    if (draft.status !== "pending") throw new Error(`Cannot move a draft from ${draft.status} to approved`);
+    const now = Date.now();
+    const abandoned = draft.status === "approved" && now - draft.updatedAt > CLAIM_LEASE_MS;
+    if (draft.status !== "pending" && !abandoned) throw new Error(`Cannot move a draft from ${draft.status} to approved`);
     const id = draft.commentId ?? commentId;
-    await ctx.db.patch(draftId, { status: "approved", commentId: id, updatedAt: Date.now() });
-    return { issueRef: draft.issueRef, body: draft.body, commentId: id, deliveryUnknown: draft.deliveryUnknown === true };
+    const deliveryUnknown = draft.deliveryUnknown === true || abandoned;
+    await ctx.db.patch(draftId, { status: "approved", commentId: id, deliveryUnknown, updatedAt: now });
+    return { issueRef: draft.issueRef, body: draft.body, commentId: id, deliveryUnknown };
   },
 });
 
