@@ -69,7 +69,7 @@ require_count() {
 
 # Credentials come from files or the CI environment, and reach curl through a mode-0600
 # header file (-H @file), never on argv — argv is world-readable through a process list
-# for the whole life of the request, which for the broker call is up to 1500s. This
+# for the whole life of the request, which for the broker call is up to 3600s. This
 # comment used to describe an intention the code did not implement: both tokens were
 # interpolated straight into curl's argument list (Codex [P2]).
 FT="${FORGE_TOKEN:-$(cat "$HOME/.config/sovereign-forge/token" 2>/dev/null || true)}"
@@ -83,7 +83,7 @@ fi
 # The forge credential is spent ONLY on the comment POST below. Demanding it up
 # front also fired in --no-post mode, which is documented in the usage line and
 # needs nothing but the broker — so a valid local review died on a credential it
-# was never going to use (Codex [P3]). Still checked before the 1500s broker call
+# was never going to use (Codex [P3]). Still checked before the 3600s broker call
 # rather than after it: a review nobody can post is worth failing fast on.
 if [ "$POST" -eq 1 ] && [ -z "$FT" ]; then
   die "no forge token — needed to post the review comment (pass --no-post to print it instead)"
@@ -655,7 +655,7 @@ echo "   review request ID: $REQUEST_ID" >&2
 
 print_review_diagnostics() {
   if ! jq -e --arg id "$REQUEST_ID" '
-    def bounded_seconds: type == "number" and . >= 0 and . <= 1502;
+    def bounded_seconds: type == "number" and . >= 0 and . <= 3602;
     def safe_call:
       type == "object"
       and (.stage as $s | (["initial_review", "changed_files_followup",
@@ -693,7 +693,7 @@ print_review_diagnostics() {
 }
 
 # The broker's whole-request allowance: coverage completion (#123) runs inside it.
-REVIEW_TIMEOUT=1500
+REVIEW_TIMEOUT=3600
 if ! code=$(curl -sS -m "$REVIEW_TIMEOUT" -o "$V" -w '%{http_code}' -X POST \
        -H @"$BHDR" -H 'Content-Type: application/json' \
        -H "X-Review-Request-ID: $REQUEST_ID" \
@@ -856,7 +856,7 @@ fi
 # Only TOP-LEVEL key order is ignored. `jq -S` would sort at every depth, and order inside
 # `exports` decides which file Node loads: a PR that only reordered its conditions compared
 # equal and was accepted (review panel, 2026-10-11, reproduced on jq 1.6).
-# The reviewed copy is $HEAD_SHA, never HEAD: the broker call above can take 1500 s, and a
+# The reviewed copy is $HEAD_SHA, never HEAD: the broker call above can take 3600 s, and a
 # checkout that moved meanwhile would have this compare a different commit.
 # What it does NOT establish: that the new versions are safe. A value here may be a URL,
 # a file: path or an npm: alias; the comment says that judgement is not made (STD_ZERO_DEPS).
