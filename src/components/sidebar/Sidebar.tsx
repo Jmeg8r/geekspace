@@ -4,6 +4,7 @@ import {
   BookOpen,
   Bot,
   CalendarDays,
+  ClipboardList,
   Database,
   FileText,
   Folder,
@@ -124,6 +125,12 @@ export function Sidebar() {
           label="Knowledge"
           active={nav.kind === "knowledge"}
           onClick={() => navigate({ kind: "knowledge" })}
+        />
+        <NavButton
+          icon={ClipboardList}
+          label="Day record"
+          active={nav.kind === "dayRecord"}
+          onClick={() => navigate({ kind: "dayRecord" })}
         />
         <NavButton
           icon={Rss}

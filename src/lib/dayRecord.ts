@@ -33,7 +33,9 @@ const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numer
  * The local day `offset` days from `date`: its name (YYYY-MM-DD) and its window, local midnight
  * to the next. Stepped by calendar day, so a DST change gives a 23- or 25-hour day.
  */
-export function dayWindow(date: Date, offset = 0): { day: string; from: number; to: number } {
+export type DayWindow = { day: string; from: number; to: number };
+
+export function dayWindow(date: Date, offset = 0): DayWindow {
   const start = new Date(date.getFullYear(), date.getMonth(), date.getDate() + offset);
   const next = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
   const day = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
@@ -56,7 +58,7 @@ export function groupActions(actions: DayAction[]): ActionGroup[] {
   }));
 }
 
-function describe(a: DayAction): string {
+function describeAction(a: DayAction): string {
   if (a.kind === "createTask") return a.title ? `added '${a.title}'` : "added a task";
   if (a.kind === "draftLinear") return a.issueRef ? `drafted an update to ${a.issueRef}` : "drafted a Linear update";
   return a.start !== undefined && a.end !== undefined ? `blocked ${clock(a.start)}–${clock(a.end)}` : "blocked time";
@@ -65,12 +67,12 @@ function describe(a: DayAction): string {
 /** What the group's Undo button says: what it will undo, named by its main action. */
 export function undoLabel(group: ActionGroup): string {
   const main = group.actions.find((a) => a.kind !== "createBlock") ?? group.actions[0];
-  return `Undo: ${describe(main)}`;
+  return `Undo: ${describeAction(main)}`;
 }
 
 /** A line describing every action of a group, for the list. */
 export function groupSummary(group: ActionGroup): string {
-  const text = group.actions.map(describe).join(", and ");
+  const text = group.actions.map(describeAction).join(", and ");
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
