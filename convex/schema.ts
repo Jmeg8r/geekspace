@@ -326,6 +326,9 @@ export default defineSchema({
     costUsd: v.optional(v.number()),
     inputTokens: v.optional(v.number()),
     outputTokens: v.optional(v.number()),
+    // Cached input, written and read; absent on calls settled before they were kept.
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
     // Where each item's part ends, in characters; absent: the whole item.
     transcriptEnds: v.optional(v.array(v.number())),
     screenshotEnds: v.optional(v.array(v.number())),
@@ -345,6 +348,8 @@ export default defineSchema({
     day: v.string(),
     inputTokens: v.number(),
     outputTokens: v.number(),
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
     costUsd: v.number(),
   }).index("by_day", ["day"]),
 });

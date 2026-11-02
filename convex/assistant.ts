@@ -359,19 +359,24 @@ async function reservedUsd(ctx: QueryCtx, day: string): Promise<number> {
   return inFlight.reduce((sum, r) => sum + r.reservedUsd, 0);
 }
 
-async function addUsage(ctx: MutationCtx, day: string, inputTokens: number, outputTokens: number, costUsd: number) {
+type Usage = { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number; costUsd: number };
+const NO_TOKENS = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
+
+async function addUsage(ctx: MutationCtx, day: string, u: Usage) {
   const row = await ctx.db
     .query("assistantUsage")
     .withIndex("by_day", (q) => q.eq("day", day))
     .unique();
   if (row) {
     await ctx.db.patch(row._id, {
-      inputTokens: row.inputTokens + inputTokens,
-      outputTokens: row.outputTokens + outputTokens,
-      costUsd: row.costUsd + costUsd,
+      inputTokens: row.inputTokens + u.inputTokens,
+      outputTokens: row.outputTokens + u.outputTokens,
+      cacheWriteTokens: (row.cacheWriteTokens ?? 0) + u.cacheWriteTokens,
+      cacheReadTokens: (row.cacheReadTokens ?? 0) + u.cacheReadTokens,
+      costUsd: row.costUsd + u.costUsd,
     });
   } else {
-    await ctx.db.insert("assistantUsage", { day, inputTokens, outputTokens, costUsd });
+    await ctx.db.insert("assistantUsage", { day, ...u });
   }
 }
 
@@ -504,7 +509,7 @@ export const beginRequest = mutation({
     const now = Date.now();
     for (const r of await ctx.db.query("assistantRequests").withIndex("by_status", (q) => q.eq("status", "inFlight")).collect()) {
       if (now - r.at < ABANDON_MS) continue;
-      await addUsage(ctx, r.day, 0, 0, r.reservedUsd);
+      await addUsage(ctx, r.day, { ...NO_TOKENS, costUsd: r.reservedUsd });
       await ctx.db.patch(r._id, { status: "done" });
     }
     const settings = await globalSettings(ctx);
@@ -530,17 +535,29 @@ export const settleRequest = mutation({
     costUsd: v.number(),
     inputTokens: v.number(),
     outputTokens: v.number(),
+    // Absent means the reply reported none.
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
     proposals: v.array(proposal),
   },
   handler: async (ctx, args) => {
-    assertCost(args.costUsd);
-    assertCount("input tokens", args.inputTokens);
-    assertCount("output tokens", args.outputTokens);
+    const usage = {
+      costUsd: args.costUsd,
+      inputTokens: args.inputTokens,
+      outputTokens: args.outputTokens,
+      cacheWriteTokens: args.cacheWriteTokens ?? 0,
+      cacheReadTokens: args.cacheReadTokens ?? 0,
+    };
+    assertCost(usage.costUsd);
+    assertCount("input tokens", usage.inputTokens);
+    assertCount("output tokens", usage.outputTokens);
+    assertCount("cache write tokens", usage.cacheWriteTokens);
+    assertCount("cache read tokens", usage.cacheReadTokens);
     if (args.proposals.length > MAX_ACTIONS_PER_CALL) throw new Error(`At most ${MAX_ACTIONS_PER_CALL} proposals per call`);
     const req = await ctx.db.get(args.requestId);
     if (!req) throw new Error(`Request ${args.requestId} does not exist`);
     if (req.status !== "inFlight") return;
-    await addUsage(ctx, req.day, args.inputTokens, args.outputTokens, args.costUsd);
+    await addUsage(ctx, req.day, usage);
     const now = Date.now();
     for (const [i, id] of req.transcriptIds.entries()) {
       const row = await ctx.db.get(id);
@@ -551,9 +568,7 @@ export const settleRequest = mutation({
       if (row) await ctx.db.patch(id, readPatch(row.ocrText.length, row.readChars, req.screenshotEnds?.[i], now));
     }
     await ctx.db.patch(args.requestId, {
-      costUsd: args.costUsd,
-      inputTokens: args.inputTokens,
-      outputTokens: args.outputTokens,
+      ...usage,
       status: args.proposals.length > 0 ? "settled" : "done",
       proposals: args.proposals.map((p) => ({ proposal: p, state: "pending" as const })),
     });
@@ -579,7 +594,7 @@ export const abandonRequest = mutation({
   handler: async (ctx, { requestId }) => {
     const req = await ctx.db.get(requestId);
     if (req?.status !== "inFlight") return;
-    await addUsage(ctx, req.day, 0, 0, req.reservedUsd);
+    await addUsage(ctx, req.day, { ...NO_TOKENS, costUsd: req.reservedUsd });
     await ctx.db.patch(requestId, { status: "done" });
   },
 });

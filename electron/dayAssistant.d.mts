@@ -67,7 +67,15 @@ export function createDayAssistant(options: {
       transcriptEnds?: number[];
       screenshotEnds?: number[];
     }) => Promise<string | null>;
-    settleRequest: (args: { requestId: string; costUsd: number; inputTokens: number; outputTokens: number; proposals: Proposal[] }) => Promise<void>;
+    settleRequest: (args: {
+      requestId: string;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+      cacheWriteTokens: number;
+      cacheReadTokens: number;
+      proposals: Proposal[];
+    }) => Promise<void>;
     failRequest: (args: { requestId: string }) => Promise<void>;
     abandonRequest: (args: { requestId: string }) => Promise<void>;
     openRequests: () => Promise<OpenRequest[]>;

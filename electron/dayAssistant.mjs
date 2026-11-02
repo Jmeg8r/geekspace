@@ -403,6 +403,9 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
       costUsd,
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
+      // Cached input is priced in costUsd, so it is logged too (spec R8; Codex 6a r6).
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
       proposals,
     };
     try {

@@ -37,7 +37,7 @@ type Reply = {
   usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 };
 
-const reply = (actions: object[], usage = { input_tokens: 2_000, output_tokens: 300 }): Reply => ({
+const reply = (actions: object[], usage: Reply["usage"] = { input_tokens: 2_000, output_tokens: 300 }): Reply => ({
   content: [{ type: "text", text: JSON.stringify({ actions }) }],
   stop_reason: "end_turn",
   model: MODEL,
@@ -146,6 +146,8 @@ describe("createDayAssistant.runBatch", () => {
         requestId: "req1",
         inputTokens: 2_000,
         outputTokens: 300,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
         costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, MODEL),
         proposals: [{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, sourceSegmentId: "seg1" }],
       },
