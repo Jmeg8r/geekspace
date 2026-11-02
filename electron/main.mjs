@@ -1,7 +1,7 @@
 // WHAT: Electron main process — creates the Geekspace window and exposes the
 // macOS Calendar/Mail integration over IPC.
 // WHY: kept dependency-free plain ESM so there is no build step for the main process.
-import { app, BrowserWindow, dialog, ipcMain, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, systemPreferences } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,7 @@ import { oneTurnAtATime } from "./agentShared.mjs";
 import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
 import { forwardCallPrompt, forwardStatus, registerDayRecorderIpc } from "./dayRecorderIpc.mjs";
+import { createKeyStore, registerAssistantIpc } from "./assistantKey.mjs";
 import { startDayRecorder } from "./dayRecorderRuntime.mjs";
 import { createQuitHold } from "./dayRecorderService.mjs";
 import {
@@ -512,6 +513,7 @@ app.whenReady().then(async () => {
       capturePage: { devServerUrl, file: CAPTURE_FILE },
       // On macOS the app outlives its windows, so the menu bar may have none to bring up.
       showApp: () => void (focusAppWindow() || createWindow()),
+      keyStore: assistantKeys,
     });
     dayRecorder = recorder;
     // The view, not the service: the windows must not flash the passing `off` either.
@@ -555,6 +557,14 @@ function appWindows() {
 }
 // Registered before the recorder exists: until it starts, or if it failed to, they say so.
 registerDayRecorderIpc({ handle, recorder: () => dayRecorder });
+// The assistant's API key (plan PR 6a, spec F4): Keychain-encrypted, owner-only, write-only from
+// the page. Kept beside the recorder's logs.
+const assistantKeys = createKeyStore({
+  file: path.join(app.getPath("appData"), "Geekspace", "assistant-key.bin"),
+  safeStorage,
+  fs,
+});
+registerAssistantIpc({ handle, keyStore: assistantKeys });
 app.on("before-quit", (event) => {
   // The recording guard runs first: saving needs the backend still up. While the save
   // handshake runs, a second quit is held back too (the recorder is idle by then).

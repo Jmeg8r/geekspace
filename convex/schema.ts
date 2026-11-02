@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { proposal } from "./lib/assistantProposal";
 
 // WHAT: Geekspace data model — Notion-style pages/databases/rows/views plus
 // calendar events and engine-managed time blocks.
@@ -133,6 +134,9 @@ export default defineSchema({
     dayRecorderShotSec: v.optional(v.number()),
     assistantBatchMin: v.optional(v.number()),
     assistantDailyCapUsd: v.optional(v.number()), // unset = the assistant does not run
+    // Where the assistant's last batch ended (plan PR 6a): text after it is new.
+    // Where the assistant starts reading: the local midnight of the day it first ran.
+    assistantSince: v.optional(v.number()),
   }).index("by_key", ["key"]),
 
   schedulerState: defineTable({
@@ -212,8 +216,14 @@ export default defineSchema({
     start: v.number(),
     end: v.number(),
     text: v.string(),
+    // When the assistant read it: set in the same write that records the call's cost.
+    readAt: v.optional(v.number()),
+    // How much of a long text has been read so far, in characters (Codex review of PR 6a).
+    readChars: v.optional(v.number()),
   })
     .index("by_segment", ["segmentId"])
+    // What the assistant has not read yet, oldest first (plan PR 6a, Codex review round 1).
+    .index("by_read_start", ["readAt", "start"])
     .searchIndex("search_text", { searchField: "text" }),
 
   screenshots: defineTable({
@@ -225,8 +235,12 @@ export default defineSchema({
     appBundleId: v.optional(v.string()),
     ocrText: v.string(),
     purgedAt: v.optional(v.number()), // image deleted; the OCR text is kept
+    // When the assistant read its text (plan PR 6a); purged images' text is read too.
+    readAt: v.optional(v.number()),
+    readChars: v.optional(v.number()),
   })
     .index("by_purged_takenAt", ["purgedAt", "takenAt"])
+    .index("by_read_takenAt", ["readAt", "takenAt"])
     .searchIndex("search_ocr", { searchField: "ocrText" }),
 
   recorderEvents: defineTable({
@@ -297,6 +311,35 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_status", ["status"]),
+
+  // One call to Claude (plan PR 6a, Codex review round 1). Made only after its worst case is
+  // reserved against the day's cap; settled with its real cost, the items it read and its
+  // proposals in one write; its proposals applied one by one, each once.
+  assistantRequests: defineTable({
+    day: v.string(),
+    at: v.number(),
+    status: v.union(v.literal("inFlight"), v.literal("settled"), v.literal("done")),
+    reservedUsd: v.number(),
+    transcriptIds: v.array(v.id("transcripts")),
+    screenshotIds: v.array(v.id("screenshots")),
+    // The call's own usage once settled (spec R8: every call logged with tokens and cost).
+    costUsd: v.optional(v.number()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    // Where each item's part ends, in characters; absent: the whole item.
+    transcriptEnds: v.optional(v.array(v.number())),
+    screenshotEnds: v.optional(v.array(v.number())),
+    proposals: v.optional(
+      v.array(
+        v.object({
+          proposal,
+          state: v.union(v.literal("pending"), v.literal("applied"), v.literal("refused")),
+        })
+      )
+    ),
+  })
+    .index("by_status", ["status"])
+    .index("by_day_status", ["day", "status"]),
 
   assistantUsage: defineTable({
     day: v.string(),

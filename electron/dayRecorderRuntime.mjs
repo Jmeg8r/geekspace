@@ -20,6 +20,7 @@ import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
 import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMedia.mjs";
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
+import { assistantClient, createDayAssistant } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -47,7 +48,7 @@ function helperPath() {
  * `capturePage` is where the mic window's page is: the dev server, or dist/capture.html.
  * `showApp` brings the app window forward, for the menu bar's "Open Geekspace".
  */
-export function startDayRecorder({ convexUrl, capturePage, showApp }) {
+export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore }) {
   const logDir = path.join(GEEKSPACE_DIR, "logs");
   fs.mkdirSync(logDir, { recursive: true });
   const logFile = createFileLog(path.join(logDir, "day-recorder.log"));
@@ -210,10 +211,46 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     (err) => log(`could not read the segments waiting for transcription: ${err?.message ?? err}`)
   );
 
+  // The assistant (plan PR 6a, spec R8): a batch every batchMin minutes while the recorder is
+  // on. The key is read from the Keychain-encrypted store only when a request is made (F4).
+  const assistant = createDayAssistant({
+    client: () => {
+      const key = keyStore?.get();
+      return key ? assistantClient(key) : null;
+    },
+    convex: {
+      ensureStart: (args) => client.mutation(api.assistant.ensureStart, args),
+      unread: (args) => client.query(api.assistant.unread, args),
+      capStatus: (day) => client.query(api.assistant.capStatus, { day }),
+      beginRequest: (args) => client.mutation(api.assistant.beginRequest, args),
+      settleRequest: (args) => client.mutation(api.assistant.settleRequest, args),
+      failRequest: (args) => client.mutation(api.assistant.failRequest, args),
+      abandonRequest: (args) => client.mutation(api.assistant.abandonRequest, args),
+      openRequests: () => client.query(api.assistant.openRequests, {}),
+      applyProposal: (args) => client.mutation(api.assistant.applyProposal, args),
+      refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),
+      logEvent: (event) => logEvent(event),
+    },
+    log,
+  });
+  let batchTimer = null;
+  let batchMs = 0;
+  const scheduleAssistant = (enabled, batchMin) => {
+    const every = enabled ? batchMin * 60_000 : 0;
+    if (every === batchMs) return;
+    clearInterval(batchTimer);
+    batchTimer = null;
+    batchMs = every;
+    if (every > 0) batchTimer = setInterval(() => void assistant.runBatch(), every);
+  };
+
   const unsubscribe = client.onUpdate(
     api.dayRecorder.getSettings,
     {},
-    (s) => void service.apply({ enabled: s.enabled, paused: s.paused, denylist: s.denylist, shotSec: s.shotSec }),
+    (s) => {
+      void service.apply({ enabled: s.enabled, paused: s.paused, denylist: s.denylist, shotSec: s.shotSec });
+      scheduleAssistant(s.enabled, s.batchMin);
+    },
     (err) => log(`could not read Day Recorder settings: ${err?.message ?? err}`)
   );
 
@@ -260,15 +297,19 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     ...controls,
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
+      clearInterval(batchTimer);
       unsubscribe();
       unsubscribePending();
       // Capture stops first and now; the segment being transcribed finishes meanwhile, and the
       // backend stays up for its row (Codex review of PR 5: a slow write kept capture going).
       const transcribing = transcription.stop();
+      // A batch in flight gets a moment to record what it paid for (Codex review of PR 6a).
+      const thinking = assistant.stop();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();
       await service.shutdown();
       await transcribing;
+      await thinking;
       // Only now: the menu bar says Recording for as long as anything is still capturing.
       indicator.stop();
       view.stop();

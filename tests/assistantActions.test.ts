@@ -272,12 +272,16 @@ describe("assistant usage and the daily cap", () => {
     expect(cap).toMatchObject({ capUsd: null, reached: true });
   });
 
-  it("adds usage up across batches and reports the cap reached at the limit", async () => {
+  it("adds settled calls up and reports the cap reached at the limit", async () => {
     const t = await seeded();
     await t.mutation(api.dayRecorder.updateSettings, { dailyCapUsd: 1 });
-    await t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: 1000, outputTokens: 200, costUsd: 0.6 });
+    const call = async (costUsd: number) => {
+      const requestId = await t.mutation(api.assistant.beginRequest, { day: "2026-10-18", reservedUsd: costUsd, transcriptIds: [], screenshotIds: [] });
+      await t.mutation(api.assistant.settleRequest, { requestId: requestId!, costUsd, inputTokens: 1000, outputTokens: 100, proposals: [] });
+    };
+    await call(0.6);
     expect(await t.query(api.assistant.capStatus, { day: "2026-10-18" })).toMatchObject({ spentUsd: 0.6, reached: false });
-    await t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: 900, outputTokens: 100, costUsd: 0.4 });
+    await call(0.4);
     expect(await t.query(api.assistant.capStatus, { day: "2026-10-18" })).toMatchObject({ spentUsd: 1, reached: true });
     // Another day starts from zero.
     expect(await t.query(api.assistant.capStatus, { day: "2026-10-19" })).toMatchObject({ spentUsd: 0, reached: false });
@@ -285,11 +289,13 @@ describe("assistant usage and the daily cap", () => {
 
   it("rejects negative or non-finite usage", async () => {
     const t = await seeded();
+    await t.mutation(api.dayRecorder.updateSettings, { dailyCapUsd: 1 });
+    const requestId = await t.mutation(api.assistant.beginRequest, { day: "2026-10-18", reservedUsd: 0.1, transcriptIds: [], screenshotIds: [] });
     await expect(
-      t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: -1, outputTokens: 0, costUsd: 0 })
+      t.mutation(api.assistant.settleRequest, { requestId: requestId!, costUsd: 0, inputTokens: -1, outputTokens: 0, proposals: [] })
     ).rejects.toThrow();
     await expect(
-      t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: 1, outputTokens: 0, costUsd: Number.NaN })
+      t.mutation(api.assistant.settleRequest, { requestId: requestId!, costUsd: Number.NaN, inputTokens: 1, outputTokens: 0, proposals: [] })
     ).rejects.toThrow();
   });
 });

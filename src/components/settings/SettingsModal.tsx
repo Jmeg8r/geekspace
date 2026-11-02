@@ -17,6 +17,8 @@ import {
 import { dayRecorderAvailable } from "../../lib/dayRecorderBridge";
 import { useUI } from "../../state/ui";
 import { DayRecorderSettings } from "../dayRecorder/DayRecorderSettings";
+import { AssistantSettings } from "../dayRecorder/AssistantSettings";
+import { assistantAvailable } from "../../lib/assistantBridge";
 import { Modal } from "../common/Modal";
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -150,6 +152,7 @@ export function SettingsModal() {
         )}
 
         {dayRecorderAvailable() && <DayRecorderSettings section={Section} />}
+        {dayRecorderAvailable() && assistantAvailable() && <AssistantSettings section={Section} />}
 
         <p className="pt-2 text-[11.5px] leading-relaxed text-ink-3">
           Geekspace · an As The Geek Learns build · data lives in your local Convex deployment.

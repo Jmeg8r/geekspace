@@ -108,3 +108,18 @@ describe("preload dayRecorder namespace", () => {
     expect(Object.keys(loadPreload("win32").dayRecorder)).toHaveLength(10);
   });
 });
+
+// Plan PR 6a, spec F4: the assistant's key is write-only from the page.
+describe("preload assistant namespace", () => {
+  it("can set, clear and ask whether there is a key, never read it", async () => {
+    const exposed: Record<string, Namespaces> = {};
+    const ipcRenderer = { invoke: vi.fn(async () => ({ ok: true })), on: vi.fn(), removeListener: vi.fn() };
+    const contextBridge = { exposeInMainWorld: (key: string, api: Namespaces) => void (exposed[key] = api) };
+    const fakeRequire = () => ({ contextBridge, ipcRenderer });
+    vm.runInNewContext(fs.readFileSync(PRELOAD, "utf8"), { require: fakeRequire, process: { platform: "darwin" } });
+    const assistant = exposed.geekspace.assistant;
+    expect(Object.keys(assistant).sort()).toEqual(["clearApiKey", "hasApiKey", "setApiKey"]);
+    await assistant.setApiKey("sk-ant-SYNTHETIC");
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:assistant:setApiKey", { key: "sk-ant-SYNTHETIC" });
+  });
+});
