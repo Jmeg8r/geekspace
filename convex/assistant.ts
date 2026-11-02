@@ -719,7 +719,6 @@ export const refuseProposal = mutation({
 // A local day is 23 to 25 hours; a little more is allowed, and nothing like two days.
 const MAX_DAY_MS = 25 * 60 * 60_000;
 const MAX_DAY_ROWS = 500;
-const MAX_QUEUE = 100;
 const MAX_SUMMARY_ITEMS = 50;
 const MAX_SUMMARY_TEXT = 2000;
 
@@ -810,24 +809,22 @@ export const source = query({
 });
 
 /**
- * Drafts for James: those waiting for approval, and those whose send was cut off (a crash, a
- * failed write) and stay approved, with when their claim lapses and they can be sent again
- * (Codex review of PR 6c, round 2). Oldest first.
+ * Drafts for James, a page at a time, in the order they were made (Codex 6c r3: a backlog past
+ * one page stays reachable). "pending" are waiting for approval; "approved" are sends that were
+ * cut off (a crash, a failed write), with when their claim lapses and they can be sent again
+ * (Codex review of PR 6c, round 2).
  */
 export const reviewQueue = query({
-  args: {},
-  handler: async (ctx) => {
-    const pending = await ctx.db
+  args: { status: v.union(v.literal("pending"), v.literal("approved")), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { status, paginationOpts }) => {
+    assertPage(paginationOpts);
+    const result = await ctx.db
       .query("externalDrafts")
-      .withIndex("by_status", (q) => q.eq("status", "pending"))
-      .take(MAX_QUEUE);
-    const approved = await ctx.db
-      .query("externalDrafts")
-      .withIndex("by_status", (q) => q.eq("status", "approved"))
-      .take(MAX_QUEUE);
-    return [...pending, ...approved]
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((d) => ({
+      .withIndex("by_status", (q) => q.eq("status", status))
+      .paginate(paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((d) => ({
         _id: d._id,
         issueRef: d.issueRef,
         body: d.body,
@@ -835,7 +832,8 @@ export const reviewQueue = query({
         status: d.status,
         deliveryUnknown: d.deliveryUnknown === true,
         ...(d.status === "approved" && { retryAfter: d.updatedAt + CLAIM_LEASE_MS }),
-      }));
+      })),
+    };
   },
 });
 

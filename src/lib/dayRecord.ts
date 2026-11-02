@@ -107,3 +107,14 @@ export function sourceLink(source: Source, record: DayRecordRows): { anchor: str
   }
   return null;
 }
+
+/**
+ * assistant.source's arguments for a summary item or an action: its one source id and nothing
+ * else, since the query's validator refuses any other field (Codex 6c r3). Null when it has none.
+ */
+export function sourceArgs(source: Source): { sourceSegmentId: string } | { sourceScreenshotId: string } | null {
+  if (source.sourceSegmentId) return { sourceSegmentId: source.sourceSegmentId };
+  if (source.sourceScreenshotId) return { sourceScreenshotId: source.sourceScreenshotId };
+  return null;
+}
+

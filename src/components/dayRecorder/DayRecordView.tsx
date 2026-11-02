@@ -11,6 +11,7 @@ import {
   discardLabel,
   groupActions,
   groupSummary,
+  sourceArgs,
   sourceLink,
   timeline,
   undoLabel,
@@ -27,6 +28,7 @@ import {
 const OCR_PREVIEW_CHARS = 300;
 // How many of a day's actions load at first, and with each "Show more".
 const ACTIONS_PAGE = 100;
+const DRAFTS_PAGE = 50;
 // How often an interrupted send's wait is checked, so its retry button appears on time.
 const RETRY_TICK_MS = 15_000;
 
@@ -36,7 +38,6 @@ export function DayRecordView() {
   const [offset, setOffset] = useState(0);
   const { day, from, to } = dayWindow(new Date(), offset);
   const record = useQuery(api.assistant.dayRecord, { from, to });
-  const queue = useQuery(api.assistant.reviewQueue, {});
   const summary = useQuery(api.assistant.daySummary, { day });
   const cap = useQuery(api.assistant.capStatus, { day: dayWindow(new Date()).day });
   const title = new Date(from).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
@@ -77,7 +78,8 @@ export function DayRecordView() {
           </p>
         )}
 
-        <Drafts queue={queue} />
+        <Drafts status="approved" heading="Sends that were interrupted" />
+        <Drafts status="pending" heading="Waiting for your approval" />
         {record && <Actions key={day} from={from} to={to} record={record} />}
         {record && <Summary day={day} from={from} to={to} summary={summary} record={record} />}
         <Record record={record} />
@@ -99,17 +101,6 @@ function Alert({ text }: { text: string | null }) {
   );
 }
 
-type Queue =
-  | {
-      _id: Id<"externalDrafts">;
-      issueRef: string;
-      body: string;
-      status: "pending" | "approved" | "sent" | "discarded";
-      deliveryUnknown: boolean;
-      retryAfter?: number;
-    }[]
-  | undefined;
-
 /** The clock, ticking, so a wait that ends shows as ended. */
 function useNow(everyMs: number) {
   const [now, setNow] = useState(Date.now());
@@ -124,12 +115,13 @@ function useNow(everyMs: number) {
  * Linear drafts (spec R12): nothing is sent until Send. A send that was cut off stays listed,
  * and can be sent again once its claim lapses; that send checks Linear first (Codex 6c r2).
  */
-function Drafts({ queue }: { queue: Queue }) {
+function Drafts({ status, heading }: { status: "pending" | "approved"; heading: string }) {
   const discard = useMutation(api.assistant.setDraftStatus);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const now = useNow(RETRY_TICK_MS);
-  if (!queue || queue.length === 0) return null;
+  const { results: queue, status: paging, loadMore } = usePaginatedQuery(api.assistant.reviewQueue, { status }, { initialNumItems: DRAFTS_PAGE });
+  if (queue.length === 0) return null;
 
   async function run(id: string, act: () => Promise<void>) {
     setBusy(id);
@@ -144,9 +136,9 @@ function Drafts({ queue }: { queue: Queue }) {
   }
 
   return (
-    <section aria-labelledby="drafts-heading">
+    <section aria-labelledby={`drafts-${status}`}>
       <Heading>
-        <span id="drafts-heading">Waiting for your approval</span>
+        <span id={`drafts-${status}`}>{heading}</span>
       </Heading>
       <ul className="space-y-3">
         {queue.map((d) => (
@@ -193,6 +185,11 @@ function Drafts({ queue }: { queue: Queue }) {
           </li>
         ))}
       </ul>
+      {paging === "CanLoadMore" && (
+        <button onClick={() => loadMore(DRAFTS_PAGE)} className="mt-2 text-[12.5px] text-ink-2 underline underline-offset-2">
+          Show more drafts
+        </button>
+      )}
       <Alert text={error} />
     </section>
   );
@@ -205,9 +202,11 @@ function Drafts({ queue }: { queue: Queue }) {
 function SourceLinkText({ source, record }: { source: Source; record: DayRecordRows }) {
   const link = sourceLink(source, record);
   const [open, setOpen] = useState(false);
-  // SAFETY: a source's ids come from dayActions or daySummary, which hold these tables' ids.
-  const ids = source as { sourceSegmentId?: Id<"captureSegments">; sourceScreenshotId?: Id<"screenshots"> };
-  const found = useQuery(api.assistant.source, !link && open ? ids : "skip");
+  const args = sourceArgs(source);
+  // SAFETY: sourceArgs keeps only a source id, which dayActions or daySummary took from these
+  // tables (Codex 6c r3: the query refuses any other field).
+  const ids = args as { sourceSegmentId: Id<"captureSegments"> } | { sourceScreenshotId: Id<"screenshots"> } | null;
+  const found = useQuery(api.assistant.source, !link && open && ids ? ids : "skip");
   if (link) {
     return (
       <a href={`#${link.anchor}`} className="text-[12px] text-ink-2 underline underline-offset-2 hover:text-ink">
