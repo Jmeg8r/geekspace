@@ -118,7 +118,9 @@ describe("preload assistant namespace", () => {
     const fakeRequire = () => ({ contextBridge, ipcRenderer });
     vm.runInNewContext(fs.readFileSync(PRELOAD, "utf8"), { require: fakeRequire, process: { platform: "darwin" } });
     const assistant = exposed.geekspace.assistant;
-    expect(Object.keys(assistant).sort()).toEqual(["clearApiKey", "hasApiKey", "setApiKey"]);
+    expect(Object.keys(assistant).sort()).toEqual(["clearApiKey", "hasApiKey", "requestImage", "setApiKey"]);
+    await assistant.requestImage("shot-1");
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:assistant:requestImage", { screenshotId: "shot-1" });
     await assistant.setApiKey("sk-ant-SYNTHETIC");
     expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:assistant:setApiKey", { key: "sk-ant-SYNTHETIC" });
   });
