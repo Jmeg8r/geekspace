@@ -368,6 +368,8 @@ export default defineSchema({
         sourceScreenshotId: v.optional(v.id("screenshots")),
       })
     ),
+    // What it could not cover: lines with no source, items that didn't fit, items cut short.
+    omitted: v.optional(v.object({ unsourced: v.number(), leftOut: v.number(), truncated: v.number() })),
   }).index("by_day_at", ["day", "at"]),
 
   assistantUsage: defineTable({

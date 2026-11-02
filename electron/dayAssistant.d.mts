@@ -57,7 +57,7 @@ export type ImageResult = { ok: true; actions: number } | { ok: false; reason: s
 export const SUMMARY_PAGE_ROWS: number;
 
 /** What came of a summary request, in words for the page. */
-export type SummaryResult = { ok: true; items: number; unsourced: number; leftOut: number } | { ok: false; reason: string };
+export type SummaryResult = { ok: true; items: number; unsourced: number; leftOut: number; truncated: number } | { ok: false; reason: string };
 
 type DayRecordRows = {
   transcripts: { _id: string; segmentId: string; start: number; end: number; text: string }[];
@@ -124,7 +124,11 @@ export function createDayAssistant(options: {
       kind: "transcripts" | "screenshots";
       cursor: string | null;
     }) => Promise<{ rows: DayRecordRows["transcripts"] | DayRecordRows["screenshots"]; done: boolean; cursor: string }>;
-    saveSummary: (args: { day: string; items: { text: string; sourceSegmentId?: string; sourceScreenshotId?: string }[] }) => Promise<void>;
+    saveSummary: (args: {
+      day: string;
+      items: { text: string; sourceSegmentId?: string; sourceScreenshotId?: string }[];
+      omitted: { unsourced: number; leftOut: number; truncated: number };
+    }) => Promise<void>;
     screenshot: (screenshotId: string) => Promise<{ _id: string; path: string; takenAt: number; appBundleId?: string } | null>;
   };
   log: (message: string) => void;

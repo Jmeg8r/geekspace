@@ -756,18 +756,20 @@ export const dayRecord = query({
   },
 });
 
-/** The day's assistant actions, oldest first, each with what it names: a task's title, a
- * block's times, a draft's issue. Undo takes a whole group (convex undo). */
+/** The day's assistant actions, a page at a time, oldest first, each with what it names: a
+ * task's title, a block's times, a draft's issue. Undo takes a whole group (convex undo). Paged
+ * so a long day reaches every action (Codex review of PR 6c, round 2). */
 export const dayActions = query({
-  args: { from: v.number(), to: v.number() },
-  handler: async (ctx, { from, to }) => {
+  args: { from: v.number(), to: v.number(), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { from, to, paginationOpts }) => {
     assertDayWindow(from, to);
-    const actions = await ctx.db
+    assertPage(paginationOpts);
+    const result = await ctx.db
       .query("assistantActions")
       .withIndex("by_at", (q) => q.gte("at", from).lt("at", to))
-      .take(MAX_DAY_ROWS);
+      .paginate(paginationOpts);
     const out = [];
-    for (const a of actions) {
+    for (const a of result.page) {
       const base = {
         _id: a._id,
         kind: a.kind,
@@ -777,25 +779,63 @@ export const dayActions = query({
         ...(a.sourceSegmentId !== undefined && { sourceSegmentId: a.sourceSegmentId }),
         ...(a.sourceScreenshotId !== undefined && { sourceScreenshotId: a.sourceScreenshotId }),
       };
-      if (a.kind === "createTask") out.push({ ...base, title: (await ctx.db.get(a.rowId))?.title ?? null });
-      else if (a.kind === "createBlock") out.push({ ...base, start: a.start, end: a.end });
-      else out.push({ ...base, issueRef: (await ctx.db.get(a.draftId))?.issueRef ?? null });
+      // Each branch names its own kind, so the result is a union a caller can narrow by kind.
+      if (a.kind === "createTask") out.push({ ...base, kind: a.kind, title: (await ctx.db.get(a.rowId))?.title ?? null });
+      else if (a.kind === "createBlock") out.push({ ...base, kind: a.kind, start: a.start, end: a.end });
+      else out.push({ ...base, kind: a.kind, issueRef: (await ctx.db.get(a.draftId))?.issueRef ?? null });
     }
-    return out;
+    return { ...result, page: out };
   },
 });
 
-/** Drafts waiting for James's approval, oldest first. */
+/**
+ * Where a summary line or an action came from, found by id wherever it is in the day (Codex
+ * review of PR 6c, round 2: the view lists only a day's first rows). Null once it is gone.
+ */
+export const source = query({
+  args: { sourceSegmentId: v.optional(v.id("captureSegments")), sourceScreenshotId: v.optional(v.id("screenshots")) },
+  handler: async (ctx, { sourceSegmentId, sourceScreenshotId }) => {
+    if ((sourceSegmentId === undefined) === (sourceScreenshotId === undefined)) throw new Error("Name exactly one source");
+    if (sourceSegmentId !== undefined) {
+      const t = await ctx.db
+        .query("transcripts")
+        .withIndex("by_segment", (q) => q.eq("segmentId", sourceSegmentId))
+        .first();
+      return t ? { kind: "said" as const, at: t.start, text: t.text } : null;
+    }
+    if (sourceScreenshotId === undefined) return null;
+    const s = await ctx.db.get(sourceScreenshotId);
+    return s ? { kind: "screen" as const, at: s.takenAt, text: s.ocrText, ...(s.appBundleId !== undefined && { appBundleId: s.appBundleId }) } : null;
+  },
+});
+
+/**
+ * Drafts for James: those waiting for approval, and those whose send was cut off (a crash, a
+ * failed write) and stay approved, with when their claim lapses and they can be sent again
+ * (Codex review of PR 6c, round 2). Oldest first.
+ */
 export const reviewQueue = query({
   args: {},
   handler: async (ctx) => {
-    const drafts = await ctx.db
+    const pending = await ctx.db
       .query("externalDrafts")
       .withIndex("by_status", (q) => q.eq("status", "pending"))
       .take(MAX_QUEUE);
-    return drafts
+    const approved = await ctx.db
+      .query("externalDrafts")
+      .withIndex("by_status", (q) => q.eq("status", "approved"))
+      .take(MAX_QUEUE);
+    return [...pending, ...approved]
       .sort((a, b) => a.createdAt - b.createdAt)
-      .map((d) => ({ _id: d._id, issueRef: d.issueRef, body: d.body, createdAt: d.createdAt, deliveryUnknown: d.deliveryUnknown === true }));
+      .map((d) => ({
+        _id: d._id,
+        issueRef: d.issueRef,
+        body: d.body,
+        createdAt: d.createdAt,
+        status: d.status,
+        deliveryUnknown: d.deliveryUnknown === true,
+        ...(d.status === "approved" && { retryAfter: d.updatedAt + CLAIM_LEASE_MS }),
+      }));
   },
 });
 
@@ -845,12 +885,16 @@ export const dayScreens = query({
   },
 });
 
+// What a summary could not cover (Codex review of PR 6c, round 2), kept so its note survives.
+const summaryOmitted = v.object({ unsourced: v.number(), leftOut: v.number(), truncated: v.number() });
+
 /** Keep a summary of a day (electron/dayAssistant.mjs summarize). Every item names exactly one
  * source that exists (spec R13; Codex review of PR 6c, round 1). */
 export const saveSummary = mutation({
-  args: { day: v.string(), items: v.array(summaryItem) },
-  handler: async (ctx, { day, items }) => {
+  args: { day: v.string(), items: v.array(summaryItem), omitted: v.optional(summaryOmitted) },
+  handler: async (ctx, { day, items, omitted }) => {
     assertDay(day);
+    if (omitted) for (const [name, n] of Object.entries(omitted)) assertCount(`omitted ${name}`, n);
     if (items.length > MAX_SUMMARY_ITEMS) throw new Error(`At most ${MAX_SUMMARY_ITEMS} summary items`);
     for (const item of items) {
       if (!item.text.trim()) throw new Error("A summary item is empty");
@@ -859,7 +903,7 @@ export const saveSummary = mutation({
       if (sources.length !== 1) throw new Error("A summary item must name exactly one source");
       if (!(await ctx.db.get(sources[0]))) throw new Error("A summary item names a source that does not exist");
     }
-    return ctx.db.insert("daySummaries", { day, at: Date.now(), items });
+    return ctx.db.insert("daySummaries", { day, at: Date.now(), items, ...(omitted && { omitted }) });
   },
 });
 

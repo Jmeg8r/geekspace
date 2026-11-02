@@ -620,7 +620,7 @@ describe("registerAssistantIpc", () => {
 
   it("summarizes one local day, and refuses anything but a day and its window", async () => {
     const handlers = new Map<string, IpcHandler>();
-    const summarize = vi.fn(async () => ({ ok: true as const, items: 2, unsourced: 0, leftOut: 0 }));
+    const summarize = vi.fn(async () => ({ ok: true as const, items: 2, unsourced: 0, leftOut: 0, truncated: 0 }));
     registerAssistantIpc({
       handle: (ch, fn) => void handlers.set(ch, fn),
       keyStore: { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() },
@@ -806,6 +806,7 @@ describe("summarize", () => {
           { text: "Agreed to send the deck by Thursday", sourceSegmentId: "seg1" },
           { text: "Worked on the Q4 plan", sourceScreenshotId: "shot1" },
         ],
+        omitted: { unsourced: 0, leftOut: 0, truncated: 0 },
       },
     ]);
     // Paid for like any call, and nothing is proposed or marked read.

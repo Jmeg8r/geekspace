@@ -656,6 +656,7 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
     let bytes = utf8Bytes(material(input, now).text);
     let seen = 0;
     let skipped = 0;
+    let truncated = 0;
     for (const kind of ["transcripts", "screenshots"]) {
       let cursor = null;
       for (let pageNo = 0; ; pageNo += 1) {
@@ -664,11 +665,16 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
         for (const row of page.rows) {
           seen += 1;
           const key = `${kind[0]}${input[kind].length + 1}`;
-          const chosen = PART_CHARS.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
+          // The whole row when the cap allows, else the largest part that fits, counted as cut
+          // short (Codex 6c r2: a batch's 8,000-character parts would drop a long row's end).
+          const length = (kind === "transcripts" ? row.text : row.ocrText).length;
+          const sizes = [length, ...PART_CHARS.filter((chars) => chars < length)];
+          const chosen = sizes.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
           if (chosen === undefined) {
             skipped += 1;
             continue;
           }
+          if (chosen < length) truncated += 1;
           input[kind].push({ ...row, partChars: chosen });
           bytes += utf8Bytes(itemLine(kind, row, key, chosen).line) + LINE_SLACK_BYTES;
         }
@@ -677,7 +683,7 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
       }
     }
     if (seen === 0) return no("Nothing was captured that day");
-    if (skipped) log(`assistant: ${skipped} item(s) left out of the summary for the cap`);
+    if (skipped || truncated) log(`assistant: for the cap, ${skipped} item(s) left out of the summary and ${truncated} cut short`);
     const made = material(input, now);
     const sized = input.transcripts.length + input.screenshots.length > 0 ? fit(made.text, left, model) : null;
     const requestId = sized && (await convex.beginRequest({ day: today, reservedUsd: sized.reservedUsd, transcriptIds: [], screenshotIds: [] }));
@@ -691,14 +697,15 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
     const { items, unsourced } = outcome.value;
     if (unsourced) log(`assistant: ${unsourced} summary line(s) named no source and were left out`);
     if (items.length === 0) return no("Claude's summary tied no line to the day's record; it was paid for, and nothing was saved");
+    const omitted = { unsourced, leftOut: skipped, truncated };
     try {
-      await convex.saveSummary({ day, items });
+      await convex.saveSummary({ day, items, omitted });
     } catch (err) {
       log(`assistant: the summary of ${day} could not be saved (${err?.name ?? "Error"})`);
       return no("The summary was made but couldn't be saved");
     }
     log(`assistant: summary of ${day}, ${items.length} item(s), $${outcome.costUsd.toFixed(4)}`);
-    return { ok: true, items: items.length, unsourced, leftOut: skipped };
+    return { ok: true, items: items.length, ...omitted };
   }
 
   /** Run one on-request job after whatever is in flight, as the only one running. */

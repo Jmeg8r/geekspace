@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useEffect, useState } from "react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { ChevronLeft, ChevronRight, Loader2, Monitor, Mic, Sparkles } from "lucide-react";
 import { api } from "../../../convex/_generated/api";
 import type { Id } from "../../../convex/_generated/dataModel";
@@ -25,12 +25,17 @@ import {
 
 // Long screen text is folded; the whole of it is one click away.
 const OCR_PREVIEW_CHARS = 300;
+// How many of a day's actions load at first, and with each "Show more".
+const ACTIONS_PAGE = 100;
+// How often an interrupted send's wait is checked, so its retry button appears on time.
+const RETRY_TICK_MS = 15_000;
+
+const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 export function DayRecordView() {
   const [offset, setOffset] = useState(0);
   const { day, from, to } = dayWindow(new Date(), offset);
   const record = useQuery(api.assistant.dayRecord, { from, to });
-  const actions = useQuery(api.assistant.dayActions, { from, to });
   const queue = useQuery(api.assistant.reviewQueue, {});
   const summary = useQuery(api.assistant.daySummary, { day });
   const cap = useQuery(api.assistant.capStatus, { day: dayWindow(new Date()).day });
@@ -73,7 +78,7 @@ export function DayRecordView() {
         )}
 
         <Drafts queue={queue} />
-        {record && <Actions actions={actions} record={record} />}
+        {record && <Actions key={day} from={from} to={to} record={record} />}
         {record && <Summary day={day} from={from} to={to} summary={summary} record={record} />}
         <Record record={record} />
       </div>
@@ -94,13 +99,36 @@ function Alert({ text }: { text: string | null }) {
   );
 }
 
-type Queue = { _id: Id<"externalDrafts">; issueRef: string; body: string; deliveryUnknown: boolean }[] | undefined;
+type Queue =
+  | {
+      _id: Id<"externalDrafts">;
+      issueRef: string;
+      body: string;
+      status: "pending" | "approved" | "sent" | "discarded";
+      deliveryUnknown: boolean;
+      retryAfter?: number;
+    }[]
+  | undefined;
 
-/** Linear drafts waiting for approval (spec R12): nothing is sent until Send. */
+/** The clock, ticking, so a wait that ends shows as ended. */
+function useNow(everyMs: number) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), everyMs);
+    return () => clearInterval(id);
+  }, [everyMs]);
+  return now;
+}
+
+/**
+ * Linear drafts (spec R12): nothing is sent until Send. A send that was cut off stays listed,
+ * and can be sent again once its claim lapses; that send checks Linear first (Codex 6c r2).
+ */
 function Drafts({ queue }: { queue: Queue }) {
   const discard = useMutation(api.assistant.setDraftStatus);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const now = useNow(RETRY_TICK_MS);
   if (!queue || queue.length === 0) return null;
 
   async function run(id: string, act: () => Promise<void>) {
@@ -125,12 +153,20 @@ function Drafts({ queue }: { queue: Queue }) {
           <li key={d._id} className="rounded-md border border-border p-3">
             <p className="pb-1 text-[12.5px] font-semibold text-ink-2">Linear · {d.issueRef}</p>
             <p className="whitespace-pre-wrap text-[13.5px]">{d.body}</p>
-            {d.deliveryUnknown && (
-              <p className="pt-1 text-[12px] text-ink-2">The last send may have gone through. Sending checks Linear first, so it won't post twice.</p>
+            {d.status === "approved" ? (
+              <p className="pt-1 text-[12px] text-ink-2">
+                {d.retryAfter !== undefined && now < d.retryAfter
+                  ? "Sending…"
+                  : "This send was interrupted. Sending again checks Linear first, so it won't post twice."}
+              </p>
+            ) : (
+              d.deliveryUnknown && (
+                <p className="pt-1 text-[12px] text-ink-2">The last send may have gone through. Sending checks Linear first, so it won't post twice.</p>
+              )
             )}
             <div className="flex gap-2 pt-2">
               <button
-                disabled={busy !== null || !assistantAvailable()}
+                disabled={busy !== null || !assistantAvailable() || (d.retryAfter !== undefined && now < d.retryAfter)}
                 onClick={() =>
                   void run(d._id, async () => {
                     const r = await approveDraft(d._id);
@@ -140,10 +176,10 @@ function Drafts({ queue }: { queue: Queue }) {
                 className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1 text-[13px] font-semibold text-white hover:bg-accent-2 disabled:opacity-50"
               >
                 {busy === d._id && <Loader2 size={13} className="animate-spin" />}
-                {approveLabel(d)}
+                {d.status === "approved" ? `${approveLabel(d)} again` : approveLabel(d)}
               </button>
               <button
-                disabled={busy !== null}
+                disabled={busy !== null || (d.retryAfter !== undefined && now < d.retryAfter)}
                 onClick={() =>
                   void run(d._id, async () => {
                     await discard({ draftId: d._id, status: "discarded" });
@@ -162,22 +198,49 @@ function Drafts({ queue }: { queue: Queue }) {
   );
 }
 
+/**
+ * Where a line came from: a link to it in the day's record, or, when it is past the rows the
+ * view lists, its own text shown in place (Codex 6c r2: every line links to its source).
+ */
 function SourceLinkText({ source, record }: { source: Source; record: DayRecordRows }) {
   const link = sourceLink(source, record);
-  if (!link) return null;
+  const [open, setOpen] = useState(false);
+  // SAFETY: a source's ids come from dayActions or daySummary, which hold these tables' ids.
+  const ids = source as { sourceSegmentId?: Id<"captureSegments">; sourceScreenshotId?: Id<"screenshots"> };
+  const found = useQuery(api.assistant.source, !link && open ? ids : "skip");
+  if (link) {
+    return (
+      <a href={`#${link.anchor}`} className="text-[12px] text-ink-2 underline underline-offset-2 hover:text-ink">
+        {link.text}
+      </a>
+    );
+  }
+  if (!source.sourceSegmentId && !source.sourceScreenshotId) return null;
   return (
-    <a href={`#${link.anchor}`} className="text-[12px] text-ink-2 underline underline-offset-2 hover:text-ink">
-      {link.text}
-    </a>
+    <span className="text-[12px] text-ink-2">
+      <button onClick={() => setOpen((o) => !o)} aria-expanded={open} className="underline underline-offset-2 hover:text-ink">
+        {open ? "Hide source" : "Show source"}
+      </button>
+      {open && found === null && <span> · It is no longer in the record.</span>}
+      {open && found && (
+        <span className="mt-1 block whitespace-pre-wrap rounded bg-hover px-2 py-1">
+          {found.kind === "said" ? "Said" : "On screen"} at {time(found.at)}: {found.text}
+        </span>
+      )}
+    </span>
   );
 }
 
-/** What the assistant did that day, each commitment with its labelled Undo (spec R11, R13). */
-function Actions({ actions, record }: { actions: Parameters<typeof groupActions>[0] | undefined; record: DayRecordRows }) {
+/**
+ * What the assistant did that day, each commitment with its labelled Undo (spec R11, R13),
+ * a page at a time so a long day reaches every one (Codex 6c r2).
+ */
+function Actions({ from, to, record }: { from: number; to: number; record: DayRecordRows }) {
   const undo = useMutation(api.assistant.undo);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const groups = actions ? groupActions(actions) : [];
+  const { results, status, loadMore } = usePaginatedQuery(api.assistant.dayActions, { from, to }, { initialNumItems: ACTIONS_PAGE });
+  const groups = groupActions(results);
 
   async function undoGroup(group: ActionGroup) {
     setBusy(group.groupId);
@@ -225,28 +288,39 @@ function Actions({ actions, record }: { actions: Parameters<typeof groupActions>
           ))}
         </ul>
       )}
+      {status === "CanLoadMore" && (
+        <button onClick={() => loadMore(ACTIONS_PAGE)} className="mt-2 text-[12.5px] text-ink-2 underline underline-offset-2">
+          Show more of this day's actions
+        </button>
+      )}
       <Alert text={error} />
     </section>
   );
 }
 
-type SummaryDoc = { items: { text: string; sourceSegmentId?: string; sourceScreenshotId?: string }[]; at: number } | null | undefined;
+type SummaryDoc =
+  | {
+      items: { text: string; sourceSegmentId?: string; sourceScreenshotId?: string }[];
+      at: number;
+      omitted?: { unsourced: number; leftOut: number; truncated: number };
+    }
+  | null
+  | undefined;
 
 /** The end-of-day summary (spec R13), made only when asked; every line links to its source. */
 function Summary({ day, from, to, summary, record }: { day: string; from: number; to: number; summary: SummaryDoc; record: DayRecordRows }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
+  // Read from the saved summary, so it is there whenever the summary is (Codex 6c r2).
+  const note = summary?.omitted ? summaryNote(summary.omitted) : null;
 
   async function make() {
     setBusy(true);
     setError(null);
-    setNote(null);
     const r = await summarizeDay(day, from, to);
     setBusy(false);
     if (!r.ok) setError(r.error);
     else if (!r.data.ok) setError(r.data.reason);
-    else setNote(summaryNote(r.data.unsourced, r.data.leftOut));
   }
 
   return (
@@ -289,9 +363,10 @@ function Summary({ day, from, to, summary, record }: { day: string; from: number
 }
 
 /** What a summary could not cover, said plainly; null when it covered everything. */
-function summaryNote(unsourced: number, leftOut: number): string | null {
+function summaryNote({ unsourced, leftOut, truncated }: { unsourced: number; leftOut: number; truncated: number }): string | null {
   const parts = [];
-  if (leftOut) parts.push(`${leftOut} of the day's items didn't fit within today's cap and aren't in it`);
+  if (leftOut) parts.push(`${leftOut} of the day's items didn't fit within the cap and aren't in it`);
+  if (truncated) parts.push(`${truncated} long item(s) were only partly read`);
   if (unsourced) parts.push(`${unsourced} line(s) Claude couldn't tie to the record were left out`);
   return parts.length ? `This summary is partial: ${parts.join("; ")}.` : null;
 }
@@ -323,7 +398,6 @@ function Record({ record }: { record: DayRecordRows | undefined }) {
   );
 }
 
-const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
 function Said({ row }: { row: DayRecordRows["transcripts"][number] }) {
   return (

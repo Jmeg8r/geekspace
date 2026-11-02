@@ -101,7 +101,7 @@ describe("assistant.dayActions paging", () => {
     expect(first.page).toHaveLength(2);
     expect(first.isDone).toBe(false);
     const rest = await t.query(api.assistant.dayActions, { ...window, paginationOpts: { numItems: 2, cursor: first.continueCursor } });
-    expect([...first.page, ...rest.page].map((a) => a.issueRef)).toEqual(["ENG-0", "ENG-1", "ENG-2"]);
+    expect([...first.page, ...rest.page].map((a) => (a.kind === "draftLinear" ? a.issueRef : null))).toEqual(["ENG-0", "ENG-1", "ENG-2"]);
   });
 });
 
