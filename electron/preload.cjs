@@ -68,6 +68,12 @@ const api = {
     setEnabled: (enabled) => invoke("gs:dayRecorder:setEnabled", { enabled }),
     pause: () => invoke("gs:dayRecorder:pause"),
     resume: () => invoke("gs:dayRecorder:resume"),
+    // The call notice's answers (plan PR 4b): each names the call it answers.
+    noticeGiven: (callId) => invoke("gs:dayRecorder:noticeGiven", { callId }),
+    noticeDeclined: (callId) => invoke("gs:dayRecorder:noticeDeclined", { callId }),
+    extendNotice: (callId) => invoke("gs:dayRecorder:extendNotice", { callId }),
+    dismissCallWarning: () => invoke("gs:dayRecorder:dismissCallWarning"),
+    callPrompt: () => invoke("gs:dayRecorder:callPrompt"),
     onEvent: (cb) => {
       const listener = (_event, data) => cb(data);
       ipcRenderer.on("gs:dayRecorder:event", listener);

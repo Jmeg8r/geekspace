@@ -24,6 +24,15 @@ export function statusCopy(status, { shortcut }) {
 function stateCopy(status, shortcut) {
   switch (status.status) {
     case "recording": {
+      // Spec UI table: Call held. Ahead of the mic's state: the mic is off for the call.
+      if (status.call === "held") {
+        return {
+          tone: "amber",
+          title: "Call — not saved yet",
+          tooltip: "Tell everyone on this call it's being recorded and transcribed. Then choose I told them in Geekspace.",
+          action: "pause",
+        };
+      }
       const mic = status.mic;
       if (mic?.state === "silent") {
         return {

@@ -47,3 +47,15 @@ describe("micErrorText", () => {
     );
   });
 });
+
+// Plan PR 4b, spec UI table: "Call held | amber + Call — not saved yet".
+describe("statusCopy, a call waiting for its notice", () => {
+  it("says the call is not saved yet, in amber, and what to do", () => {
+    expect(statusCopy({ status: "recording", call: "held" }, { shortcut: true })).toEqual({
+      tone: "amber",
+      title: "Call — not saved yet",
+      tooltip: "Tell everyone on this call it's being recorded and transcribed. Then choose I told them in Geekspace.",
+      action: "pause",
+    });
+  });
+});

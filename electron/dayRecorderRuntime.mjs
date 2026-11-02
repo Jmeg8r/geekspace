@@ -21,6 +21,8 @@ import { ensureMediaRoot, purgeExpired } from "./dayRecorderMedia.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
+import { createCallDetector } from "./callDetector.mjs";
+import { createCallNotice, statusWithCall } from "./callNotice.mjs";
 import { createMicController } from "./micController.mjs";
 import { createMicSegmentWriter } from "./micSegments.mjs";
 
@@ -58,6 +60,22 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   };
 
   const service = createDayRecorderService({
+    // Each new helper: what it reports first says which calls are still going on, and it
+    // holds from its first sample if the newest call is unanswered or declined (plan PR 4b).
+    callHeldAtStart: () => {
+      helperGen += 1;
+      helperStopping = false;
+      detector.reset();
+      denylistedAudio = false;
+      audioReady = false;
+      return notice.helperStarting();
+    },
+    // The mic finishes, and its last audio is classified, before its helper stops.
+    beforeHelperStop: async () => {
+      helperStopping = true;
+      syncMic();
+      await mic.stop();
+    },
     platform: process.platform,
     mediaRoot,
     helperPath: helperPath(),
@@ -84,7 +102,16 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     // macOS asks once, then answers from the saved choice; elsewhere there is no recorder.
     askMic: async () => process.platform !== "darwin" || systemPreferences.askForMediaAccess("microphone"),
     createWindow: ({ onGone }) => createCaptureWindow({ page: capturePage, onGone }),
-    createWriter: () => createMicSegmentWriter({ root: mediaRoot, addSegment: rows(api.dayRecorder.addSegment), log }),
+    // Mic chunks wait in memory until gs-capture has classified their time, so a call or a
+    // never-record app seen meanwhile discards them before any reach disk (Codex #4b r4).
+    createWriter: ({ onError }) =>
+      createMicSegmentWriter({
+        root: mediaRoot,
+        addSegment: rows(api.dayRecorder.addSegment),
+        log,
+        waitForClassification: true,
+        onError,
+      }),
     onState: (s) => {
       log(`mic: ${s.state}${s.state === "error" ? ` (${s.kind})` : ""}`);
       service.setMic(s);
@@ -97,7 +124,67 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   ipcMain.on("gs:mic:event", (event, message) => mic.receive(event.sender, message));
   ipcMain.handle("gs:mic:config", (event) => mic.configFor(event.sender) ?? REFUSED);
   // The mic follows the recorder: on while Recording, finished and closed otherwise.
-  service.onStatus((s) => void (s.status === "recording" ? mic.start() : mic.stop()));
+  // Calls and the room-mic pause (plan PR 4b). The mic records while the recorder records,
+  // except while a never-record app uses audio (F2) and while a call waits for its notice or
+  // was declined (F3): it stops, so nothing of the call reaches disk before the notice.
+  // Every helper starts held, and the mic waits, until its first audio-use report says which
+  // apps are using audio (Codex review of PR 4b, round 2).
+  let denylistedAudio = false;
+  let audioReady = false;
+  // Which helper the mic is for, and whether the current one is about to stop (plan PR 4b).
+  let helperGen = 0;
+  let helperStopping = false;
+  let prompt = null;
+  const promptListeners = new Set();
+  const syncMic = () => {
+    const recording = service.status().status === "recording";
+    const run = recording && audioReady && !helperStopping && !denylistedAudio && !notice.micHeld();
+    void (run ? mic.start(helperGen) : mic.stop());
+  };
+  const notice = createCallNotice({
+    helper: service.calls,
+    // The event's id is what the released call segments carry (convex addSegment checks it).
+    logEvent: (event) => client.mutation(api.dayRecorder.logEvent, { at: Date.now(), ...event }),
+    onPrompt: (next) => {
+      prompt = next;
+      log(`call notice: ${next ? next.state : "closed"}`);
+      for (const cb of promptListeners) cb(next);
+    },
+    // Held for a call: the open segment may hold its opening audio, so it is dropped.
+    onMicHeld: (held, byCall) => void (held && byCall ? mic.discard() : syncMic()),
+    log,
+  });
+  const detector = createCallDetector({
+    onAppStarted: (app) => notice.callAppStarted(app),
+    onCallEnded: () => notice.callEnded(),
+    onDenylistedAudio: (active) => {
+      denylistedAudio = active;
+      log(active ? "room mic paused: a never-record app is using audio" : "room mic back: no never-record app is using audio");
+      // Its opening audio may be in what the mic holds: dropped, not finished (Codex #4b r4).
+      void (active ? mic.discard() : syncMic());
+    },
+  });
+  service.onAudioUse((use) => detector.receive(use));
+  service.onCallHeld((app) => notice.callHeld(app));
+  service.onAudioClassified((through) => mic.classified(through, helperGen));
+  // Unchecked time (Codex #4b r6): what the mic holds may include it, so it is dropped, and
+  // the mic starts afresh once the drop is done.
+  service.onAudioGap(() => void mic.discard().then(() => syncMic()));
+  service.onAudioUseReady(() => {
+    audioReady = true;
+    notice.audioReady();
+    syncMic();
+  });
+  // Calls belong to one helper: when it stops recording, its held audio and its calls go with it.
+  let lastStatus = null;
+  service.onStatus((s) => {
+    if (s.status !== "recording" && lastStatus === "recording") {
+      audioReady = false;
+      notice.helperGone();
+    }
+    lastStatus = s.status;
+    syncMic();
+  });
 
   // The error is the helper's own failure message or a gate's copy, never captured content.
   // With it, this log alone times the R3 proofs (part2-runbook.md) until the UI lands in 3e.
@@ -113,7 +200,19 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   );
 
   const controls = createDayRecorderControls(rows(api.dayRecorder.updateSettings));
-  const view = createStatusView(service);
+  // The tray and the windows see "Call — not saved yet" while the question is open.
+  const view = createStatusView({
+    status: () => statusWithCall(service.status(), prompt),
+    onStatus(cb) {
+      const offStatus = service.onStatus((s) => cb(statusWithCall(s, prompt)));
+      const onPrompt = () => cb(statusWithCall(service.status(), prompt));
+      promptListeners.add(onPrompt);
+      return () => {
+        offStatus();
+        promptListeners.delete(onPrompt);
+      };
+    },
+  });
   const indicator = startRecorderIndicator({
     view,
     platform: process.platform,
@@ -129,6 +228,17 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
   return {
     service,
     view,
+    notice: {
+      given: (callId) => notice.given(callId),
+      declined: (callId) => notice.declined(callId),
+      extend: (callId) => notice.extend(callId),
+      dismiss: () => notice.dismiss(),
+    },
+    callPrompt: () => prompt,
+    onCallPrompt(cb) {
+      promptListeners.add(cb);
+      return () => promptListeners.delete(cb);
+    },
     ...controls,
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {

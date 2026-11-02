@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   type ControlHandler,
   DAY_RECORDER_EVENT,
+  type DayRecorderEvent,
   createDayRecorderControls,
+  forwardCallPrompt,
   forwardStatus,
   registerDayRecorderIpc,
 } from "../electron/dayRecorderIpc.mjs";
+import type { CallPrompt } from "../electron/callNotice.mjs";
 import type { RecorderStatus } from "../electron/dayRecorderService.mjs";
 
 // WHAT: the renderer's controls for the Day Recorder (plan PR 3d-1): the gs:dayRecorder:*
@@ -26,20 +29,59 @@ function fakeRecorder(status: RecorderStatus = { status: "off" }) {
     setEnabled: vi.fn(async () => {}),
     pause: vi.fn(async () => {}),
     resume: vi.fn(async () => {}),
+    callPrompt: (): CallPrompt => ({ state: "asking", callId: "call-1", app: "us.zoom.xos", deadline: 1, canExtend: true }),
+    notice: {
+      given: vi.fn(async (_callId: string) => {}),
+      declined: vi.fn(async (_callId: string) => {}),
+      extend: vi.fn((_callId: string) => {}),
+      dismiss: vi.fn(() => {}),
+    },
   };
 }
 
 describe("registerDayRecorderIpc", () => {
-  it("registers exactly the four control channels, all through the guarded handle()", () => {
+  it("registers exactly the control and call notice channels, all through the guarded handle()", () => {
     const h = fakeHandle();
     registerDayRecorderIpc({ handle: h.handle, recorder: () => fakeRecorder() });
     expect([...h.handlers.keys()].sort()).toEqual([
+      "gs:dayRecorder:callPrompt",
+      "gs:dayRecorder:dismissCallWarning",
+      "gs:dayRecorder:extendNotice",
+      "gs:dayRecorder:noticeDeclined",
+      "gs:dayRecorder:noticeGiven",
       "gs:dayRecorder:pause",
       "gs:dayRecorder:resume",
       "gs:dayRecorder:setEnabled",
       "gs:dayRecorder:status",
     ]);
   });
+
+  // Plan PR 4b: the call notice answers. A call id is the only argument, and it is checked.
+  it("passes the call notice answers through with their call id", async () => {
+    const h = fakeHandle();
+    const r = fakeRecorder();
+    registerDayRecorderIpc({ handle: h.handle, recorder: () => r });
+    await h.handlers.get("gs:dayRecorder:noticeGiven")!({ callId: "call-1" });
+    await h.handlers.get("gs:dayRecorder:noticeDeclined")!({ callId: "call-2" });
+    await h.handlers.get("gs:dayRecorder:extendNotice")!({ callId: "call-3" });
+    await h.handlers.get("gs:dayRecorder:dismissCallWarning")!({});
+    expect(r.notice.given).toHaveBeenCalledWith("call-1");
+    expect(r.notice.declined).toHaveBeenCalledWith("call-2");
+    expect(r.notice.extend).toHaveBeenCalledWith("call-3");
+    expect(r.notice.dismiss).toHaveBeenCalledOnce();
+    expect(await h.handlers.get("gs:dayRecorder:callPrompt")!({})).toMatchObject({ state: "asking", callId: "call-1" });
+  });
+
+  it.each([[{}], [{ callId: 3 }], [{ callId: "" }], [{ callId: "x".repeat(65) }]])(
+    "refuses noticeGiven(%j): a call id is a short string",
+    async (args) => {
+      const h = fakeHandle();
+      const r = fakeRecorder();
+      registerDayRecorderIpc({ handle: h.handle, recorder: () => r });
+      await expect(async () => h.handlers.get("gs:dayRecorder:noticeGiven")!(args)).rejects.toThrow(/call id/);
+      expect(r.notice.given).not.toHaveBeenCalled();
+    }
+  );
 
   // The view, not the service: a page that asks mid-pause must not read the passing `off`.
   it("returns the status view's status", async () => {
@@ -129,5 +171,25 @@ describe("forwardStatus", () => {
     expect(closed.webContents.send).not.toHaveBeenCalled();
     stop();
     expect(listeners.size).toBe(0);
+  });
+});
+
+describe("forwardCallPrompt", () => {
+  it("pushes each prompt to every open window, and stops when unsubscribed", () => {
+    let emit: ((p: CallPrompt | null) => void) | null = null;
+    const recorder = {
+      onCallPrompt: (cb: (p: CallPrompt | null) => void) => {
+        emit = cb;
+        return () => void (emit = null);
+      },
+    };
+    const sent: string[] = [];
+    const open = { isDestroyed: () => false, webContents: { send: (ch: string, p: DayRecorderEvent) => void sent.push(`${ch} ${p.type}`) } };
+    const closed = { isDestroyed: () => true, webContents: { send: () => void sent.push("closed") } };
+    const stop = forwardCallPrompt({ recorder, windows: () => [open, closed] });
+    emit!({ state: "timedOut", callId: "c" });
+    expect(sent).toEqual([`${DAY_RECORDER_EVENT} call`]);
+    stop();
+    expect(emit).toBeNull();
   });
 });

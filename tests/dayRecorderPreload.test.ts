@@ -45,9 +45,20 @@ function loadPreload(platform: NodeJS.Platform = "darwin") {
 }
 
 describe("preload dayRecorder namespace", () => {
-  it("exposes only status, setEnabled, pause, resume and onEvent", () => {
+  it("exposes only the recorder controls, the call notice answers and onEvent", () => {
     const { dayRecorder } = loadPreload();
-    expect(Object.keys(dayRecorder).sort()).toEqual(["onEvent", "pause", "resume", "setEnabled", "status"]);
+    expect(Object.keys(dayRecorder).sort()).toEqual([
+      "callPrompt",
+      "dismissCallWarning",
+      "extendNotice",
+      "noticeDeclined",
+      "noticeGiven",
+      "onEvent",
+      "pause",
+      "resume",
+      "setEnabled",
+      "status",
+    ]);
     // expect.any, not toBeInstanceOf: the preload ran in its own vm context, with its own Function.
     for (const fn of Object.values(dayRecorder)) expect(fn).toEqual(expect.any(Function));
   });
@@ -58,11 +69,21 @@ describe("preload dayRecorder namespace", () => {
     await dayRecorder.setEnabled(true);
     await dayRecorder.pause();
     await dayRecorder.resume();
+    await dayRecorder.noticeGiven("call-1");
+    await dayRecorder.noticeDeclined("call-1");
+    await dayRecorder.extendNotice("call-1");
+    await dayRecorder.dismissCallWarning();
+    await dayRecorder.callPrompt();
     expect(ipcRenderer.invoke.mock.calls).toEqual([
       ["gs:dayRecorder:status", undefined],
       ["gs:dayRecorder:setEnabled", { enabled: true }],
       ["gs:dayRecorder:pause", undefined],
       ["gs:dayRecorder:resume", undefined],
+      ["gs:dayRecorder:noticeGiven", { callId: "call-1" }],
+      ["gs:dayRecorder:noticeDeclined", { callId: "call-1" }],
+      ["gs:dayRecorder:extendNotice", { callId: "call-1" }],
+      ["gs:dayRecorder:dismissCallWarning", undefined],
+      ["gs:dayRecorder:callPrompt", undefined],
     ]);
   });
 
@@ -84,6 +105,6 @@ describe("preload dayRecorder namespace", () => {
   });
 
   it("is present off macOS too, where the recorder reports unsupported", () => {
-    expect(Object.keys(loadPreload("win32").dayRecorder)).toHaveLength(5);
+    expect(Object.keys(loadPreload("win32").dayRecorder)).toHaveLength(10);
   });
 });

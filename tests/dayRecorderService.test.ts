@@ -23,7 +23,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-type Call = { op: "start"; opts: StartOptions } | { op: "stop" } | { op: "kill" };
+type Call = { op: "start"; opts: StartOptions } | { op: "stop" } | { op: "kill" } | { op: string };
 
 /** A promise the test resolves by hand, to hold a gate or a stop open. */
 function deferred<T = void>() {
@@ -38,7 +38,9 @@ function fakeSupervisors() {
   let maxAlive = 0;
   let setCurrent: ((s: SupervisorState) => void) | null = null;
   let holdStop: Promise<void> | null = null;
+  let lastOptions: SupervisorOptions | null = null;
   const make = (opts: SupervisorOptions) => {
+    lastOptions = opts;
     let state: SupervisorState = { status: "off" };
     const set = (s: SupervisorState) => {
       state = s;
@@ -63,16 +65,17 @@ function fakeSupervisors() {
       state: () => state,
       running: () => state.status === "recording",
       killSync: () => void calls.push({ op: "kill" }),
-      // The call hold is driven by the call notice (plan PR 4b), not by the service.
-      holdCall: () => {},
-      releaseCall: () => {},
-      discardCall: () => {},
+      holdCall: () => void calls.push({ op: "holdCall" }),
+      releaseCall: (id: string) => void calls.push({ op: `releaseCall ${id}` }),
+      discardCall: () => void calls.push({ op: "discardCall" }),
+      clearCall: () => void calls.push({ op: "clearCall" }),
     };
   };
   return {
     calls,
     make,
     maxAlive: () => maxAlive,
+    options: () => lastOptions,
     holdStops: (p: Promise<void> | null) => (holdStop = p),
     // Like the real one: the failed helper has exited, and its own state says so too.
     fail: (message: string, reason: "exited" | "silent" | "spawnFailed" | "protocol" = "exited") => {
@@ -561,5 +564,98 @@ describe("Day Recorder service, mic state", () => {
     expect(h.service.status()).toEqual({ status: "recording", mic: { state: "ok" } });
     await h.service.apply(PAUSED);
     expect(h.service.status()).toEqual({ status: "paused" });
+  });
+});
+
+// Plan PR 4b: the call notice talks to the live helper through the service, and hears audioUse.
+describe("Day Recorder service, calls", () => {
+  it("passes call commands to the live helper", async () => {
+    const h = harness();
+    await h.service.apply(on());
+    h.service.calls.hold();
+    h.service.calls.release("event-1");
+    h.service.calls.discard();
+    expect(h.sup.calls.map((c) => c.op).slice(-3)).toEqual(["holdCall", "releaseCall event-1", "discardCall"]);
+  });
+
+  it("refuses a call command with no live helper", () => {
+    const h = harness();
+    expect(() => h.service.calls.hold()).toThrow(/not running/);
+  });
+
+  it("forwards audioUse to its listeners", async () => {
+    const h = harness();
+    const seen: (string | null)[] = [];
+    h.service.onAudioUse((m) => void seen.push(m.app));
+    await h.service.apply(on());
+    h.sup.options()!.onAudioUse!({ v: 1, event: "audioUse", app: "us.zoom.xos", denylisted: false, input: true, output: false });
+    expect(seen).toEqual(["us.zoom.xos"]);
+  });
+});
+
+describe("Day Recorder service, the first report", () => {
+  it("clears the startup hold on the live helper, and forwards audioUseReady", async () => {
+    const h = harness();
+    let ready = 0;
+    h.service.onAudioUseReady(() => void (ready += 1));
+    await h.service.apply(on());
+    h.service.calls.clear();
+    expect(h.sup.calls.map((c) => c.op).at(-1)).toBe("clearCall");
+    h.sup.options()!.onAudioUseReady!();
+    expect(ready).toBe(1);
+  });
+});
+
+// Codex 4b r5 P1: the helper was detached before its stop, so its last classification never
+// reached the mic, and a replacement helper's could flush the old helper's mic audio. The mic
+// now finishes first, while the helper that classifies it is still the current one.
+describe("Day Recorder service, before a helper stops", () => {
+  it.each([
+    ["a pause", PAUSED],
+    ["off", OFF],
+    ["a denylist change", on(["com.example.secret"])],
+  ])("[P1] %s runs beforeHelperStop first, with the old helper still current", async (_name, next) => {
+    const order: string[] = [];
+    const seen: number[] = [];
+    let h: ReturnType<typeof harness> | null = null;
+    h = harness({
+      beforeHelperStop: async () => {
+        order.push("beforeHelperStop");
+        // The old helper still classifies while the mic finishes.
+        h?.sup.options()?.onAudioClassified?.(42);
+      },
+    });
+    h.service.onAudioClassified((t) => void seen.push(t));
+    await h.service.apply(on());
+    h.sup.calls.length = 0;
+    await h.service.apply(next);
+    order.push(...h.sup.calls.map((c) => c.op));
+    expect(order.slice(0, 2)).toEqual(["beforeHelperStop", "stop"]);
+    expect(seen).toEqual([42]);
+  });
+
+  it("a failing hook is logged and the helper still stops", async () => {
+    const logs: string[] = [];
+    const h = harness({
+      log: (m) => void logs.push(m),
+      beforeHelperStop: async () => {
+        throw new Error("mic window gone");
+      },
+    });
+    await h.service.apply(on());
+    await h.service.apply(OFF);
+    expect(h.sup.calls.some((c) => c.op === "stop")).toBe(true);
+    expect(logs.join("\n")).toMatch(/mic window gone/);
+  });
+});
+
+describe("Day Recorder service, a poll gap", () => {
+  it("passes the live helper's gaps on", async () => {
+    const seen: number[][] = [];
+    const h = harness();
+    h.service.onAudioGap((from, to) => void seen.push([from, to]));
+    await h.service.apply(on());
+    h.sup.options()?.onAudioGap?.(1, 2);
+    expect(seen).toEqual([[1, 2]]);
   });
 });

@@ -1,5 +1,5 @@
 // WHAT: types for the Day Recorder service, so tests/ can import it.
-import type { CaptureSink, Supervisor, SupervisorOptions } from "./dayRecorder.mjs";
+import type { CaptureSink, HelperMessage, Supervisor, SupervisorOptions } from "./dayRecorder.mjs";
 import type { GateResult } from "./dayRecorderGates.mjs";
 import type { MicState } from "./micController.mjs";
 
@@ -14,7 +14,8 @@ export type RecorderSettings = { enabled: boolean; paused: boolean; denylist: st
 export type RecorderStatus =
   | { status: "off" | "paused" | "starting" | "stopping" | "unsupported" }
   /** `mic` is the mic's own state once it has one (micController.mjs). */
-  | { status: "recording"; mic?: MicState }
+  /** `call: "held"` while a call waits for its notice (plan PR 4b). */
+  | { status: "recording"; mic?: MicState; call?: "held" }
   | { status: "blocked"; error: string }
   /** `retryInMs` is set while an automatic retry is pending. */
   | { status: "notRecording"; error: string; retryInMs?: number };
@@ -36,6 +37,10 @@ export type ServiceOptions = {
   purgeIntervalMs?: number;
   retryDelaysMs?: number[];
   retryResetMs?: number;
+  /** Asked as each helper starts: hold call audio from its first sample (plan PR 4b). */
+  callHeldAtStart?: () => boolean;
+  /** Runs before a helper is stopped, while it is still the current one. */
+  beforeHelperStop?: () => Promise<void>;
 };
 
 export type DayRecorderService = {
@@ -44,6 +49,13 @@ export type DayRecorderService = {
   status: () => RecorderStatus;
   setMic: (mic: MicState) => void;
   onStatus: (cb: (status: RecorderStatus) => void) => () => void;
+  onAudioUse: (cb: (message: Extract<HelperMessage, { event: "audioUse" }>) => void) => () => void;
+  /** The call hold on the live helper; each throws when no helper is running. */
+  calls: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void; clear: () => void };
+  onAudioUseReady: (cb: () => void) => () => void;
+  onCallHeld: (cb: (app: string) => void) => () => void;
+  onAudioClassified: (cb: (through: number) => void) => () => void;
+  onAudioGap: (cb: (from: number, to: number) => void) => () => void;
   running: () => boolean;
   killSync: () => void;
 };

@@ -5,6 +5,7 @@ export const PROTOCOL_VERSION: 1;
 export const SILENT_LIMIT_MS: number;
 export const STOP_GRACE_MS: number;
 export const DRAIN_MS: number;
+export const AUDIO_USE_READY_LIMIT_MS: number;
 
 /** The Convex client's logger shape. */
 export type ClientLogger = {
@@ -25,9 +26,13 @@ export type HelperMessage =
   | { v: 1; event: "heartbeat"; t: number }
   | { v: 1; event: "shot"; day: string; path: string; takenAt: number; appBundleId: string | null; ocrText: string }
   | { v: 1; event: "segment"; kind: "system" | "call"; day: string; path: string; start: number; end: number }
-  | { v: 1; event: "callHeld"; t: number }
+  | { v: 1; event: "callHeld"; t: number; app?: string }
   | { v: 1; event: "callReleased"; segments: number; heldSec: number; overflowed: boolean }
   | { v: 1; event: "callDiscarded"; heldSec: number; reason: "command" | "stop" }
+  | { v: 1; event: "callCleared"; segments: number; heldSec: number }
+  | { v: 1; event: "audioUseReady"; t: number; apps: number }
+  | { v: 1; event: "audioClassified"; through: number }
+  | { v: 1; event: "audioGap"; from: number; to: number }
   | { v: 1; event: "audioUse"; app: string | null; denylisted: boolean; input: boolean; output: boolean }
   | { v: 1; event: "stopped"; reason: string }
   | { v: 1; event: "tapRebuilt" | "tailDropped" | "sampleRateChanged" | "sessionUnverified" };
@@ -64,14 +69,29 @@ export type SupervisorOptions = {
   sink: CaptureSink;
   log: (message: string) => void;
   onState: (state: SupervisorState) => void;
+  /** Each audioUse line, as parsed (plan PR 4b). */
+  onAudioUse?: (message: Extract<HelperMessage, { event: "audioUse" }>) => void;
+  /** The helper's first audio-use report is in (plan PR 4b). */
+  onAudioUseReady?: () => void;
+  /** The helper held a call app's audio on its own: the app it saw start. */
+  onCallHeld?: (app: string) => void;
+  /** How far the helper's audio-use polls have classified. */
+  onAudioClassified?: (through: number) => void;
+  /** An audio-use poll came late: [from, to) was never checked, and its audio is dropped. */
+  onAudioGap?: (from: number, to: number) => void;
+  /** The apps the helper treats as calls; callDetector.mjs's lists by default. */
+  calls?: { apps: string[]; browsers: string[] };
   env?: NodeJS.ProcessEnv;
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   silentLimitMs?: number;
   stopGraceMs?: number;
   drainMs?: number;
+  /** How long after ready the first audio-use report may take. */
+  audioUseReadyLimitMs?: number;
 };
 
-export type StartOptions = { denylist: string[]; shotSec: number; segmentSec: number };
+/** `startHeld`: the helper holds call audio from its first sample (plan PR 4b). */
+export type StartOptions = { denylist: string[]; shotSec: number; segmentSec: number; startHeld?: boolean };
 
 export type Supervisor = {
   start: (options: StartOptions) => void;
@@ -80,6 +100,7 @@ export type Supervisor = {
   holdCall: () => void;
   releaseCall: (noticeEventId: string) => void;
   discardCall: () => void;
+  clearCall: () => void;
   state: () => SupervisorState;
   running: () => boolean;
   killSync: () => void;

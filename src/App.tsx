@@ -18,6 +18,7 @@ import { pendingAudio, saveRecordingBeforeQuit } from "./lib/meetingPipeline";
 import { Sidebar } from "./components/sidebar/Sidebar";
 import { HomeView } from "./components/home/HomeView";
 import { RecorderWidget } from "./components/meetings/RecorderWidget";
+import { CallPrompt } from "./components/dayRecorder/CallPrompt";
 import { RowPeek } from "./components/database/RowPeek";
 import { ViewLoading } from "./components/common/ViewLoading";
 import { ErrorBoundary } from "./components/common/ErrorBoundary";
@@ -221,6 +222,7 @@ export default function App() {
           </Suspense>
           <RowPeek />
           <RecorderWidget />
+          <CallPrompt />
           <Suspense fallback={null}>
             {commandOpen && <CommandPalette />}
             {settingsOpen && <SettingsModal />}
