@@ -318,6 +318,25 @@ describe("assistant drafts, the send", () => {
     expect((await t.query(api.assistant.draft, { draftId: id }))?.status).toBe("pending");
   });
 
+  it("a claim moves a waiting draft to approved and fixes its comment id for every later claim", async () => {
+    const { t, id } = await aDraft();
+    const first = await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000001" });
+    expect(first).toEqual({ issueRef: "ENG-42", body: "SYNTHETIC", commentId: "00000000-0000-4000-8000-000000000001", deliveryUnknown: false });
+    await expect(t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" })).rejects.toThrow(/approved/);
+    await t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: true });
+    const again = await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" });
+    expect(again).toMatchObject({ commentId: "00000000-0000-4000-8000-000000000001", deliveryUnknown: true });
+    // Once in doubt, a later failure that is certain does not clear it: only sending does.
+    await t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: false });
+    expect(await t.query(api.assistant.draft, { draftId: id })).toMatchObject({ status: "pending", deliveryUnknown: true });
+  });
+
+  it("a claim refuses a comment id that is not a UUID, and a release refuses a draft that is not approved", async () => {
+    const { t, id } = await aDraft();
+    await expect(t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "not-a-uuid" })).rejects.toThrow(/comment id/);
+    await expect(t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: false })).rejects.toThrow(/pending/);
+  });
+
   it("reads one draft by id", async () => {
     const { t, id } = await aDraft();
     expect(await t.query(api.assistant.draft, { draftId: id })).toMatchObject({ issueRef: "ENG-42", body: "SYNTHETIC" });
