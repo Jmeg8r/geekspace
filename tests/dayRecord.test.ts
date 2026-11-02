@@ -128,11 +128,23 @@ describe("assistant.reviewQueue", () => {
       await ctx.db.insert("externalDrafts", { target: "linear", issueRef: "ENG-2", body: "SYNTHETIC two", status: "pending", deliveryUnknown: true, createdAt: 1, updatedAt: 1 });
       await ctx.db.insert("externalDrafts", { target: "linear", issueRef: "ENG-3", body: "SYNTHETIC sent", status: "sent", createdAt: 3, updatedAt: 3 });
     });
-    const queue = await t.query(api.assistant.reviewQueue, {});
+    const queue = (await t.query(api.assistant.reviewQueue, { status: "pending", paginationOpts: { numItems: 10, cursor: null } })).page;
     expect(queue.map((d) => [d.issueRef, d.deliveryUnknown])).toEqual([
-      ["ENG-2", true],
       ["ENG-1", false],
+      ["ENG-2", true],
     ]);
+  });
+
+  // Codex 6c r3 P1: a backlog past one page is still reachable.
+  it("pages the drafts to the end", async () => {
+    const t = await seeded();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 3; i++) await ctx.db.insert("externalDrafts", { target: "linear", issueRef: `ENG-${i}`, body: "SYNTHETIC", status: "pending", createdAt: i, updatedAt: i });
+    });
+    const first = await t.query(api.assistant.reviewQueue, { status: "pending", paginationOpts: { numItems: 2, cursor: null } });
+    expect(first.isDone).toBe(false);
+    const rest = await t.query(api.assistant.reviewQueue, { status: "pending", paginationOpts: { numItems: 2, cursor: first.continueCursor } });
+    expect([...first.page, ...rest.page].map((d) => d.issueRef)).toEqual(["ENG-0", "ENG-1", "ENG-2"]);
   });
 
   // Codex 6c r2 P1: a send cut off mid-way stays in view, to be sent again once its claim lapses.
@@ -141,7 +153,7 @@ describe("assistant.reviewQueue", () => {
     await t.run((ctx) =>
       ctx.db.insert("externalDrafts", { target: "linear", issueRef: "ENG-7", body: "SYNTHETIC", status: "approved", createdAt: 1, updatedAt: 1_000 })
     );
-    const queue = await t.query(api.assistant.reviewQueue, {});
+    const queue = (await t.query(api.assistant.reviewQueue, { status: "approved", paginationOpts: { numItems: 10, cursor: null } })).page;
     expect(queue).toEqual([expect.objectContaining({ issueRef: "ENG-7", status: "approved", retryAfter: 1_000 + 5 * MIN })]);
   });
 });

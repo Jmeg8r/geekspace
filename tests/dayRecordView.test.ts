@@ -4,11 +4,13 @@ import {
   dayWindow,
   discardLabel,
   groupActions,
+  sourceArgs,
   sourceLink,
   timeline,
   undoLabel,
   type DayAction,
   type DayRecordRows,
+  type Source,
 } from "../src/lib/dayRecord";
 
 // WHAT: the Day Record view's logic (plan PR 6c, spec R12, R13, Accessibility). WHY tested:
@@ -89,3 +91,14 @@ describe("timeline and sourceLink", () => {
     expect(sourceLink({}, record)).toBeNull();
   });
 });
+
+// Codex 6c r3 P1: assistant.source takes the two ids and nothing else; a summary item or an
+// action carries more, which its validator refuses.
+describe("sourceArgs", () => {
+  it("takes only the source's id from a summary item or an action", () => {
+    expect(sourceArgs({ text: "SYNTHETIC", sourceSegmentId: "seg1" } as Source)).toEqual({ sourceSegmentId: "seg1" });
+    expect(sourceArgs({ ...draft } as Source)).toEqual({ sourceScreenshotId: "shot1" });
+    expect(sourceArgs({})).toBeNull();
+  });
+});
+
