@@ -536,3 +536,20 @@ describe("registerAssistantIpc", () => {
     expect(store.get).not.toHaveBeenCalled();
   });
 });
+
+// Codex 6a r6 P2: spec R8 logs every call's tokens, and cached input is input too.
+describe("the call's cache tokens", () => {
+  it("are settled alongside the uncached input and output", async () => {
+    const h = harness({
+      reply: reply([], { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 500, cache_read_input_tokens: 250 }),
+    });
+    await h.assistant.runBatch();
+    expect(h.settled[0]).toMatchObject({ inputTokens: 100, outputTokens: 20, cacheWriteTokens: 500, cacheReadTokens: 250 });
+  });
+
+  it("are settled as zero when the reply reports none", async () => {
+    const h = harness({ reply: reply([], { input_tokens: 100, output_tokens: 20 }) });
+    await h.assistant.runBatch();
+    expect(h.settled[0]).toMatchObject({ cacheWriteTokens: 0, cacheReadTokens: 0 });
+  });
+});
