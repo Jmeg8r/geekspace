@@ -93,7 +93,7 @@ function harness(
     saveFails?: boolean;
   } = {}
 ) {
-  const summaries: { day: string; items: object[] }[] = [];
+  const summaries: { day: string; items: object[]; omitted?: object }[] = [];
   const requests: AssistantRequest[] = [];
   const calls: string[] = [];
   const unreadArgs: { transcriptAfter?: object; screenshotAfter?: object }[] = [];
@@ -157,7 +157,7 @@ function harness(
         calls.push(`page ${kind} ${at}`);
         return { rows: rows.slice(at, at + size), done: at + size >= rows.length, cursor: String(at + size) };
       },
-      saveSummary: async (args: { day: string; items: object[] }) => {
+      saveSummary: async (args: { day: string; items: object[]; omitted?: object }) => {
         if (opts.saveFails) throw new Error("backend down");
         summaries.push(args);
       },
@@ -628,7 +628,7 @@ describe("registerAssistantIpc", () => {
     });
     const ask = handlers.get("gs:assistant:summarize")!;
     const from = Date.UTC(2026, 10, 2, 5);
-    await expect(Promise.resolve(ask({ day: "2026-11-02", from, to: from + 86_400_000 }))).resolves.toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0 });
+    await expect(Promise.resolve(ask({ day: "2026-11-02", from, to: from + 86_400_000 }))).resolves.toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0, truncated: 0 });
     expect(summarize).toHaveBeenCalledWith("2026-11-02", from, from + 86_400_000);
     for (const bad of [
       { day: "Nov 2", from, to: from + 1 },
@@ -795,7 +795,7 @@ describe("summarize", () => {
         { text: "Worked on the Q4 plan", source: "s1" },
       ]),
     });
-    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0 });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0, truncated: 0 });
     const sent = h.requests[0];
     expect(sent.system[0].text).toMatch(/summary/i);
     expect(sent.messages[0].content).toEqual(expect.stringContaining("SYNTHETIC: I'll send the deck by Thursday"));
@@ -819,7 +819,7 @@ describe("summarize", () => {
     const h = harness({
       reply: summaryReply([{ text: "Something", source: "t9" }, { text: "A day of steady work" }, { text: "Worked on the Q4 plan", source: "s1" }]),
     });
-    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 2, leftOut: 0 });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 2, leftOut: 0, truncated: 0 });
     expect(h.summaries[0].items).toEqual([{ text: "Worked on the Q4 plan", sourceScreenshotId: "shot1" }]);
   });
 
@@ -863,7 +863,7 @@ describe("summarize", () => {
       pageSize: 100,
       reply: summaryReply([{ text: "The last thing", source: "t250" }]),
     });
-    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 0, leftOut: 0 });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 0, leftOut: 0, truncated: 0 });
     expect(h.calls.filter((c) => c.startsWith("page transcripts"))).toEqual(["page transcripts 0", "page transcripts 100", "page transcripts 200"]);
     expect(h.requests[0].messages[0].content).toEqual(expect.stringContaining("SYNTHETIC line 249"));
     expect(h.summaries[0].items).toEqual([{ text: "The last thing", sourceSegmentId: "seg249" }]);
@@ -876,6 +876,25 @@ describe("summarize", () => {
     const result = await tight.assistant.summarize("2026-11-02", FROM, TO);
     expect(result).toMatchObject({ ok: true, items: 1 });
     expect(result.ok && result.leftOut).toBeGreaterThan(0);
+  });
+
+  // Codex 6c r2 P1: a long row goes whole when the cap allows; one cut short is counted.
+  it("sends a long row whole when it fits, counts one it had to cut, and saves what it left out", async () => {
+    const long = "SYNTHETIC ".repeat(800) + "FINAL DECISION: ship Friday";
+    const day = {
+      transcripts: [{ _id: "tr1", segmentId: "seg1", start: FROM, end: FROM + 60_000, text: long }],
+      screenshots: [],
+      more: { transcripts: false, screenshots: false },
+    };
+    const roomy = harness({ day, reply: summaryReply([{ text: "Decided to ship Friday", source: "t1" }]) });
+    expect(await roomy.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 0, leftOut: 0, truncated: 0 });
+    expect(roomy.requests[0].messages[0].content).toEqual(expect.stringContaining("FINAL DECISION: ship Friday"));
+    expect(roomy.summaries[0].omitted).toEqual({ unsourced: 0, leftOut: 0, truncated: 0 });
+
+    const tight = harness({ day, cap: { capUsd: 0.05, spentUsd: 0, reached: false }, reply: summaryReply([{ text: "Something", source: "t1" }]) });
+    const result = await tight.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result).toMatchObject({ ok: true, truncated: 1 });
+    expect(tight.summaries[0].omitted).toMatchObject({ truncated: 1 });
   });
 
   it("sends nothing for a day with nothing captured, without a key, or with the cap used up", async () => {

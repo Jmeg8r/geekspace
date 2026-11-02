@@ -78,7 +78,8 @@ describe("assistant.dayActions", () => {
         { type: "draftLinear", issueRef: "ENG-42", body: "SYNTHETIC: the deck went out" },
       ],
     });
-    const actions = await t.query(api.assistant.dayActions, { from: Date.now() - HOUR, to: Date.now() + HOUR });
+    const page = await t.query(api.assistant.dayActions, { from: Date.now() - HOUR, to: Date.now() + HOUR, paginationOpts: { numItems: 50, cursor: null } });
+    const actions = page.page;
     expect(actions.map((a) => a.kind).sort()).toEqual(["createBlock", "createTask", "draftLinear"]);
     expect(actions.find((a) => a.kind === "createTask")).toMatchObject({ title: "Send the deck" });
     expect(actions.find((a) => a.kind === "createBlock")).toMatchObject({ start: blockStart, end: blockStart + HOUR });
@@ -87,6 +88,35 @@ describe("assistant.dayActions", () => {
     const group = (kind: string) => actions.find((a) => a.kind === kind)!.groupId;
     expect(group("createTask")).toBe(group("createBlock"));
     expect(group("draftLinear")).not.toBe(group("createTask"));
+  });
+});
+
+// Codex 6c r2 P1: a day with more than one page of actions still reaches every one.
+describe("assistant.dayActions paging", () => {
+  it("pages the day's actions to the end", async () => {
+    const t = await seeded();
+    for (let i = 0; i < 3; i++) await t.mutation(api.assistant.applyActions, { actions: [{ type: "draftLinear", issueRef: `ENG-${i}`, body: "SYNTHETIC" }] });
+    const window = { from: Date.now() - HOUR, to: Date.now() + HOUR };
+    const first = await t.query(api.assistant.dayActions, { ...window, paginationOpts: { numItems: 2, cursor: null } });
+    expect(first.page).toHaveLength(2);
+    expect(first.isDone).toBe(false);
+    const rest = await t.query(api.assistant.dayActions, { ...window, paginationOpts: { numItems: 2, cursor: first.continueCursor } });
+    expect([...first.page, ...rest.page].map((a) => a.issueRef)).toEqual(["ENG-0", "ENG-1", "ENG-2"]);
+  });
+});
+
+// Codex 6c r2 P1: a summary's source is found by its id, wherever it is in the day.
+describe("assistant.source", () => {
+  it("finds what a segment said, or what a screen showed, and nothing for one that is gone", async () => {
+    const t = await seeded();
+    const start = Date.UTC(2026, 10, 2, 15);
+    const seg = await transcript(t, start, "SYNTHETIC I'll send the deck");
+    const shot = await screen(t, start + HOUR, "SYNTHETIC Q4 plan");
+    expect(await t.query(api.assistant.source, { sourceSegmentId: seg })).toEqual({ kind: "said", at: start, text: "SYNTHETIC I'll send the deck" });
+    expect(await t.query(api.assistant.source, { sourceScreenshotId: shot })).toEqual({ kind: "screen", at: start + HOUR, text: "SYNTHETIC Q4 plan", appBundleId: "com.example.editor" });
+    await t.run((ctx) => ctx.db.delete(shot));
+    expect(await t.query(api.assistant.source, { sourceScreenshotId: shot })).toBeNull();
+    await expect(t.query(api.assistant.source, {})).rejects.toThrow(/source/);
   });
 });
 
@@ -104,6 +134,16 @@ describe("assistant.reviewQueue", () => {
       ["ENG-1", false],
     ]);
   });
+
+  // Codex 6c r2 P1: a send cut off mid-way stays in view, to be sent again once its claim lapses.
+  it("lists a draft whose send was interrupted, with when it can be sent again", async () => {
+    const t = await seeded();
+    await t.run((ctx) =>
+      ctx.db.insert("externalDrafts", { target: "linear", issueRef: "ENG-7", body: "SYNTHETIC", status: "approved", createdAt: 1, updatedAt: 1_000 })
+    );
+    const queue = await t.query(api.assistant.reviewQueue, {});
+    expect(queue).toEqual([expect.objectContaining({ issueRef: "ENG-7", status: "approved", retryAfter: 1_000 + 5 * MIN })]);
+  });
 });
 
 describe("assistant day summaries", () => {
@@ -112,8 +152,19 @@ describe("assistant day summaries", () => {
     const seg = await transcript(t, Date.UTC(2026, 10, 2, 15), "SYNTHETIC");
     expect(await t.query(api.assistant.daySummary, { day: DAY })).toBeNull();
     await t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "SYNTHETIC first pass", sourceSegmentId: seg }] });
-    await t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "SYNTHETIC agreed to send the deck", sourceSegmentId: seg }] });
-    expect(await t.query(api.assistant.daySummary, { day: DAY })).toMatchObject({ items: [{ text: "SYNTHETIC agreed to send the deck", sourceSegmentId: seg }] });
+    await t.mutation(api.assistant.saveSummary, {
+      day: DAY,
+      items: [{ text: "SYNTHETIC agreed to send the deck", sourceSegmentId: seg }],
+      omitted: { unsourced: 1, leftOut: 2, truncated: 3 },
+    });
+    // Codex 6c r2 P2: what a summary left out is kept with it, so its note survives a reload.
+    expect(await t.query(api.assistant.daySummary, { day: DAY })).toMatchObject({
+      items: [{ text: "SYNTHETIC agreed to send the deck", sourceSegmentId: seg }],
+      omitted: { unsourced: 1, leftOut: 2, truncated: 3 },
+    });
+    await expect(
+      t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "x", sourceSegmentId: seg }], omitted: { unsourced: -1, leftOut: 0, truncated: 0 } })
+    ).rejects.toThrow();
   });
 
   it("refuses a bad day, an empty or overlong item, too many items, or an item without exactly one source", async () => {
