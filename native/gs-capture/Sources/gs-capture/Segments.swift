@@ -27,6 +27,10 @@ final class PCMHold: TapSink, @unchecked Sendable {
     private let onDrop: () -> Void
     private var pending: [PCMChunk] = []
     private var total = 0
+    /// Chunks a callback has stamped but not added yet, by token: their start. The frontier
+    /// must not pass them (Codex review of PR 4a, round 2).
+    private var inflight: [Int: Double] = [:]
+    private var nextToken = 0
 
     /// `onDrop` runs after a drop, so the writer can close the segment around the gap.
     init(holdMs: Double, sampleRate: Double, deliver: @escaping (PCMChunk) -> Void, onDrop: @escaping () -> Void) {
@@ -45,17 +49,40 @@ final class PCMHold: TapSink, @unchecked Sendable {
         guard let data = buffer.mData else { return }
         let floats = UnsafeBufferPointer(start: data.assumingMemoryBound(to: Float.self),
                                          count: Int(buffer.mDataByteSize) / MemoryLayout<Float>.size)
-        ingest(interleaved: floats, channels: tapChannels, at: nowMs())
+        let frames = floats.count / max(1, tapChannels)
+        // Stamped and registered under the lock, so the frontier sees it from that instant.
+        let (token, t) = lock.withLock { () -> (Int, Double) in
+            let t = nowMs()
+            return (register(endMs: t, frames: frames), t)
+        }
+        endIngest(token, PCMChunk(endMs: t, samples: PCMHold.downmix(floats, channels: tapChannels)))
     }
 
     /// The testable half of `ingest`: downmix to mono and hold.
     func ingest(interleaved: UnsafeBufferPointer<Float>, channels: Int, at t: Double) {
-        let mono = PCMHold.downmix(interleaved, channels: channels)
-        guard !mono.isEmpty else { return }
+        let token = beginIngest(at: t, frames: interleaved.count / max(1, channels))
+        endIngest(token, PCMChunk(endMs: t, samples: PCMHold.downmix(interleaved, channels: channels)))
+    }
+
+    /// A callback has stamped a chunk ending at `t`; until `endIngest`, the frontier waits for it.
+    func beginIngest(at t: Double, frames: Int) -> Int {
+        lock.withLock { register(endMs: t, frames: frames) }
+    }
+
+    func endIngest(_ token: Int, _ chunk: PCMChunk) {
         lock.withLock {
-            pending.append(PCMChunk(endMs: t, samples: mono))
-            total += mono.count
+            inflight.removeValue(forKey: token)
+            guard !chunk.samples.isEmpty else { return }
+            pending.append(chunk)
+            total += chunk.samples.count
         }
+    }
+
+    /// Under `lock`.
+    private func register(endMs: Double, frames: Int) -> Int {
+        nextToken += 1
+        inflight[nextToken] = endMs - Double(frames) / sampleRate * 1000
+        return nextToken
     }
 
     /// Mono is what transcription uses, and it halves what is held and written.
@@ -72,6 +99,19 @@ final class PCMHold: TapSink, @unchecked Sendable {
     }
 
     func sampleCount() -> Int { lock.withLock { total } }
+
+    /// Everything captured before this has been delivered: the oldest held chunk's start, or,
+    /// with nothing held, the newest moment a delivered chunk could have ended.
+    func frontier(limit: Double) -> Double {
+        lock.withLock {
+            var frontier = limit - holdMs
+            if let oldest = pending.first {
+                frontier = min(frontier, oldest.endMs - Double(oldest.samples.count) / sampleRate * 1000)
+            }
+            if let earliest = inflight.values.min() { frontier = min(frontier, earliest) }
+            return frontier
+        }
+    }
 
     var rate: Double { lock.withLock { sampleRate } }
 
@@ -136,13 +176,20 @@ final class SegmentWriter {
     private let root: String
     private let segmentSec: Double
     private(set) var sampleRate: Double
+    /// File prefix and protocol kind: `sys`/`system` for the tap, `call`/`call` for released
+    /// call audio (CallHold.swift).
+    private let prefix: String
+    private let kind: String
     private let report: (String, [String: Any]) -> Void
     private var open: Open?
 
-    init(root: String, segmentSec: Double, sampleRate: Double, report: @escaping (String, [String: Any]) -> Void) {
+    init(root: String, segmentSec: Double, sampleRate: Double, prefix: String = "sys", kind: String = "system",
+         report: @escaping (String, [String: Any]) -> Void) {
         self.root = root
         self.segmentSec = segmentSec
         self.sampleRate = sampleRate
+        self.prefix = prefix
+        self.kind = kind
         self.report = report
     }
 
@@ -169,7 +216,7 @@ final class SegmentWriter {
 
     func append(_ chunk: PCMChunk) {
         let startMs = chunk.endMs - Double(chunk.samples.count) / sampleRate * 1000
-        let (chunkDay, _) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: "sys", ext: "m4a")
+        let (chunkDay, _) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: prefix, ext: "m4a")
         if let current = open,
            SegmentWriter.shouldRoll(frames: current.frames, sampleRate: sampleRate, segmentSec: segmentSec,
                                     openDay: current.day, chunkDay: chunkDay)
@@ -212,12 +259,12 @@ final class SegmentWriter {
         } catch {
             fail("cannot finalize segment \(path): \(error.localizedDescription)")
         }
-        report("segment", ["kind": "system", "day": day, "path": path, "start": round3(startMs),
+        report("segment", ["kind": kind, "day": day, "path": path, "start": round3(startMs),
                            "end": round3(startMs + Double(frames) / sampleRate * 1000), "peak": Double(peak)])
     }
 
     private func begin(at startMs: Double) -> Open {
-        let (day, file) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: "sys", ext: "m4a")
+        let (day, file) = Run.dayAndFile(Date(timeIntervalSince1970: startMs / 1000), prefix: prefix, ext: "m4a")
         let dir = URL(fileURLWithPath: "\(root)/\(day)")
         // Hidden while partial: never announced, and never matches a stored path's shape
         // (convex/lib/dayRecorder.ts FILE_RE refuses a leading dot).
@@ -249,10 +296,26 @@ final class SystemAudioRecorder {
     private var writer: SegmentWriter?
     private var hold: PCMHold?
     private var watcher: AudioUseWatcher?
+    private let root: String
+    private let segmentSec: Double
+    private let maxCallSec: Double
+    private let report: (String, [String: Any]) -> Void
+    /// Decides, by capture time, whether released audio is system audio or a call's.
+    private var router: CallRouter!
 
     /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped`,
     /// `sessionUnverified`, `sampleRateChanged` and `audioUse`.
-    init(root: String, denylist: [String], segmentSec: Double, report: @escaping (String, [String: Any]) -> Void) {
+    init(root: String, denylist: [String], segmentSec: Double, maxCallSec: Double = CallHold.defaultMaxSec,
+         report: @escaping (String, [String: Any]) -> Void) {
+        self.root = root
+        self.segmentSec = segmentSec
+        self.maxCallSec = maxCallSec
+        self.report = report
+        router = CallRouter(maxSec: maxCallSec,
+                            append: { [unowned self] in self.writer?.append($0) },
+                            closeSystem: { [unowned self] in self.writer?.close() },
+                            flush: { [unowned self] runs in CallHold.flush(runs, root: self.root, segmentSec: self.segmentSec, report: self.report) },
+                            report: report)
         queue.sync {
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
             // silenced only one of two live instances (spike Q2). Bundle-ID taps need macOS 26.
@@ -273,8 +336,10 @@ final class SystemAudioRecorder {
                     return hold
                 }
                 let writer = SegmentWriter(root: root, segmentSec: segmentSec, sampleRate: format.mSampleRate, report: report)
+                // Released audio is routed by when it was captured (CallRouter).
                 let hold = PCMHold(holdMs: SystemAudioRecorder.holdMs, sampleRate: format.mSampleRate,
-                                   deliver: writer.append, onDrop: writer.close)
+                                   deliver: { [unowned self] chunk in self.router.deliver(chunk, sourceRate: writer.sampleRate) },
+                                   onDrop: writer.close)
                 self.writer = writer
                 self.hold = hold
                 return hold
@@ -290,7 +355,9 @@ final class SystemAudioRecorder {
             timer.setEventHandler {
                 // tick returns the release limit, read before it checks arrivals and capped at
                 // the last completed classification pass (Codex review of PR 3b-2, rounds 4-5).
-                runner.sink.release(now: runner.tick(poll: true))
+                let limit = runner.tick(poll: true)
+                runner.sink.release(now: limit)
+                if let hold = self.hold { self.router.settle(frontier: hold.frontier(limit: limit)) }
                 watcher.tick(known: runner.knownDenied())
             }
             timer.resume()
@@ -305,9 +372,36 @@ final class SystemAudioRecorder {
             guard let runner, let timer else { return }
             timer.cancel()
             runner.finish(tailCheck: true)
+            // Everything is delivered: a call still waiting for its notice is dropped.
+            router.stop()
             writer?.close()
             self.timer = nil
             self.runner = nil
+        }
+    }
+
+    /// A call started: audio captured from now on is the call's, held in memory.
+    func holdCall() {
+        queue.sync {
+            guard router.canHold else { fail("call hold: a call is already held") }
+            router.hold(at: nowMs())
+        }
+    }
+
+    /// The notice was given: the call's audio, up to now, is written as `call` segments once
+    /// it has all been delivered; what comes after is system audio again.
+    func releaseCall() {
+        queue.sync {
+            guard router.canRelease else { fail("call release: no call is held") }
+            router.release(at: nowMs())
+        }
+    }
+
+    /// Declined or timed out: the call's audio, up to now, is dropped unwritten.
+    func discardCall() {
+        queue.sync {
+            guard router.canDiscard else { fail("call discard: no call is held") }
+            router.discard(at: nowMs())
         }
     }
 }

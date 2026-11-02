@@ -2,6 +2,8 @@
 // child process on every platform (CI is ubuntu and cannot build the Swift helper).
 // It speaks protocol v1 (docs/changes/2026-10-18-day-recorder/protocol.md) and acts out the
 // scenario named in FAKE_SCENARIO. Every captured value in here is invented.
+import fs from "node:fs";
+
 const scenario = process.env.FAKE_SCENARIO ?? "healthy";
 const args = process.argv.slice(2);
 
@@ -26,6 +28,11 @@ function ready() {
     segmentSec: Number(arg("--segment-sec") ?? 300),
     shotSec: Number(arg("--shot-sec") ?? 30),
   });
+}
+
+function callSegment(i) {
+  const start = 1_760_970_000_000 + i * 300_000;
+  return { day: "2026-10-20", end: start + 300_000, kind: "call", path: `2026-10-20/call-1020${i}0-000-${start}.m4a`, peak: 0.2, start };
 }
 
 function stopOnSignal() {
@@ -135,6 +142,35 @@ switch (scenario) {
     process.on("SIGTERM", () => {});
     ready();
     beat = setInterval(() => line("heartbeat", { t: Date.now() }), 50);
+    break;
+  case "call":
+    // protocol.md "Commands": the call hold, driven over stdin. Released audio comes back as
+    // two `call` segments; FAKE_STRAY_CALL announces one with no release, a helper bug.
+    stopOnSignal();
+    ready();
+    beat = setInterval(() => line("heartbeat", { t: Date.now() }), 50);
+    if (process.env.FAKE_STRAY_CALL) setTimeout(() => line("segment", callSegment(0)), 30);
+    // A command channel that breaks while capture goes on: fd 0 itself is closed, so the
+    // supervisor's next write fails with EPIPE (destroying the stream would not close it).
+    if (process.env.FAKE_CLOSE_STDIN) {
+      setTimeout(() => fs.closeSync(0), 30);
+      break;
+    }
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (text) => {
+      for (const command of text.split("\n").filter(Boolean)) {
+        if (command === "call hold") line("callHeld", { t: Date.now() });
+        else if (command === "call release") {
+          line("segment", callSegment(0));
+          line("segment", callSegment(1));
+          line("callReleased", { heldSec: 600, overflowed: false, segments: 2 });
+        } else if (command === "call discard") line("callDiscarded", { heldSec: 42, reason: "command" });
+        else {
+          process.stderr.write(`gs-capture: unknown command ${command}\n`);
+          process.exit(4);
+        }
+      }
+    });
     break;
   default:
     process.stderr.write(`gs-capture: unknown FAKE_SCENARIO ${scenario}\n`);
