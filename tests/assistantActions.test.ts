@@ -339,6 +339,17 @@ describe("assistant drafts, the send", () => {
     await expect(t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: false })).rejects.toThrow(/pending/);
   });
 
+  it("a claim left by a crash is taken again after its lease, in doubt, with the same comment id", async () => {
+    const { t, id } = await aDraft();
+    await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000001" });
+    // Still within its lease: a send may be under way, so a second claim is refused.
+    await expect(t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" })).rejects.toThrow(/approved/);
+    // The app died mid-send: the claim is older than the lease.
+    await t.run((ctx) => ctx.db.patch(id, { updatedAt: Date.now() - 6 * 60_000 }));
+    const again = await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" });
+    expect(again).toMatchObject({ commentId: "00000000-0000-4000-8000-000000000001", deliveryUnknown: true });
+  });
+
   it("reads one draft by id", async () => {
     const { t, id } = await aDraft();
     expect(await t.query(api.assistant.draft, { draftId: id })).toMatchObject({ issueRef: "ENG-42", body: "SYNTHETIC" });

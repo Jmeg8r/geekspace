@@ -8,8 +8,14 @@ import {
   createDayAssistant,
   type AssistantInput,
   type AssistantRequest,
+  screenshotJpeg,
+  sweepImageWork,
 } from "../electron/dayAssistant.mjs";
 import { createKeyStore, registerAssistantIpc } from "../electron/assistantKey.mjs";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 // WHAT: the Day Recorder's assistant (plan PR 6a, spec R8, R10, F4). WHY tested: it is the only
 // code that sends captured text to a cloud model and turns the reply into tasks and blocks, so
@@ -669,5 +675,37 @@ describe("sendImage", () => {
     const h = harness();
     await h.assistant.runBatch();
     expect(h.requests[0].messages[0].content).toEqual(expect.any(String));
+  });
+});
+
+// Codex 6b r2 P1: the JPEG made for an image request never outlives it, even across a crash.
+describe("the image work folder", () => {
+  const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), "gs-image-test-"));
+
+  it("sweepImageWork empties the folder a crash left behind, and makes it owner-only", () => {
+    const root = scratch();
+    const work = path.join(root, ".sending");
+    fs.mkdirSync(work);
+    fs.writeFileSync(path.join(work, "screen.jpg"), "SYNTHETIC leftover");
+    sweepImageWork(work);
+    expect(fs.readdirSync(work)).toEqual([]);
+    expect(fs.statSync(work).mode & 0o777).toBe(0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform === "darwin")("converts in the work folder, sweeping what was there, and leaves it empty", async () => {
+    const root = scratch();
+    const work = path.join(root, ".sending");
+    const png = path.join(root, "in.png");
+    const heic = path.join(root, "in.heic");
+    // SYNTHETIC: a plain colour, made here.
+    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "200", "400", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", heic]);
+    fs.mkdirSync(work);
+    fs.writeFileSync(path.join(work, "screen.jpg"), "SYNTHETIC leftover");
+    const jpeg = await screenshotJpeg(heic, work);
+    expect(jpeg.subarray(0, 3).toString("hex")).toBe("ffd8ff");
+    expect(fs.readdirSync(work)).toEqual([]);
+    expect(fs.existsSync(png)).toBe(false);
+    fs.rmSync(root, { recursive: true, force: true });
   });
 });

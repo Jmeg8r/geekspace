@@ -21,8 +21,10 @@ function harness(opts: { key?: string | null; replies?: Reply[]; status?: string
   const replies = [...(opts.replies ?? [ISSUE_OK, COMMENT_OK])];
   // Linear as the test sees it: the comments it holds, by the id the client gave them.
   const posted: { id: string; body: string }[] = [];
-  const fetch = vi.fn(async (url: string, init: { headers: Record<string, string>; body: string }) => {
+  const signals: (AbortSignal | undefined)[] = [];
+  const fetch = vi.fn(async (url: string, init: { headers: Record<string, string>; body: string; signal?: AbortSignal }) => {
     const body = JSON.parse(init.body);
+    signals.push(init.signal);
     requests.push({ url, headers: init.headers, body });
     const r = replies.shift() ?? { status: 500 };
     // A comment that reached Linear is kept, whatever happens to the answer after.
@@ -67,7 +69,7 @@ function harness(opts: { key?: string | null; replies?: Reply[]; status?: string
     },
     log: (m: string) => void logs.push(m),
   });
-  return { drafts, fetch, requests, statuses, logs, posted, draft, replies, status: () => draft.status };
+  return { drafts, fetch, requests, statuses, logs, posted, draft, replies, signals, status: () => draft.status };
 }
 
 describe("createLinearDrafts", () => {
@@ -147,6 +149,26 @@ describe("a send whose answer was lost", () => {
     const creates = h.requests.filter((r) => r.body.query.includes("commentCreate"));
     expect(creates.map((r) => r.body.variables.id)).toEqual([IDS[0], IDS[0]]);
     expect(h.status()).toBe("sent");
+  });
+
+  it("every request to Linear has a deadline, so a send ends well inside its claim's lease", async () => {
+    const h = harness();
+    await h.drafts.approve("draft-1");
+    expect(h.signals).toHaveLength(2);
+    for (const s of h.signals) expect(s).toBeInstanceOf(AbortSignal);
+  });
+
+  // Codex 6b r2 P2: only Linear saying it has no such comment is proof it is not there.
+  it.each([
+    ["a server error", { json: { errors: [{ message: "Internal error", extensions: { code: "INTERNAL_SERVER_ERROR" } }] } }],
+    ["an authentication error", { json: { errors: [{ message: "Authentication required", extensions: { code: "AUTHENTICATION_ERROR" } }] } }],
+    ["a rate limit", { json: { errors: [{ message: "Rate limit exceeded", extensions: { code: "RATELIMITED" } }] } }],
+  ] as [string, Reply][])("a check that fails with %s keeps the draft unknown and posts nothing", async (_name, failed) => {
+    // Were the failure read as "not there", these would post the comment again.
+    const h = harness({ draft: { status: "pending", commentId: IDS[0], deliveryUnknown: true }, replies: [failed, ISSUE_OK, COMMENT_OK] });
+    await expect(h.drafts.approve("draft-1")).rejects.toThrow(/Linear/);
+    expect(h.requests.filter((r) => r.body.query.includes("commentCreate"))).toHaveLength(0);
+    expect(h.draft).toMatchObject({ status: "pending", deliveryUnknown: true });
   });
 
   it("a check that can't reach Linear keeps the draft unknown and posts nothing", async () => {
