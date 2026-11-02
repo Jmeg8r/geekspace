@@ -28,7 +28,29 @@ export interface MeetingSummary {
 export type MeetingPhase = "model" | "transcribing" | "summarizing";
 
 export function toolStatus(): Promise<MeetingToolStatus>;
-export function ensureModel(onProgress?: (pct: number) => void): Promise<boolean>;
+export type WhisperModel = "base.en" | "small.en";
+export const WHISPER_MODELS: Record<WhisperModel, { file: string; size: number; sha256: string }>;
+export function ensureModel(onProgress?: (pct: number) => void, model?: WhisperModel): Promise<boolean>;
+
+/** A tool or model the transcription needs is not installed. */
+export class ToolMissingError extends Error {}
+
+/** Silence and no speech are results, not errors (plan PR 5). */
+export type TranscribeResult =
+  | { transcript: string }
+  | { silent: true; level: { meanDb: number; peakDb: number } }
+  | { noSpeech: true };
+
+export function transcribeFile(
+  options: { input: string; model?: WhisperModel },
+  onProgress?: (p: { phase: "model" | "transcribing"; pct: number }) => void,
+  /** Tests only: the tool and model checks. */
+  deps?: {
+    toolStatus?: () => Promise<MeetingToolStatus>;
+    modelVerified?: (model: WhisperModel) => Promise<boolean>;
+    ensureModel?: (onProgress: (pct: number) => void, model: WhisperModel) => Promise<boolean>;
+  }
+): Promise<TranscribeResult>;
 export function checkOllama(
   url?: string
 ): Promise<{ ok: boolean; models: string[]; error?: string }>;

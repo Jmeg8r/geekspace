@@ -168,8 +168,26 @@ export const setSegmentStatus = mutation({
   handler: async (ctx, args) => {
     const segment = await ctx.db.get(args.segmentId);
     if (!segment) throw new Error(`Segment ${args.segmentId} does not exist`);
-    if (segment.status === "purged") throw new Error("A purged segment cannot change status");
+    // Purged is terminal: its media is gone. A result that arrives later changes nothing, and
+    // is not an error, or the transcription queue would retry it forever (Codex review of PR 5).
+    if (segment.status === "purged") return null;
     await ctx.db.patch(args.segmentId, { status: args.status });
+    return null;
+  },
+});
+
+// The transcription queue's input (plan PR 5): closed segments, oldest first.
+const MAX_PENDING = 100;
+export const pendingSegments = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new Error(`Invalid limit: ${limit}`);
+    const n = Math.min(MAX_PENDING, limit ?? 20);
+    const rows = await ctx.db
+      .query("captureSegments")
+      .withIndex("by_status_start", (q) => q.eq("status", "closed"))
+      .take(n);
+    return rows.map((r) => ({ _id: r._id, path: r.path, start: r.start, end: r.end }));
   },
 });
 
@@ -185,8 +203,11 @@ export const addTranscript = mutation({
     if (!segment) throw new Error(`Segment ${args.segmentId} does not exist`);
     assertSpan(args.start, args.end);
     assertText("Transcript", args.text);
+    // Already has its result (a write sent again after its answer was lost), or purged: a
+    // second row would duplicate the text (Codex review of PR 5, round 3).
+    if (segment.status !== "closed") return null;
     const id = await ctx.db.insert("transcripts", args);
-    if (segment.status === "closed") await ctx.db.patch(args.segmentId, { status: "transcribed" });
+    await ctx.db.patch(args.segmentId, { status: "transcribed" });
     return id;
   },
 });

@@ -80,6 +80,19 @@ describe("dayRecorder.addTranscript", () => {
     await t.mutation(api.dayRecorder.addTranscript, { segmentId, start: s.start, end: s.end, text: "I'll send the deck." });
     expect((await t.run((ctx) => ctx.db.get(segmentId)))?.status).toBe("transcribed");
   });
+
+  // Codex 5 r3: a write that committed but whose answer was lost is sent again (a retry, or the
+  // next start). The segment's result is already in, so the second write adds nothing.
+  it("adds no second transcript for a segment that already has its result", async () => {
+    const t = convexTest(schema, modules);
+    const segmentId = await t.mutation(api.dayRecorder.addSegment, segment());
+    const s = segment();
+    const row = { segmentId, start: s.start, end: s.end, text: "I'll send the deck." };
+    await t.mutation(api.dayRecorder.addTranscript, row);
+    await expect(t.mutation(api.dayRecorder.addTranscript, row)).resolves.toBeNull();
+    const rows = await t.run((ctx) => ctx.db.query("transcripts").collect());
+    expect(rows).toHaveLength(1);
+  });
 });
 
 // Codex review of PR 3b-1: the helper names no app when a denylisted app owned the menu bar
@@ -132,6 +145,15 @@ describe("dayRecorder retention", () => {
     const expired = await t.query(api.dayRecorder.expiredMedia, { now: NOW });
     expect(expired.segments.map((s) => s._id)).toEqual([old]);
     expect(expired.screenshots.map((s) => s._id)).toEqual([oldShot]);
+  });
+
+  // Codex 5 r2 P1: a segment purged while it waited for transcription made the queue retry
+  // forever, because marking it failed was refused. Purged is terminal: a later status is a no-op.
+  it("leaves a purged segment purged when its transcription result arrives", async () => {
+    const { t, old, oldShot } = await aged();
+    await t.mutation(api.dayRecorder.markPurged, { segmentIds: [old], screenshotIds: [oldShot], at: NOW });
+    await expect(t.mutation(api.dayRecorder.setSegmentStatus, { segmentId: old, status: "failed" })).resolves.toBeNull();
+    expect((await t.run((ctx) => ctx.db.get(old)))?.status).toBe("purged");
   });
 
   it("marks purged media, logs one purge event with the count, and keeps the text", async () => {
@@ -285,5 +307,28 @@ describe("dayRecorder denylist edits", () => {
       'Invalid app bundle id "not a bundle id"'
     );
     await expect(t.mutation(api.dayRecorder.removeFromDenylist, { id: "../x" })).rejects.toThrow("Invalid app bundle id");
+  });
+});
+
+// Plan PR 5: the transcription queue reads closed segments, oldest first.
+describe("dayRecorder.pendingSegments", () => {
+  it("lists closed segments oldest first, up to the limit, and nothing else", async () => {
+    const t = convexTest(schema, modules);
+    const a = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 900_000, path: "2026-10-18/mic-a.webm" }));
+    const b = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 1_200_000, path: "2026-10-18/mic-b.webm" }));
+    const c = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 600_000, path: "2026-10-18/mic-c.webm" }));
+    await t.mutation(api.dayRecorder.setSegmentStatus, { segmentId: c, status: "transcribed" });
+    const rows = await t.query(api.dayRecorder.pendingSegments, { limit: 10 });
+    expect(rows.map((r) => r._id)).toEqual([b, a]);
+    expect(rows[0]).toEqual({ _id: b, path: "2026-10-18/mic-b.webm", start: NOW - 1_200_000, end: NOW - 900_000 });
+    expect((await t.query(api.dayRecorder.pendingSegments, { limit: 1 })).map((r) => r._id)).toEqual([b]);
+  });
+});
+
+// Codex 5 r1 P2: a non-finite limit reached .take() unchecked.
+describe("dayRecorder.pendingSegments, its argument", () => {
+  it.each([[Number.NaN], [Number.POSITIVE_INFINITY], [2.5], [0]])("refuses limit %s", async (limit) => {
+    const t = convexTest(schema, modules);
+    await expect(t.query(api.dayRecorder.pendingSegments, { limit })).rejects.toThrow(/limit/);
   });
 });

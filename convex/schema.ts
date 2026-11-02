@@ -203,7 +203,9 @@ export default defineSchema({
   })
     .index("by_day", ["day"])
     // Retention reads only unpurged rows: purgedAt undefined, oldest first.
-    .index("by_purged_start", ["purgedAt", "start"]),
+    .index("by_purged_start", ["purgedAt", "start"])
+    // Transcription reads closed segments, oldest first (plan PR 5).
+    .index("by_status_start", ["status", "start"]),
 
   transcripts: defineTable({
     segmentId: v.id("captureSegments"),

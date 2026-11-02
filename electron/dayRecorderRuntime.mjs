@@ -17,7 +17,9 @@ import { anyApi as api } from "convex/server";
 import { createCaptureWindow } from "./captureWindow.mjs";
 import { contentFreeLogger, createFileLog, createSupervisor } from "./dayRecorder.mjs";
 import { checkFileVault, ensureBackupExclusion } from "./dayRecorderGates.mjs";
-import { ensureMediaRoot, purgeExpired } from "./dayRecorderMedia.mjs";
+import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMedia.mjs";
+import { transcribeFile } from "./meetingProcessor.mjs";
+import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -192,6 +194,22 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     log(`status: ${s.status}${s.error ? ` (${s.error})` : ""}${s.retryInMs ? `; retry in ${Math.round(s.retryInMs / 1000)} s` : ""}`)
   );
 
+  // Local transcription (plan PR 5, spec R7): every closed segment, oldest first, with
+  // small.en. The backend lists what is waiting, so a backlog after a restart is picked up too.
+  const transcription = createTranscriptionQueue({
+    transcribe: (file) => transcribeFile({ input: file, model: "small.en" }),
+    resolvePath: (rel) => resolveMediaPath(mediaRoot, rel),
+    addTranscript: rows(api.dayRecorder.addTranscript),
+    setSegmentStatus: (segmentId, status) => rows(api.dayRecorder.setSegmentStatus)({ segmentId, status }),
+    log,
+  });
+  const unsubscribePending = client.onUpdate(
+    api.dayRecorder.pendingSegments,
+    {},
+    (pending) => transcription.offer(pending),
+    (err) => log(`could not read the segments waiting for transcription: ${err?.message ?? err}`)
+  );
+
   const unsubscribe = client.onUpdate(
     api.dayRecorder.getSettings,
     {},
@@ -243,9 +261,14 @@ export function startDayRecorder({ convexUrl, capturePage, showApp }) {
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
       unsubscribe();
+      unsubscribePending();
+      // Capture stops first and now; the segment being transcribed finishes meanwhile, and the
+      // backend stays up for its row (Codex review of PR 5: a slow write kept capture going).
+      const transcribing = transcription.stop();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();
       await service.shutdown();
+      await transcribing;
       // Only now: the menu bar says Recording for as long as anything is still capturing.
       indicator.stop();
       view.stop();
