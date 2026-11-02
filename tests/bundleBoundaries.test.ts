@@ -27,6 +27,7 @@ const LAZY_FROM_APP = [
   "./components/page/PageView",
   "./components/search/CommandPalette",
   "./components/settings/SettingsModal",
+  "./components/dayRecorder/DayRecordView",
 ];
 
 describe("bundle boundaries", () => {
