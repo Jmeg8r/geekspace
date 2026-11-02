@@ -678,34 +678,42 @@ describe("sendImage", () => {
   });
 });
 
-// Codex 6b r2 P1: the JPEG made for an image request never outlives it, even across a crash.
+// Codex 6b r2 P1: the JPEG made for an image request never outlives it, even across a crash;
+// r3 P1: two conversions at once, even from two instances, never see each other's file.
 describe("the image work folder", () => {
   const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), "gs-image-test-"));
 
-  it("sweepImageWork empties the folder a crash left behind, and makes it owner-only", () => {
+  it("sweepImageWork removes what a crash left, keeps a conversion still running, and is owner-only", () => {
     const root = scratch();
     const work = path.join(root, ".sending");
-    fs.mkdirSync(work);
-    fs.writeFileSync(path.join(work, "screen.jpg"), "SYNTHETIC leftover");
+    fs.mkdirSync(path.join(work, "old"), { recursive: true });
+    fs.mkdirSync(path.join(work, "live"));
+    fs.writeFileSync(path.join(work, "old", "screen.jpg"), "SYNTHETIC leftover");
+    fs.writeFileSync(path.join(work, "live", "screen.jpg"), "SYNTHETIC in use");
+    const longAgo = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(path.join(work, "old"), longAgo, longAgo);
     sweepImageWork(work);
-    expect(fs.readdirSync(work)).toEqual([]);
+    expect(fs.readdirSync(work)).toEqual(["live"]);
     expect(fs.statSync(work).mode & 0o777).toBe(0o700);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it.runIf(process.platform === "darwin")("converts in the work folder, sweeping what was there, and leaves it empty", async () => {
+  it.runIf(process.platform === "darwin")("two conversions at once each get their own image, and leave nothing", async () => {
     const root = scratch();
     const work = path.join(root, ".sending");
-    const png = path.join(root, "in.png");
-    const heic = path.join(root, "in.heic");
-    // SYNTHETIC: a plain colour, made here.
-    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "200", "400", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", heic]);
-    fs.mkdirSync(work);
-    fs.writeFileSync(path.join(work, "screen.jpg"), "SYNTHETIC leftover");
-    const jpeg = await screenshotJpeg(heic, work);
-    expect(jpeg.subarray(0, 3).toString("hex")).toBe("ffd8ff");
+    // SYNTHETIC: two plain colours of different sizes, made here.
+    const a = path.join(root, "a.heic");
+    const b = path.join(root, "b.heic");
+    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "200", "400", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", a]);
+    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "300", "500", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", b]);
+    const [ja, jb] = await Promise.all([screenshotJpeg(a, work), screenshotJpeg(b, work)]);
+    const size = (jpeg: Buffer) => {
+      const f = path.join(root, `check-${jpeg.length}.jpg`);
+      fs.writeFileSync(f, jpeg);
+      return execFileSync("/usr/bin/sips", ["-g", "pixelWidth", f]).toString().trim().split(/\s+/).at(-1);
+    };
+    expect([size(ja), size(jb)]).toEqual(["400", "500"]);
     expect(fs.readdirSync(work)).toEqual([]);
-    expect(fs.existsSync(png)).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

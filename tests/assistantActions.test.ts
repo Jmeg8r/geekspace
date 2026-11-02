@@ -311,43 +311,64 @@ describe("assistant drafts, the send", () => {
     return { t, id };
   }
 
-  it("an approved draft whose send failed goes back to pending only through releaseDraft", async () => {
+  const U = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
+  const claim = (t: Awaited<ReturnType<typeof aDraft>>["t"], draftId: Awaited<ReturnType<typeof aDraft>>["id"], commentId: string, claimId: string) =>
+    t.mutation(api.assistant.claimDraft, { draftId, commentId, claimId });
+
+  it("an approved draft goes back to pending or on to sent only through its own claim", async () => {
     const { t, id } = await aDraft();
-    await t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "approved" });
-    // Codex 6b r1: the step back must keep whether the send is in doubt, so it has one door.
+    await claim(t, id, U(1), U(5));
+    // Codex 6b r1: the step back keeps whether the send is in doubt, so it has one door; r3:
+    // and only the claim that holds the draft may take it.
     await expect(t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "pending" })).rejects.toThrow(/approved to pending/);
-    await t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: false });
+    await expect(t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "sent" })).rejects.toThrow(/approved to sent/);
+    expect(await t.mutation(api.assistant.releaseDraft, { draftId: id, claimId: U(5), deliveryUnknown: false })).toBe(true);
     expect((await t.query(api.assistant.draft, { draftId: id }))?.status).toBe("pending");
+    await claim(t, id, U(1), U(6));
+    expect(await t.mutation(api.assistant.markDraftSent, { draftId: id, claimId: U(6) })).toBe(true);
+    expect((await t.query(api.assistant.draft, { draftId: id }))?.status).toBe("sent");
   });
 
   it("a claim moves a waiting draft to approved and fixes its comment id for every later claim", async () => {
     const { t, id } = await aDraft();
-    const first = await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000001" });
-    expect(first).toEqual({ issueRef: "ENG-42", body: "SYNTHETIC", commentId: "00000000-0000-4000-8000-000000000001", deliveryUnknown: false });
-    await expect(t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" })).rejects.toThrow(/approved/);
-    await t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: true });
-    const again = await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" });
-    expect(again).toMatchObject({ commentId: "00000000-0000-4000-8000-000000000001", deliveryUnknown: true });
+    const first = await claim(t, id, U(1), U(5));
+    expect(first).toEqual({ issueRef: "ENG-42", body: "SYNTHETIC", commentId: U(1), deliveryUnknown: false });
+    await expect(claim(t, id, U(2), U(6))).rejects.toThrow(/approved/);
+    await t.mutation(api.assistant.releaseDraft, { draftId: id, claimId: U(5), deliveryUnknown: true });
+    const again = await claim(t, id, U(2), U(6));
+    expect(again).toMatchObject({ commentId: U(1), deliveryUnknown: true });
     // Once in doubt, a later failure that is certain does not clear it: only sending does.
-    await t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: false });
+    await t.mutation(api.assistant.releaseDraft, { draftId: id, claimId: U(6), deliveryUnknown: false });
     expect(await t.query(api.assistant.draft, { draftId: id })).toMatchObject({ status: "pending", deliveryUnknown: true });
   });
 
-  it("a claim refuses a comment id that is not a UUID, and a release refuses a draft that is not approved", async () => {
+  it("a claim refuses ids that are not UUIDs", async () => {
     const { t, id } = await aDraft();
-    await expect(t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "not-a-uuid" })).rejects.toThrow(/comment id/);
-    await expect(t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: false })).rejects.toThrow(/pending/);
+    await expect(claim(t, id, "not-a-uuid", U(5))).rejects.toThrow(/comment id/);
+    await expect(claim(t, id, U(1), "not-a-uuid")).rejects.toThrow(/claim id/);
   });
 
   it("a claim left by a crash is taken again after its lease, in doubt, with the same comment id", async () => {
     const { t, id } = await aDraft();
-    await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000001" });
+    await claim(t, id, U(1), U(5));
     // Still within its lease: a send may be under way, so a second claim is refused.
-    await expect(t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" })).rejects.toThrow(/approved/);
+    await expect(claim(t, id, U(2), U(6))).rejects.toThrow(/approved/);
     // The app died mid-send: the claim is older than the lease.
     await t.run((ctx) => ctx.db.patch(id, { updatedAt: Date.now() - 6 * 60_000 }));
-    const again = await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000002" });
-    expect(again).toMatchObject({ commentId: "00000000-0000-4000-8000-000000000001", deliveryUnknown: true });
+    const again = await claim(t, id, U(2), U(6));
+    expect(again).toMatchObject({ commentId: U(1), deliveryUnknown: true });
+  });
+
+  // Codex 6b r3 P2: a stale sender's late write must not change the claim that replaced it.
+  it("a release or a sent from a claim that was taken over changes nothing", async () => {
+    const { t, id } = await aDraft();
+    await claim(t, id, U(1), U(5));
+    await t.run((ctx) => ctx.db.patch(id, { updatedAt: Date.now() - 6 * 60_000 }));
+    await claim(t, id, U(1), U(6));
+    expect(await t.mutation(api.assistant.releaseDraft, { draftId: id, claimId: U(5), deliveryUnknown: false })).toBe(false);
+    expect(await t.mutation(api.assistant.markDraftSent, { draftId: id, claimId: U(5) })).toBe(false);
+    expect(await t.query(api.assistant.draft, { draftId: id })).toMatchObject({ status: "approved", claimId: U(6) });
+    expect(await t.mutation(api.assistant.markDraftSent, { draftId: id, claimId: U(6) })).toBe(true);
   });
 
   it("reads one draft by id", async () => {

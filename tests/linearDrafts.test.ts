@@ -10,11 +10,18 @@ const KEY = "lin_api_SYNTHETIC0000000000";
 const BODY = "SYNTHETIC: the deck went out on Thursday";
 
 type Reply = { status?: number; json?: unknown; network?: boolean; unreadable?: boolean };
-type Draft = { status: string; commentId?: string; deliveryUnknown?: boolean };
+type Draft = { status: string; commentId?: string; deliveryUnknown?: boolean; claimId?: string };
 
 const ISSUE_OK: Reply = { json: { data: { issue: { id: "uuid-1" } } } };
 const COMMENT_OK: Reply = { json: { data: { commentCreate: { success: true } } } };
-const IDS = ["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"];
+const IDS = [
+  "00000000-0000-4000-8000-000000000001",
+  "00000000-0000-4000-8000-000000000002",
+  "00000000-0000-4000-8000-000000000003",
+  "00000000-0000-4000-8000-000000000004",
+  "00000000-0000-4000-8000-000000000005",
+  "00000000-0000-4000-8000-000000000006",
+];
 
 function harness(opts: { key?: string | null; replies?: Reply[]; status?: string; draft?: Draft } = {}) {
   const requests: { url: string; headers: Record<string, string>; body: { query: string; variables: Record<string, string> } }[] = [];
@@ -50,21 +57,26 @@ function harness(opts: { key?: string | null; replies?: Reply[]; status?: string
     fetch,
     newId: () => ids.shift()!,
     convex: {
-      claim: async (_id: string, commentId: string) => {
+      claim: async (_id: string, commentId: string, claimId: string) => {
         if (draft.status !== "pending") throw new Error(`Cannot move a draft from ${draft.status} to approved`);
         draft.status = "approved";
         draft.commentId ??= commentId;
+        draft.claimId = claimId;
         statuses.push("approved");
         return { issueRef: "ENG-42", body: BODY, commentId: draft.commentId, deliveryUnknown: draft.deliveryUnknown === true };
       },
-      release: async (_id: string, deliveryUnknown: boolean) => {
+      release: async (_id: string, claimId: string, deliveryUnknown: boolean) => {
+        if (draft.status !== "approved" || draft.claimId !== claimId) return false;
         draft.status = "pending";
         draft.deliveryUnknown = draft.deliveryUnknown === true || deliveryUnknown;
         statuses.push("pending");
+        return true;
       },
-      markSent: async () => {
+      markSent: async (_id: string, claimId: string) => {
+        if (draft.status !== "approved" || draft.claimId !== claimId) return false;
         draft.status = "sent";
         statuses.push("sent");
+        return true;
       },
     },
     log: (m: string) => void logs.push(m),
@@ -169,6 +181,28 @@ describe("a send whose answer was lost", () => {
     await expect(h.drafts.approve("draft-1")).rejects.toThrow(/Linear/);
     expect(h.requests.filter((r) => r.body.query.includes("commentCreate"))).toHaveLength(0);
     expect(h.draft).toMatchObject({ status: "pending", deliveryUnknown: true });
+  });
+
+  // Codex 6b r3 P2: an answer without the comment is not Linear saying it has none.
+  it.each([
+    ["an empty answer", { json: {} }],
+    ["data without a comment", { json: { data: {} } }],
+    ["a different comment", { json: { data: { comment: { id: "00000000-0000-4000-8000-00000000000f" } } } }],
+  ] as [string, Reply][])("a check that gets %s keeps the draft unknown and posts nothing", async (_name, odd) => {
+    const h = harness({ draft: { status: "pending", commentId: IDS[0], deliveryUnknown: true }, replies: [odd, ISSUE_OK, COMMENT_OK] });
+    await expect(h.drafts.approve("draft-1")).rejects.toThrow(/Linear/);
+    expect(h.requests.filter((r) => r.body.query.includes("commentCreate"))).toHaveLength(0);
+    expect(h.draft).toMatchObject({ status: "pending", deliveryUnknown: true });
+  });
+
+  it("a send whose claim was taken over meanwhile leaves the newer claim alone", async () => {
+    const h = harness();
+    const approve = h.drafts.approve("draft-1");
+    // Another approval took the draft over while this one was sending.
+    h.draft.claimId = "00000000-0000-4000-8000-0000000000ff";
+    await approve;
+    expect(h.draft).toMatchObject({ status: "approved", claimId: "00000000-0000-4000-8000-0000000000ff" });
+    expect(h.logs.join("\n")).toMatch(/taken over/);
   });
 
   it("a check that can't reach Linear keeps the draft unknown and posts nothing", async () => {
