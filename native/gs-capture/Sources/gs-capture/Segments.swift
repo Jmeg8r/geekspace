@@ -289,6 +289,12 @@ final class SystemAudioRecorder {
     // The PR 3a proven pair: poll every 100 ms, hold 500 ms (at least two polls).
     static let rebuildMs = 100.0
     static let holdMs = 500.0
+    /// What may be released: the tap's own limit, and no further than the audio-use poll has
+    /// classified (Codex review of PR 4b, round 4). A call app's hold begins where the last poll
+    /// classified, so nothing of a call has been delivered before it, however late polls run.
+    static func releaseLimit(tap: Double, classifiedThrough: Double) -> Double {
+        min(tap, classifiedThrough + holdMs)
+    }
 
     private let queue = DispatchQueue(label: "gs-capture.audio-control")
     private var timer: DispatchSourceTimer?
@@ -306,17 +312,24 @@ final class SystemAudioRecorder {
     /// Starts capturing. `report` receives `segment`, `tapRebuilt`, `tailDropped`,
     /// `sessionUnverified`, `sampleRateChanged` and `audioUse`.
     init(root: String, denylist: [String], segmentSec: Double, maxCallSec: Double = CallHold.defaultMaxSec,
+         startHeld: Bool = false, calls: AudioUse.CallTracker = AudioUse.CallTracker(apps: [], browsers: []),
          report: @escaping (String, [String: Any]) -> Void) {
         self.root = root
         self.segmentSec = segmentSec
         self.maxCallSec = maxCallSec
         self.report = report
-        router = CallRouter(maxSec: maxCallSec,
+        router = CallRouter(maxSec: maxCallSec, startHeld: startHeld,
                             append: { [unowned self] in self.writer?.append($0) },
                             closeSystem: { [unowned self] in self.writer?.close() },
                             flush: { [unowned self] runs in CallHold.flush(runs, root: self.root, segmentSec: self.segmentSec, report: self.report) },
+                            flushSystem: { [unowned self] runs in
+                                CallHold.flush(runs, root: self.root, segmentSec: self.segmentSec, prefix: "sys", kind: "system", report: self.report)
+                            },
                             report: report)
         queue.sync {
+            // Read before the tap starts: the first audio-use poll counts its gap from here, so a
+            // stall between the tap starting and the watcher existing is never classified.
+            let captureStartedAt = nowMs()
             // Bundle IDs (each plus "<id>.helper") AND live process objects: bundle IDs alone
             // silenced only one of two live instances (spike Q2). Bundle-ID taps need macOS 26.
             let bundleIDs = denylist.isEmpty ? nil : denylist.flatMap { [$0, "\($0).helper"] }
@@ -348,17 +361,25 @@ final class SystemAudioRecorder {
             // On this queue too, so it reads the tap's exclusion (sticky, orphans included)
             // without a lock: F2's "a denylisted app is using audio" and the tap's exclusion
             // can never disagree (plan PR 3b-3).
-            let watcher = AudioUseWatcher(denylist: denylist, report: report)
+            // On this queue as well, so a call app's start holds its audio before the next
+            // release: the call is held without a round trip through the supervisor.
+            let watcher = AudioUseWatcher(denylist: denylist, calls: calls, startHeld: startHeld,
+                                          onCallStart: { [unowned self] app, t in self.router.hold(at: t, app: app) },
+                                          onGap: { [unowned self] from, to in self.router.gap(from: from, to: to) },
+                                          captureStartedAt: captureStartedAt,
+                                          report: report)
             self.watcher = watcher
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now(), repeating: .milliseconds(Int(Tap.releaseTickMs)))
             timer.setEventHandler {
                 // tick returns the release limit, read before it checks arrivals and capped at
                 // the last completed classification pass (Codex review of PR 3b-2, rounds 4-5).
-                let limit = runner.tick(poll: true)
+                let tapLimit = runner.tick(poll: true)
+                // Poll first: its holds land before anything it classified is released.
+                watcher.tick(known: runner.knownDenied())
+                let limit = SystemAudioRecorder.releaseLimit(tap: tapLimit, classifiedThrough: watcher.classifiedThrough)
                 runner.sink.release(now: limit)
                 if let hold = self.hold { self.router.settle(frontier: hold.frontier(limit: limit)) }
-                watcher.tick(known: runner.knownDenied())
             }
             timer.resume()
             self.timer = timer
@@ -371,6 +392,11 @@ final class SystemAudioRecorder {
         queue.sync {
             guard let runner, let timer else { return }
             timer.cancel()
+            // One last poll, then what it could not classify is dropped, not released.
+            if let watcher {
+                watcher.tick(known: runner.knownDenied(), force: true)
+                router.cutoff(at: watcher.classifiedThrough)
+            }
             runner.finish(tailCheck: true)
             // Everything is delivered: a call still waiting for its notice is dropped.
             router.stop()
@@ -382,10 +408,7 @@ final class SystemAudioRecorder {
 
     /// A call started: audio captured from now on is the call's, held in memory.
     func holdCall() {
-        queue.sync {
-            guard router.canHold else { fail("call hold: a call is already held") }
-            router.hold(at: nowMs())
-        }
+        queue.sync { router.hold(at: nowMs()) }
     }
 
     /// The notice was given: the call's audio, up to now, is written as `call` segments once
@@ -394,6 +417,14 @@ final class SystemAudioRecorder {
         queue.sync {
             guard router.canRelease else { fail("call release: no call is held") }
             router.release(at: nowMs())
+        }
+    }
+
+    /// There was no call (a helper's startup hold): what was held is written as system audio.
+    func clearCall() {
+        queue.sync {
+            guard router.canClear else { fail("call clear: no call is held") }
+            router.clear(at: nowMs())
         }
     }
 

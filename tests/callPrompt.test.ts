@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { remainingLabel } from "../src/lib/callPrompt";
+import { promptAfterFetch, remainingLabel } from "../src/lib/callPrompt";
 import { answerCall, onCallPrompt } from "../src/lib/dayRecorderBridge";
 
 // WHAT: the call prompt's countdown and the page's answers (plan PR 4b). WHY: the notice
@@ -51,5 +51,17 @@ describe("onCallPrompt", () => {
     listener!({ type: "call", prompt: { state: "asking" } });
     listener!({ type: "call", prompt: null });
     expect(seen).toEqual(["asking", null]);
+  });
+});
+
+// Codex 4b r7 P2: the first fetch could answer after a newer event (a closed prompt, null)
+// and bring back the older question.
+describe("promptAfterFetch", () => {
+  const asking = { state: "asking" as const, callId: "call-1", app: "us.zoom.xos", deadline: 1, canExtend: true };
+  it("takes the fetched prompt when no event came first", () => {
+    expect(promptAfterFetch({ heard: false, current: null }, asking)).toEqual(asking);
+  });
+  it("keeps what an event said, even null, when it came first", () => {
+    expect(promptAfterFetch({ heard: true, current: null }, asking)).toBeNull();
   });
 });

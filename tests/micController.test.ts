@@ -41,7 +41,11 @@ function harness(
     },
     drain: vi.fn(async () => {}),
     close: vi.fn(opts.close ?? (async () => {})),
+    discardOpen: vi.fn(() => {}),
+    classified: vi.fn(() => {}),
+    settled: vi.fn(async () => {}),
   };
+  let writerError: ((reason: string) => void) | null = null;
   const controller = createMicController({
     askMic: () => Promise.resolve(opts.mic ?? true),
     createWindow: ({ onGone }) => {
@@ -50,7 +54,10 @@ function harness(
       gone = onGone;
       return w.win;
     },
-    createWriter: () => writer,
+    createWriter: ({ onError }) => {
+      writerError = onError;
+      return writer;
+    },
     onState: (s) => void states.push(s),
     recordError: (detail) => void errors.push(detail),
     log: (m) => void logs.push(m),
@@ -58,7 +65,18 @@ function harness(
     micConfig: { segmentSec: 300, timesliceMs: 1000 },
   });
   const fromWindow = (i = 0) => windows[i].win.webContents;
-  return { controller, windows, states, logs, handled, errors, writer, fromWindow, gone: () => gone?.() };
+  return {
+    controller,
+    windows,
+    states,
+    logs,
+    handled,
+    errors,
+    writer,
+    fromWindow,
+    gone: () => gone?.(),
+    writerError: (reason: string) => writerError?.(reason),
+  };
 }
 
 describe("createMicController", () => {
@@ -349,3 +367,61 @@ describe("createMicController", () => {
   });
 });
 
+
+// Codex 4b r3 P3: a call starting stops the mic without finishing its open segment.
+describe("createMicController, a call starting", () => {
+  it("[P1] discard drops the open segment before asking the window to stop", async () => {
+    const h = harness();
+    await h.controller.start();
+    const stopping = h.controller.discard();
+    expect(h.writer.discardOpen).toHaveBeenCalledTimes(1);
+    expect(h.windows[0].sent).toEqual(["gs:mic:stop"]);
+    h.controller.receive(h.fromWindow(), { type: "stopped" });
+    await stopping;
+    expect(h.windows[0].destroyed()).toBe(true);
+    expect(h.states.at(-1)).toEqual({ state: "off" });
+  });
+
+  it("discard with no window is a stop", async () => {
+    const h = harness();
+    await h.controller.discard();
+    expect(h.writer.discardOpen).not.toHaveBeenCalled();
+  });
+});
+
+// Codex 4b r4 P1: chunks wait for the helper's classification; a write that then fails is a
+// loud mic failure.
+describe("createMicController, the helper's classification", () => {
+  it("passes the classified time to the writer, and waits for it before closing", async () => {
+    const h = harness();
+    await h.controller.start();
+    h.controller.classified(1_234);
+    expect(h.writer.classified).toHaveBeenCalledWith(1_234);
+    const stopping = h.controller.stop();
+    h.controller.receive(h.fromWindow(), { type: "stopped" });
+    await stopping;
+    expect(h.writer.settled).toHaveBeenCalled();
+  });
+
+  it("[P1] a write that fails while catching up stops the mic loudly", async () => {
+    const h = harness();
+    await h.controller.start();
+    h.writerError("could not write mic audio (ENOSPC)");
+    expect(h.states.at(-1)).toMatchObject({ state: "error", kind: "writeFailed" });
+    expect(h.errors.join("\n")).toMatch(/ENOSPC/);
+    expect(h.windows[0].sent).toEqual(["gs:mic:stop"]);
+  });
+});
+
+// Codex 4b r5 P1: classification from a different helper than the one the writer was opened
+// under must never reach it.
+describe("createMicController, the helper that owns the writer", () => {
+  it("[P1] passes on classification only from the helper the mic was started for", async () => {
+    const h = harness();
+    await h.controller.start(1);
+    h.controller.classified(100, 2);
+    expect(h.writer.classified).not.toHaveBeenCalled();
+    h.controller.classified(100, 1);
+    expect(h.writer.classified).toHaveBeenCalledWith(100);
+  });
+});

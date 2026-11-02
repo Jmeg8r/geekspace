@@ -10,7 +10,6 @@
 import { app, globalShortcut, ipcMain, Menu, nativeImage, systemPreferences, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
 import { ConvexClient } from "convex/browser";
 // The generated `api` is exactly `anyApi` (convex/_generated/api.js), and convex/ is not
 // packaged into the app, so the main process uses anyApi directly.
@@ -22,7 +21,7 @@ import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMe
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
 import { createLinearDrafts } from "./linearDrafts.mjs";
-import { createDayAssistant } from "./dayAssistant.mjs";
+import { assistantClient, createDayAssistant } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -65,6 +64,22 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
   };
 
   const service = createDayRecorderService({
+    // Each new helper: what it reports first says which calls are still going on, and it
+    // holds from its first sample if the newest call is unanswered or declined (plan PR 4b).
+    callHeldAtStart: () => {
+      helperGen += 1;
+      helperStopping = false;
+      detector.reset();
+      denylistedAudio = false;
+      audioReady = false;
+      return notice.helperStarting();
+    },
+    // The mic finishes, and its last audio is classified, before its helper stops.
+    beforeHelperStop: async () => {
+      helperStopping = true;
+      syncMic();
+      await mic.stop();
+    },
     platform: process.platform,
     mediaRoot,
     helperPath: helperPath(),
@@ -91,7 +106,16 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     // macOS asks once, then answers from the saved choice; elsewhere there is no recorder.
     askMic: async () => process.platform !== "darwin" || systemPreferences.askForMediaAccess("microphone"),
     createWindow: ({ onGone }) => createCaptureWindow({ page: capturePage, onGone }),
-    createWriter: () => createMicSegmentWriter({ root: mediaRoot, addSegment: rows(api.dayRecorder.addSegment), log }),
+    // Mic chunks wait in memory until gs-capture has classified their time, so a call or a
+    // never-record app seen meanwhile discards them before any reach disk (Codex #4b r4).
+    createWriter: ({ onError }) =>
+      createMicSegmentWriter({
+        root: mediaRoot,
+        addSegment: rows(api.dayRecorder.addSegment),
+        log,
+        waitForClassification: true,
+        onError,
+      }),
     onState: (s) => {
       log(`mic: ${s.state}${s.state === "error" ? ` (${s.kind})` : ""}`);
       service.setMic(s);
@@ -107,12 +131,19 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
   // Calls and the room-mic pause (plan PR 4b). The mic records while the recorder records,
   // except while a never-record app uses audio (F2) and while a call waits for its notice or
   // was declined (F3): it stops, so nothing of the call reaches disk before the notice.
+  // Every helper starts held, and the mic waits, until its first audio-use report says which
+  // apps are using audio (Codex review of PR 4b, round 2).
   let denylistedAudio = false;
+  let audioReady = false;
+  // Which helper the mic is for, and whether the current one is about to stop (plan PR 4b).
+  let helperGen = 0;
+  let helperStopping = false;
   let prompt = null;
   const promptListeners = new Set();
   const syncMic = () => {
     const recording = service.status().status === "recording";
-    void (recording && !denylistedAudio && !notice.micHeld() ? mic.start() : mic.stop());
+    const run = recording && audioReady && !helperStopping && !denylistedAudio && !notice.micHeld();
+    void (run ? mic.start(helperGen) : mic.stop());
   };
   const notice = createCallNotice({
     helper: service.calls,
@@ -123,24 +154,39 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       log(`call notice: ${next ? next.state : "closed"}`);
       for (const cb of promptListeners) cb(next);
     },
-    onMicHeld: () => syncMic(),
+    // Held for a call: the open segment may hold its opening audio, so it is dropped.
+    onMicHeld: (held, byCall) => void (held && byCall ? mic.discard() : syncMic()),
     log,
   });
   const detector = createCallDetector({
-    onCall: (call) => (call.active ? notice.callStarted(call.app) : notice.callEnded()),
+    onAppStarted: (app) => notice.callAppStarted(app),
+    onCallEnded: () => notice.callEnded(),
     onDenylistedAudio: (active) => {
       denylistedAudio = active;
       log(active ? "room mic paused: a never-record app is using audio" : "room mic back: no never-record app is using audio");
-      syncMic();
+      // Its opening audio may be in what the mic holds: dropped, not finished (Codex #4b r4).
+      void (active ? mic.discard() : syncMic());
     },
   });
   service.onAudioUse((use) => detector.receive(use));
+  service.onCallHeld((app) => notice.callHeld(app));
+  service.onAudioClassified((through) => mic.classified(through, helperGen));
+  // Unchecked time (Codex #4b r6): what the mic holds may include it, so it is dropped, and
+  // the mic starts afresh once the drop is done.
+  service.onAudioGap(() => void mic.discard().then(() => syncMic()));
+  service.onAudioUseReady(() => {
+    audioReady = true;
+    notice.audioReady();
+    syncMic();
+  });
+  // Calls belong to one helper: when it stops recording, its held audio and its calls go with it.
+  let lastStatus = null;
   service.onStatus((s) => {
-    // A helper that stops drops anything it held, and a new one reports every app afresh.
-    if (s.status !== "recording") {
-      notice.recorderStopped();
-      detector.reset();
+    if (s.status !== "recording" && lastStatus === "recording") {
+      audioReady = false;
+      notice.helperGone();
     }
+    lastStatus = s.status;
     syncMic();
   });
 
@@ -171,16 +217,20 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
   const assistant = createDayAssistant({
     client: () => {
       const key = keyStore?.get();
-      return key ? new Anthropic({ apiKey: key }) : null;
+      return key ? assistantClient(key) : null;
     },
     convex: {
-      input: (window) => client.query(api.assistant.input, window),
-      applyActions: (actions) => client.mutation(api.assistant.applyActions, { actions, tzOffsetMin: new Date().getTimezoneOffset() }),
-      recordUsage: (row) => client.mutation(api.assistant.recordUsage, row),
+      ensureStart: (args) => client.mutation(api.assistant.ensureStart, args),
+      unread: (args) => client.query(api.assistant.unread, args),
       capStatus: (day) => client.query(api.assistant.capStatus, { day }),
+      beginRequest: (args) => client.mutation(api.assistant.beginRequest, args),
+      settleRequest: (args) => client.mutation(api.assistant.settleRequest, args),
+      failRequest: (args) => client.mutation(api.assistant.failRequest, args),
+      abandonRequest: (args) => client.mutation(api.assistant.abandonRequest, args),
+      openRequests: () => client.query(api.assistant.openRequests, {}),
+      applyProposal: (args) => client.mutation(api.assistant.applyProposal, args),
+      refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),
       logEvent: (event) => logEvent(event),
-      watermark: () => client.query(api.assistant.watermark, {}),
-      setWatermark: (at) => client.mutation(api.assistant.setWatermark, { at }),
     },
     log,
   });
@@ -265,10 +315,13 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       // Capture stops first and now; the segment being transcribed finishes meanwhile, and the
       // backend stays up for its row (Codex review of PR 5: a slow write kept capture going).
       const transcribing = transcription.stop();
+      // A batch in flight gets a moment to record what it paid for (Codex review of PR 6a).
+      const thinking = assistant.stop();
       // The mic first: its last segment's row needs the backend, like the helper's.
       await mic.shutdown();
       await service.shutdown();
       await transcribing;
+      await thinking;
       // Only now: the menu bar says Recording for as long as anything is still capturing.
       indicator.stop();
       view.stop();

@@ -8,7 +8,8 @@ and a change here bumps `v`.
 
 ```
 gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segment-sec 300]
-               [--call-hold-max-sec 1800] [--duration s]
+               [--call-hold-max-sec 1800] [--start-held yes] [--call-apps id,id] [--browsers id,id]
+               [--duration s]
 ```
 
 - `--media-root` must be an existing absolute directory. Files go under `<media-root>/<day>/`.
@@ -28,6 +29,21 @@ gs-capture run --media-root <abs dir> [--denylist id,id] [--shot-sec 30] [--segm
   that point. A supervisor that stops a helper before its `ready` should expect this.
 - **A denylist change means a restart.** The helper reads its arguments once. The supervisor
   stops it and spawns a new one. The only in-band control is the call hold (Commands, below).
+- `--start-held yes` (plan PR 4b): the helper holds from its first sample, as if `call hold`
+  came before any audio. The supervisor passes it to **every** helper it starts: until the first
+  audio-use report (`audioUseReady`), no one can tell whether a call is going on, so nothing is
+  written as system audio before it. Any other value fails the helper.
+- `--call-apps` and `--browsers` (plan PR 4b, Codex review round 3) take bundle IDs, refused
+  like the denylist's. The helper holds a call **itself**: when its audio-use poll sees a call
+  app start (a `--call-apps` app using audio in or out, a `--browsers` app holding the mic),
+  everything captured from where the previous poll had classified is the call's (`callHeld`
+  with `app`). System audio is delivered only up to the last poll's classified point (its time
+  less the 125 ms detection lag, spike Q3), so none of it has been written yet, however late a
+  poll runs (Codex review round 4). System audio that resumed after that point (an earlier
+  call's release) is the new call's instead; a call held earlier keeps what it held. At stop,
+  one last poll runs and what it could not classify is dropped. Calls already
+  going on at a `--start-held` helper's first poll are the startup hold's. A call ends when
+  its app uses neither input nor output; it starts again if the app comes back.
 - `--call-hold-max-sec` caps how much call audio is held (default 1800: the 15-minute notice
   timeout plus its one extension). Audio past the cap is not held; `callReleased` says so.
 
@@ -50,11 +66,17 @@ memory only** and reaches disk only after the notice.
   of that hold-back, including chunks a tap callback is still adding. So a call's `segment`
   lines and its `callReleased` can come after a `sys-` segment captured later; calls
   themselves always settle in the order they were held.
+- `call clear` (plan PR 4b): there was no call after all (a helper's startup hold). The held
+  audio is written as ordinary `segment` lines with `"kind": "system"` (`sys-` names, 16 kHz
+  mono AAC), then `callCleared`. Like the others, it resolves the oldest held call.
 - `call discard`: declined or timed out. The held audio is dropped, never written. Writes
   `callDiscarded` with `"reason": "command"`.
 - A stop (signal) while a call is held drops it the same way, with `"reason": "stop"`.
-- An unknown command, `call hold` while one is held, or `call release`/`call discard` with
-  none held is a supervisor bug: the helper fails (stderr, non-zero exit).
+- **Several calls can be held at once** (plan PR 4b): `call hold` while a call is held starts a
+  new call there, held apart. `call release` and `call discard` always resolve the **oldest**
+  call still waiting; the supervisor sends them in the order the calls began.
+- An unknown command, or `call release`/`call discard` with no call held, is a supervisor
+  bug: the helper fails (stderr, non-zero exit).
 - The commands carry no notice id. The supervisor attaches the `noticeGiven` event it
   released with to each `call` segment, and stores a `call` segment only after it sent
   `call release` (Convex `addSegment` refuses one without a given notice too).
@@ -137,9 +159,26 @@ More detail on the fields:
     started (Electron's renderer records the mic).
   - At start, every app already using audio is reported once. After that, only changes
     are reported. `input: false, output: false` means the app stopped.
-- **`callHeld`** (`t`), **`callReleased`** (`segments`, `heldSec`, `overflowed`) and
-  **`callDiscarded`** (`heldSec`, `reason`: `command` or `stop`) report the call hold with
-  counts only, never audio.
+- **`callHeld`** (`t`; `app` when the helper held on its own, a `--call-apps` or
+  `--browsers` id, never a denylisted one), **`callReleased`** (`segments`, `heldSec`, `overflowed`),
+  **`callDiscarded`** (`heldSec`, `reason`: `command` or `stop`) and **`callCleared`**
+  (`segments`, `heldSec`) report the call hold with counts only, never audio.
+- **`audioUseReady`** (`t`, `apps`, plan PR 4b) comes once, right after the first audio-use
+  poll has reported every app already using audio. It carries a count only. The supervisor
+  treats no `audioUseReady` within 10 s of `ready` as a failure (Not recording, the helper is
+  stopped): until it comes the mic stays off and system audio stays held, and heartbeats
+  don't count for it.
+- **`audioGap`** (`from`, `to`, plan PR 4b, Codex review round 6) comes before a poll's
+  `audioClassified` when that poll ran more than 400 ms (four polls) after the last: an app
+  may have started and stopped using audio inside it unseen. A first poll more than 400 ms
+  after capture began is a gap too, with `from` 0 (everything so far). System audio in
+  [`from`, `to`) is dropped; a held call keeps what it holds, but the startup hold, which a
+  `call clear` may write as system audio, has the gap dropped from it (Codex review round 7).
+  The supervisor has the mic discard what waits and start again.
+- **`audioClassified`** (`through`, plan PR 4b) follows every audio-use poll, after that poll's
+  `audioUse` and `callHeld` lines: everything captured before `through` has been looked at. The
+  supervisor passes it to the mic writer, whose chunks wait in memory until it passes them, and
+  never logs it.
 - **`tapRebuilt` / `tailDropped`** carry only counts, levels and bundle IDs, never audio.
   **Their bundle fields can name a denylisted app** (`addedBundles`, `arrivedBundles`).
   They are diagnostics. The supervisor must not store or log them, or `audioUse`'s and

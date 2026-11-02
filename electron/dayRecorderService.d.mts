@@ -37,6 +37,10 @@ export type ServiceOptions = {
   purgeIntervalMs?: number;
   retryDelaysMs?: number[];
   retryResetMs?: number;
+  /** Asked as each helper starts: hold call audio from its first sample (plan PR 4b). */
+  callHeldAtStart?: () => boolean;
+  /** Runs before a helper is stopped, while it is still the current one. */
+  beforeHelperStop?: () => Promise<void>;
 };
 
 export type DayRecorderService = {
@@ -47,7 +51,11 @@ export type DayRecorderService = {
   onStatus: (cb: (status: RecorderStatus) => void) => () => void;
   onAudioUse: (cb: (message: Extract<HelperMessage, { event: "audioUse" }>) => void) => () => void;
   /** The call hold on the live helper; each throws when no helper is running. */
-  calls: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void };
+  calls: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void; clear: () => void };
+  onAudioUseReady: (cb: () => void) => () => void;
+  onCallHeld: (cb: (app: string) => void) => () => void;
+  onAudioClassified: (cb: (through: number) => void) => () => void;
+  onAudioGap: (cb: (from: number, to: number) => void) => () => void;
   running: () => boolean;
   killSync: () => void;
 };

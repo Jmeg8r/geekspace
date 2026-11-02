@@ -272,12 +272,16 @@ describe("assistant usage and the daily cap", () => {
     expect(cap).toMatchObject({ capUsd: null, reached: true });
   });
 
-  it("adds usage up across batches and reports the cap reached at the limit", async () => {
+  it("adds settled calls up and reports the cap reached at the limit", async () => {
     const t = await seeded();
     await t.mutation(api.dayRecorder.updateSettings, { dailyCapUsd: 1 });
-    await t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: 1000, outputTokens: 200, costUsd: 0.6 });
+    const call = async (costUsd: number) => {
+      const requestId = await t.mutation(api.assistant.beginRequest, { day: "2026-10-18", reservedUsd: costUsd, transcriptIds: [], screenshotIds: [] });
+      await t.mutation(api.assistant.settleRequest, { requestId: requestId!, costUsd, inputTokens: 1000, outputTokens: 100, proposals: [] });
+    };
+    await call(0.6);
     expect(await t.query(api.assistant.capStatus, { day: "2026-10-18" })).toMatchObject({ spentUsd: 0.6, reached: false });
-    await t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: 900, outputTokens: 100, costUsd: 0.4 });
+    await call(0.4);
     expect(await t.query(api.assistant.capStatus, { day: "2026-10-18" })).toMatchObject({ spentUsd: 1, reached: true });
     // Another day starts from zero.
     expect(await t.query(api.assistant.capStatus, { day: "2026-10-19" })).toMatchObject({ spentUsd: 0, reached: false });
@@ -285,52 +289,14 @@ describe("assistant usage and the daily cap", () => {
 
   it("rejects negative or non-finite usage", async () => {
     const t = await seeded();
+    await t.mutation(api.dayRecorder.updateSettings, { dailyCapUsd: 1 });
+    const requestId = await t.mutation(api.assistant.beginRequest, { day: "2026-10-18", reservedUsd: 0.1, transcriptIds: [], screenshotIds: [] });
     await expect(
-      t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: -1, outputTokens: 0, costUsd: 0 })
+      t.mutation(api.assistant.settleRequest, { requestId: requestId!, costUsd: 0, inputTokens: -1, outputTokens: 0, proposals: [] })
     ).rejects.toThrow();
     await expect(
-      t.mutation(api.assistant.recordUsage, { day: "2026-10-18", inputTokens: 1, outputTokens: 0, costUsd: Number.NaN })
+      t.mutation(api.assistant.settleRequest, { requestId: requestId!, costUsd: Number.NaN, inputTokens: 1, outputTokens: 0, proposals: [] })
     ).rejects.toThrow();
-  });
-});
-
-// Plan PR 6a: what the assistant reads, and where it left off.
-describe("assistant.input and the watermark", () => {
-  it("returns the transcripts and screenshot text in a time window, oldest first", async () => {
-    const t = await seeded();
-    const now = Date.now();
-    const day = new Date(now).toLocaleDateString("en-CA");
-    const mk = async (start: number, text: string) => {
-      const segmentId = await t.mutation(api.dayRecorder.addSegment, {
-        day,
-        kind: "mic",
-        path: `${day}/mic-${start}.webm`,
-        start,
-        end: start + 60_000,
-      });
-      await t.mutation(api.dayRecorder.addTranscript, { segmentId, start, end: start + 60_000, text });
-      return segmentId;
-    };
-    await mk(now - 50 * 60_000, "SYNTHETIC before the window");
-    const inside = await mk(now - 20 * 60_000, "SYNTHETIC inside the window");
-    await t.mutation(api.dayRecorder.addScreenshot, { day, path: `${day}/shot-1.heic`, takenAt: now - 10 * 60_000, ocrText: "SYNTHETIC screen text" });
-    const input = await t.query(api.assistant.input, { after: now - 30 * 60_000, until: now });
-    expect(input.transcripts.map((r) => r.text)).toEqual(["SYNTHETIC inside the window"]);
-    expect(input.transcripts[0].segmentId).toBe(inside);
-    expect(input.screenshots.map((r) => r.ocrText)).toEqual(["SYNTHETIC screen text"]);
-  });
-
-  it("refuses a window that ends before it starts", async () => {
-    const t = await seeded();
-    await expect(t.query(api.assistant.input, { after: 10, until: 5 })).rejects.toThrow(/window/);
-  });
-
-  it("keeps the watermark, and only moves it forward", async () => {
-    const t = await seeded();
-    expect(await t.query(api.assistant.watermark, {})).toBeNull();
-    await t.mutation(api.assistant.setWatermark, { at: 2_000_000_000_000 });
-    await t.mutation(api.assistant.setWatermark, { at: 1_900_000_000_000 });
-    expect(await t.query(api.assistant.watermark, {})).toBe(2_000_000_000_000);
   });
 });
 

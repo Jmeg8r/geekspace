@@ -10,21 +10,30 @@ export type CallPrompt =
   | { state: "timedOut" | "failed"; callId: string };
 
 export type CallNotice = {
-  callStarted: (app: string) => void;
+  /** A new helper is starting: always true (it starts held); the old helper's calls are gone. */
+  helperStarting: () => boolean;
+  /** The helper stopped: its calls are gone with it. */
+  helperGone: () => void;
+  /** The helper's first audio-use report is in. */
+  audioReady: () => void;
+  /** A call app the detector saw; only a call going on at a helper's start counts. */
+  callAppStarted: (app: string) => void;
+  /** The helper held a call app's audio on its own. */
+  callHeld: (app: string) => void;
   callEnded: () => void;
   given: (callId: string) => Promise<void>;
   declined: (callId: string) => Promise<void>;
   extend: (callId: string) => void;
   dismiss: () => void;
-  recorderStopped: () => void;
   micHeld: () => boolean;
 };
 
 export function createCallNotice(options: {
-  helper: { hold: () => void; release: (noticeEventId: string) => void; discard: () => void };
+  helper: { release: (noticeEventId: string) => void; discard: () => void; clear: () => void };
   logEvent: (event: { kind: "noticeGiven" | "noticeDeclined"; detail: string }) => Promise<string>;
   onPrompt: (prompt: CallPrompt | null) => void;
-  onMicHeld: (held: boolean) => void;
+  /** `byCall`: a call is why the mic is held, so its open segment may hold some of it. */
+  onMicHeld: (held: boolean, byCall: boolean) => void;
   log: (message: string) => void;
 }): CallNotice;
 

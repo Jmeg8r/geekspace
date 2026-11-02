@@ -1,5 +1,6 @@
-import { mutation, query, type MutationCtx } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
+import { proposal, type Proposal } from "./lib/assistantProposal";
 import { paginationOptsValidator, type PaginationOptions } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { PropertyDef } from "./lib/types";
@@ -38,27 +39,6 @@ function assertPage(opts: PaginationOptions): void {
   }
 }
 
-const source = {
-  sourceSegmentId: v.optional(v.id("captureSegments")),
-  sourceScreenshotId: v.optional(v.id("screenshots")),
-};
-
-const proposal = v.union(
-  v.object({
-    type: v.literal("createTask"),
-    title: v.string(),
-    estimateMin: v.number(),
-    dueMs: v.optional(v.number()),
-    block: v.optional(v.object({ start: v.number(), end: v.number() })),
-    ...source,
-  }),
-  v.object({
-    type: v.literal("draftLinear"),
-    issueRef: v.string(),
-    body: v.string(),
-    ...source,
-  })
-);
 
 /** The task database the assistant writes to: the oldest visible task source. */
 async function taskDatabase(ctx: MutationCtx): Promise<Doc<"databases">> {
@@ -71,138 +51,141 @@ async function taskDatabase(ctx: MutationCtx): Promise<Doc<"databases">> {
   throw new Error("No task database: mark a database as a task source first");
 }
 
-export const applyActions = mutation({
-  args: { actions: v.array(proposal), tzOffsetMin: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+/** Apply proposals as one write: validated first, then written and logged for undo. */
+async function applyAll(ctx: MutationCtx, args: { actions: Proposal[]; tzOffsetMin?: number }) {
     if (args.actions.length > MAX_ACTIONS_PER_CALL) {
-      throw new Error(`At most ${MAX_ACTIONS_PER_CALL} actions per call`);
+    throw new Error(`At most ${MAX_ACTIONS_PER_CALL} actions per call`);
+  }
+  const now = Date.now();
+  // Validate every proposal before writing anything. A throw also rolls the whole
+  // mutation back, but checking first keeps the error about the input, not a half-write.
+  for (const a of args.actions) {
+    if (a.sourceSegmentId && !(await ctx.db.get(a.sourceSegmentId))) {
+      throw new Error(`Source segment ${a.sourceSegmentId} does not exist`);
     }
-    const now = Date.now();
-    // Validate every proposal before writing anything. A throw also rolls the whole
-    // mutation back, but checking first keeps the error about the input, not a half-write.
-    for (const a of args.actions) {
-      if (a.sourceSegmentId && !(await ctx.db.get(a.sourceSegmentId))) {
-        throw new Error(`Source segment ${a.sourceSegmentId} does not exist`);
-      }
-      if (a.sourceScreenshotId && !(await ctx.db.get(a.sourceScreenshotId))) {
-        throw new Error(`Source screenshot ${a.sourceScreenshotId} does not exist`);
-      }
-      if (a.type === "createTask") {
-        assertTitle(a.title);
-        if (!Number.isFinite(a.estimateMin) || a.estimateMin <= 0 || a.estimateMin > MAX_ESTIMATE_MIN) {
-          throw new Error(`Estimate must be 1–${MAX_ESTIMATE_MIN} minutes, got ${a.estimateMin}`);
-        }
-        if (a.dueMs !== undefined) assertTime("due date", a.dueMs);
-        if (a.block) {
-          const { start, end } = a.block;
-          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
-            throw new Error("Invalid time block: it must end after it starts");
-          }
-          if (end - start > MAX_BLOCK_MS) throw new Error("Invalid time block: longer than a working day");
-          if (end <= now) throw new Error("Invalid time block: it is already over");
-        }
-      } else {
-        assertIssueRef(a.issueRef);
-        assertDraftBody(a.body);
-      }
+    if (a.sourceScreenshotId && !(await ctx.db.get(a.sourceScreenshotId))) {
+      throw new Error(`Source screenshot ${a.sourceScreenshotId} does not exist`);
     }
-
-    const groupIds: string[] = [];
-    // Where each task's group came from, for its createTask row written after the reflow.
-    const taskSources = new Map<Id<"rows">, { sourceSegmentId?: Id<"captureSegments">; sourceScreenshotId?: Id<"screenshots"> }>();
-    let touchedTasks = false;
-    for (const a of args.actions) {
-      const { sourceSegmentId, sourceScreenshotId } = a;
-      if (a.type === "draftLinear") {
-        const draftId = await ctx.db.insert("externalDrafts", {
-          target: "linear",
-          issueRef: a.issueRef,
-          body: a.body,
-          status: "pending",
-          createdAt: now,
-          updatedAt: now,
-        });
-        await ctx.db.insert("assistantActions", {
-          kind: "draftLinear",
-          at: now,
-          groupId: draftId,
-          draftId,
-          sourceSegmentId,
-          sourceScreenshotId,
-        });
-        groupIds.push(draftId);
-        continue;
+    if (a.type === "createTask") {
+      assertTitle(a.title);
+      if (!Number.isFinite(a.estimateMin) || a.estimateMin <= 0 || a.estimateMin > MAX_ESTIMATE_MIN) {
+        throw new Error(`Estimate must be 1–${MAX_ESTIMATE_MIN} minutes, got ${a.estimateMin}`);
       }
+      if (a.dueMs !== undefined) assertTime("due date", a.dueMs);
+      if (a.block) {
+        const { start, end } = a.block;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+          throw new Error("Invalid time block: it must end after it starts");
+        }
+        if (end - start > MAX_BLOCK_MS) throw new Error("Invalid time block: longer than a working day");
+        if (end <= now) throw new Error("Invalid time block: it is already over");
+      }
+    } else {
+      assertIssueRef(a.issueRef);
+      assertDraftBody(a.body);
+    }
+  }
 
-      const db = await taskDatabase(ctx);
-      const config = db.taskConfig;
-      if (!config) throw new Error(`"${db.name}" has no task configuration`);
-      const props: PropertyDef[] = db.properties;
-      const titleProp = props.find((p) => p.type === "title");
-      if (!titleProp) throw new Error(`"${db.name}" has no title property`);
-      const todo = props
-        .find((p) => p.id === config.statusPropId)
-        ?.options?.find((o) => o.group === "todo");
-      const changes: PropertyBag = {
-        [titleProp.id]: a.title,
-        [config.estimatePropId]: a.estimateMin,
-        ...(a.dueMs !== undefined && { [config.datePropId]: { start: a.dueMs, includeTime: true } }),
-        ...(todo && { [config.statusPropId]: todo.id }),
-      };
-      const rowId = await ctx.db.insert("rows", {
-        databaseId: db._id,
-        title: "",
-        properties: {},
-        order: now,
+  const groupIds: string[] = [];
+  // Where each task's group came from, for its createTask row written after the reflow.
+  const taskSources = new Map<Id<"rows">, { sourceSegmentId?: Id<"captureSegments">; sourceScreenshotId?: Id<"screenshots"> }>();
+  let touchedTasks = false;
+  for (const a of args.actions) {
+    const { sourceSegmentId, sourceScreenshotId } = a;
+    if (a.type === "draftLinear") {
+      const draftId = await ctx.db.insert("externalDrafts", {
+        target: "linear",
+        issueRef: a.issueRef,
+        body: a.body,
+        status: "pending",
+        createdAt: now,
         updatedAt: now,
       });
-      const fresh = await ctx.db.get(rowId);
-      if (!fresh) throw new Error(`Row ${rowId} vanished right after it was created`);
-      // Through the shared writer, so the title is denormalized and every value validated.
-      await changeProperties(ctx, fresh, db, changes);
-      touchedTasks = true;
-
-      if (a.block) {
-        const blockId = await ctx.db.insert("timeBlocks", {
-          taskRowId: rowId,
-          databaseId: db._id,
-          start: a.block.start,
-          end: a.block.end,
-          locked: true,
-        });
-        await ctx.db.insert("assistantActions", {
-          kind: "createBlock",
-          at: now,
-          groupId: rowId,
-          blockId,
-          taskRowId: rowId,
-          start: a.block.start,
-          end: a.block.end,
-          sourceSegmentId,
-          sourceScreenshotId,
-        });
-      }
-      taskSources.set(rowId, { sourceSegmentId, sourceScreenshotId });
-      groupIds.push(rowId);
-    }
-    if (touchedTasks) await runReflow(ctx, args.tzOffsetMin);
-
-    // Fingerprint the tasks only after the reflow, so undo compares against the state the
-    // assistant actually left behind.
-    for (const [rowId, sources] of taskSources) {
-      const row = await ctx.db.get(rowId);
-      if (!row) throw new Error(`Task ${rowId} vanished during the reflow`);
       await ctx.db.insert("assistantActions", {
-        kind: "createTask",
+        kind: "draftLinear",
+        at: now,
+        groupId: draftId,
+        draftId,
+        sourceSegmentId,
+        sourceScreenshotId,
+      });
+      groupIds.push(draftId);
+      continue;
+    }
+
+    const db = await taskDatabase(ctx);
+    const config = db.taskConfig;
+    if (!config) throw new Error(`"${db.name}" has no task configuration`);
+    const props: PropertyDef[] = db.properties;
+    const titleProp = props.find((p) => p.type === "title");
+    if (!titleProp) throw new Error(`"${db.name}" has no title property`);
+    const todo = props
+      .find((p) => p.id === config.statusPropId)
+      ?.options?.find((o) => o.group === "todo");
+    const changes: PropertyBag = {
+      [titleProp.id]: a.title,
+      [config.estimatePropId]: a.estimateMin,
+      ...(a.dueMs !== undefined && { [config.datePropId]: { start: a.dueMs, includeTime: true } }),
+      ...(todo && { [config.statusPropId]: todo.id }),
+    };
+    const rowId = await ctx.db.insert("rows", {
+      databaseId: db._id,
+      title: "",
+      properties: {},
+      order: now,
+      updatedAt: now,
+    });
+    const fresh = await ctx.db.get(rowId);
+    if (!fresh) throw new Error(`Row ${rowId} vanished right after it was created`);
+    // Through the shared writer, so the title is denormalized and every value validated.
+    await changeProperties(ctx, fresh, db, changes);
+    touchedTasks = true;
+
+    if (a.block) {
+      const blockId = await ctx.db.insert("timeBlocks", {
+        taskRowId: rowId,
+        databaseId: db._id,
+        start: a.block.start,
+        end: a.block.end,
+        locked: true,
+      });
+      await ctx.db.insert("assistantActions", {
+        kind: "createBlock",
         at: now,
         groupId: rowId,
-        rowId,
-        rowFingerprint: rowFingerprint(row),
-        ...sources,
+        blockId,
+        taskRowId: rowId,
+        start: a.block.start,
+        end: a.block.end,
+        sourceSegmentId,
+        sourceScreenshotId,
       });
     }
-    return { groupIds };
-  },
+    taskSources.set(rowId, { sourceSegmentId, sourceScreenshotId });
+    groupIds.push(rowId);
+  }
+  if (touchedTasks) await runReflow(ctx, args.tzOffsetMin);
+
+  // Fingerprint the tasks only after the reflow, so undo compares against the state the
+  // assistant actually left behind.
+  for (const [rowId, sources] of taskSources) {
+    const row = await ctx.db.get(rowId);
+    if (!row) throw new Error(`Task ${rowId} vanished during the reflow`);
+    await ctx.db.insert("assistantActions", {
+      kind: "createTask",
+      at: now,
+      groupId: rowId,
+      rowId,
+      rowFingerprint: rowFingerprint(row),
+      ...sources,
+    });
+  }
+  return { groupIds };
+}
+
+export const applyActions = mutation({
+  args: { actions: v.array(proposal), tzOffsetMin: v.optional(v.number()) },
+  handler: (ctx, args) => applyAll(ctx, args),
 });
 
 /**
@@ -337,29 +320,6 @@ export const setDraftStatus = mutation({
   },
 });
 
-export const recordUsage = mutation({
-  args: { day: v.string(), inputTokens: v.number(), outputTokens: v.number(), costUsd: v.number() },
-  handler: async (ctx, args) => {
-    assertDay(args.day);
-    assertCount("input tokens", args.inputTokens);
-    assertCount("output tokens", args.outputTokens);
-    assertCost(args.costUsd);
-    const row = await ctx.db
-      .query("assistantUsage")
-      .withIndex("by_day", (q) => q.eq("day", args.day))
-      .unique();
-    if (row) {
-      await ctx.db.patch(row._id, {
-        inputTokens: row.inputTokens + args.inputTokens,
-        outputTokens: row.outputTokens + args.outputTokens,
-        costUsd: row.costUsd + args.costUsd,
-      });
-    } else {
-      await ctx.db.insert("assistantUsage", args);
-    }
-  },
-});
-
 /** Spend against the daily cap. No cap set reads as reached: the assistant must not run. */
 export const capStatus = query({
   args: { day: v.string() },
@@ -374,63 +334,291 @@ export const capStatus = query({
       .query("assistantUsage")
       .withIndex("by_day", (q) => q.eq("day", args.day))
       .unique();
-    const spentUsd = usage?.costUsd ?? 0;
+    const spentUsd = (usage?.costUsd ?? 0) + (await reservedUsd(ctx, args.day));
     return { capUsd, spentUsd, reached: capUsd === null || spentUsd >= capUsd };
   },
 });
 
-// What the assistant reads (plan PR 6a): the transcripts and screenshot text in a window,
-// oldest first. Bounded: a batch never grows past this, and what is left waits for the next.
+// What the assistant reads and spends (plan PR 6a; Codex review of PR 6a, round 1). Each item
+// carries whether it was read; a call reserves its worst case against the cap before it is
+// made; settling records its real cost, marks exactly the items it read, and keeps its
+// proposals, in one write. A time watermark skipped transcripts written late and resent part
+// of a batch; this can't.
 const MAX_INPUT_ROWS = 200;
+// How many pages one batch may read past rows too long for the cap (electron/dayAssistant.mjs).
+const MAX_CURSOR_PAGES = 10;
+// A call still in flight after this was abandoned (a crash, a quit mid-call): it stays counted
+// at its reservation, and its items are read again. Past the SDK's own request timeout.
+const ABANDON_MS = 30 * 60_000;
 
-export const input = query({
-  args: { after: v.number(), until: v.number() },
-  handler: async (ctx, { after, until }) => {
-    assertTime("window start", after);
-    assertTime("window end", until);
-    if (until < after) throw new Error("Invalid window: it ends before it starts");
-    const transcripts = await ctx.db
+async function reservedUsd(ctx: QueryCtx, day: string): Promise<number> {
+  const inFlight = await ctx.db
+    .query("assistantRequests")
+    .withIndex("by_day_status", (q) => q.eq("day", day).eq("status", "inFlight"))
+    .collect();
+  return inFlight.reduce((sum, r) => sum + r.reservedUsd, 0);
+}
+
+async function addUsage(ctx: MutationCtx, day: string, inputTokens: number, outputTokens: number, costUsd: number) {
+  const row = await ctx.db
+    .query("assistantUsage")
+    .withIndex("by_day", (q) => q.eq("day", day))
+    .unique();
+  if (row) {
+    await ctx.db.patch(row._id, {
+      inputTokens: row.inputTokens + inputTokens,
+      outputTokens: row.outputTokens + outputTokens,
+      costUsd: row.costUsd + costUsd,
+    });
+  } else {
+    await ctx.db.insert("assistantUsage", { day, inputTokens, outputTokens, costUsd });
+  }
+}
+
+async function globalSettings(ctx: QueryCtx) {
+  return ctx.db
+    .query("settings")
+    .withIndex("by_key", (q) => q.eq("key", "global"))
+    .unique();
+}
+
+// Where a page of unread rows ended: its last row's time, and the ids already returned at that
+// exact time, so a row sharing it is neither skipped nor returned twice (Codex #6a r4).
+const after = v.optional(v.object({ at: v.number(), ids: v.array(v.string()) }));
+
+/** A page of rows from `from` on, past `cursor`; and the cursor its last row leaves. */
+function page<R extends { _id: string }>(rows: R[], limit: number, timeOf: (r: R) => number, cursor?: { at: number; ids: string[] }) {
+  const seen = new Set(cursor?.ids ?? []);
+  const fresh = rows.filter((r) => !(cursor && timeOf(r) === cursor.at && seen.has(r._id))).slice(0, limit);
+  const last = fresh.at(-1);
+  const tied = last ? fresh.filter((r) => timeOf(r) === timeOf(last)).map((r) => r._id) : [];
+  const ids = last && cursor && timeOf(last) === cursor.at ? [...cursor.ids, ...tied] : tied;
+  return { rows: fresh, done: fresh.length < limit, after: last ? { at: timeOf(last), ids } : cursor };
+}
+
+/**
+ * Unread transcripts and screen text captured since `since`, oldest first, a page of each.
+ * `transcriptAfter` / `screenshotAfter` continue after an earlier page: a page whose rows are
+ * all too long for what is left of the cap must not hide the rows behind it (Codex #6a r4).
+ */
+export const unread = query({
+  args: { since: v.number(), limit: v.number(), transcriptAfter: after, screenshotAfter: after },
+  handler: async (ctx, { since, limit, transcriptAfter, screenshotAfter }) => {
+    assertTime("since", since);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_INPUT_ROWS) {
+      throw new Error(`The limit must be 1–${MAX_INPUT_ROWS}, got ${limit}`);
+    }
+    for (const cursor of [transcriptAfter, screenshotAfter]) {
+      if (!cursor) continue;
+      assertTime("cursor", cursor.at);
+      if (cursor.ids.length > MAX_INPUT_ROWS * MAX_CURSOR_PAGES) throw new Error("The cursor names too many rows");
+    }
+    // Ties at the cursor's time are fetched again and filtered: at most the ids it names more.
+    const tFrom = Math.max(since, transcriptAfter?.at ?? since);
+    const sFrom = Math.max(since, screenshotAfter?.at ?? since);
+    const tRows = await ctx.db
       .query("transcripts")
-      .withIndex("by_start", (q) => q.gt("start", after).lte("start", until))
-      .take(MAX_INPUT_ROWS);
-    const screenshots = await ctx.db
+      .withIndex("by_read_start", (q) => q.eq("readAt", undefined).gte("start", tFrom))
+      .take(limit + (transcriptAfter?.ids.length ?? 0));
+    const sRows = await ctx.db
       .query("screenshots")
-      .withIndex("by_takenAt", (q) => q.gt("takenAt", after).lte("takenAt", until))
-      .take(MAX_INPUT_ROWS);
+      .withIndex("by_read_takenAt", (q) => q.eq("readAt", undefined).gte("takenAt", sFrom))
+      .take(limit + (screenshotAfter?.ids.length ?? 0));
+    const tPage = page(tRows, limit, (r) => r.start, transcriptAfter);
+    const sPage = page(sRows, limit, (r) => r.takenAt, screenshotAfter);
+    const transcripts = tPage.rows;
+    const screenshots = sPage.rows;
     return {
-      transcripts: transcripts.map((r) => ({ _id: r._id, segmentId: r.segmentId, start: r.start, end: r.end, text: r.text })),
+      transcriptsDone: tPage.done,
+      screenshotsDone: sPage.done,
+      ...(tPage.after && { transcriptAfter: tPage.after }),
+      ...(sPage.after && { screenshotAfter: sPage.after }),
+      transcripts: transcripts.map((r) => ({
+        _id: r._id,
+        segmentId: r.segmentId,
+        start: r.start,
+        end: r.end,
+        text: r.text,
+        ...(r.readChars !== undefined && { readChars: r.readChars }),
+      })),
       screenshots: screenshots.map((r) => ({
         _id: r._id,
         takenAt: r.takenAt,
         ocrText: r.ocrText,
         ...(r.appBundleId !== undefined && { appBundleId: r.appBundleId }),
+        ...(r.readChars !== undefined && { readChars: r.readChars }),
       })),
     };
   },
 });
 
-export const watermark = query({
-  args: {},
-  handler: async (ctx) => {
-    const settings = await ctx.db
-      .query("settings")
-      .withIndex("by_key", (q) => q.eq("key", "global"))
-      .unique();
-    return settings?.assistantWatermark ?? null;
+function assertEnds(name: string, ends: number[] | undefined, count: number) {
+  if (ends === undefined) return;
+  if (ends.length !== count) throw new Error(`${name} ends must match its items: ${ends.length} for ${count}`);
+  for (const end of ends) {
+    if (!Number.isInteger(end) || end < 0) throw new Error(`${name} ends must be whole character counts, got ${end}`);
+  }
+}
+
+/** How far an item has now been read: done (readAt) once its part reaches the end. */
+function readPatch(length: number, readChars: number | undefined, end: number | undefined, now: number) {
+  if (end === undefined || end >= length) return { readAt: now };
+  return { readChars: Math.max(readChars ?? 0, end) };
+}
+
+/** Where the assistant starts reading: the first value given is kept. */
+export const ensureStart = mutation({
+  args: { at: v.number() },
+  handler: async (ctx, { at }) => {
+    assertTime("start", at);
+    const settings = await globalSettings(ctx);
+    if (!settings) throw new Error("No settings yet: open Geekspace once first");
+    if (settings.assistantSince !== undefined) return settings.assistantSince;
+    await ctx.db.patch(settings._id, { assistantSince: at });
+    return at;
   },
 });
 
-/** Move the watermark forward; an older value is ignored, so a late writer can't rewind it. */
-export const setWatermark = mutation({
-  args: { at: v.number() },
-  handler: async (ctx, { at }) => {
-    assertTime("watermark", at);
-    const settings = await ctx.db
-      .query("settings")
-      .withIndex("by_key", (q) => q.eq("key", "global"))
-      .unique();
-    if (!settings) throw new Error("No settings yet: open Geekspace once first");
-    if ((settings.assistantWatermark ?? 0) >= at) return;
-    await ctx.db.patch(settings._id, { assistantWatermark: at });
+/**
+ * Reserve a call's worst case. Null when it doesn't fit what is left of the day's cap (or no
+ * cap is set): the call must not be made. Calls abandoned in flight are closed here, counted
+ * at their reservations.
+ */
+export const beginRequest = mutation({
+  args: {
+    day: v.string(),
+    reservedUsd: v.number(),
+    transcriptIds: v.array(v.id("transcripts")),
+    screenshotIds: v.array(v.id("screenshots")),
+    transcriptEnds: v.optional(v.array(v.number())),
+    screenshotEnds: v.optional(v.array(v.number())),
   },
+  handler: async (ctx, args) => {
+    assertDay(args.day);
+    assertCost(args.reservedUsd);
+    assertEnds("Transcript", args.transcriptEnds, args.transcriptIds.length);
+    assertEnds("Screenshot", args.screenshotEnds, args.screenshotIds.length);
+    if (args.transcriptIds.length > MAX_INPUT_ROWS || args.screenshotIds.length > MAX_INPUT_ROWS) {
+      throw new Error(`At most ${MAX_INPUT_ROWS} items of each kind per call`);
+    }
+    const now = Date.now();
+    for (const r of await ctx.db.query("assistantRequests").withIndex("by_status", (q) => q.eq("status", "inFlight")).collect()) {
+      if (now - r.at < ABANDON_MS) continue;
+      await addUsage(ctx, r.day, 0, 0, r.reservedUsd);
+      await ctx.db.patch(r._id, { status: "done" });
+    }
+    const settings = await globalSettings(ctx);
+    const capUsd = settings?.assistantDailyCapUsd ?? null;
+    if (capUsd === null) return null;
+    const usage = await ctx.db
+      .query("assistantUsage")
+      .withIndex("by_day", (q) => q.eq("day", args.day))
+      .unique();
+    const committed = (usage?.costUsd ?? 0) + (await reservedUsd(ctx, args.day));
+    if (committed + args.reservedUsd > capUsd) return null;
+    return ctx.db.insert("assistantRequests", { ...args, at: now, status: "inFlight" });
+  },
+});
+
+/**
+ * The call answered: its real cost replaces its reservation, exactly its items are marked
+ * read, and its proposals are kept to be applied. Sent again after a lost answer, a no-op.
+ */
+export const settleRequest = mutation({
+  args: {
+    requestId: v.id("assistantRequests"),
+    costUsd: v.number(),
+    inputTokens: v.number(),
+    outputTokens: v.number(),
+    proposals: v.array(proposal),
+  },
+  handler: async (ctx, args) => {
+    assertCost(args.costUsd);
+    assertCount("input tokens", args.inputTokens);
+    assertCount("output tokens", args.outputTokens);
+    if (args.proposals.length > MAX_ACTIONS_PER_CALL) throw new Error(`At most ${MAX_ACTIONS_PER_CALL} proposals per call`);
+    const req = await ctx.db.get(args.requestId);
+    if (!req) throw new Error(`Request ${args.requestId} does not exist`);
+    if (req.status !== "inFlight") return;
+    await addUsage(ctx, req.day, args.inputTokens, args.outputTokens, args.costUsd);
+    const now = Date.now();
+    for (const [i, id] of req.transcriptIds.entries()) {
+      const row = await ctx.db.get(id);
+      if (row) await ctx.db.patch(id, readPatch(row.text.length, row.readChars, req.transcriptEnds?.[i], now));
+    }
+    for (const [i, id] of req.screenshotIds.entries()) {
+      const row = await ctx.db.get(id);
+      if (row) await ctx.db.patch(id, readPatch(row.ocrText.length, row.readChars, req.screenshotEnds?.[i], now));
+    }
+    await ctx.db.patch(args.requestId, {
+      costUsd: args.costUsd,
+      inputTokens: args.inputTokens,
+      outputTokens: args.outputTokens,
+      status: args.proposals.length > 0 ? "settled" : "done",
+      proposals: args.proposals.map((p) => ({ proposal: p, state: "pending" as const })),
+    });
+  },
+});
+
+/** The API refused the call before doing any work: nothing was paid, its items are read again. */
+export const failRequest = mutation({
+  args: { requestId: v.id("assistantRequests") },
+  handler: async (ctx, { requestId }) => {
+    const req = await ctx.db.get(requestId);
+    if (req?.status === "inFlight") await ctx.db.patch(requestId, { status: "done" });
+  },
+});
+
+/**
+ * The call failed in a way that doesn't prove nothing was done (a dropped connection, a
+ * timeout, a server error): it stays charged at its reservation, and its items are read again
+ * (Codex review of PR 6a, round 2).
+ */
+export const abandonRequest = mutation({
+  args: { requestId: v.id("assistantRequests") },
+  handler: async (ctx, { requestId }) => {
+    const req = await ctx.db.get(requestId);
+    if (req?.status !== "inFlight") return;
+    await addUsage(ctx, req.day, 0, 0, req.reservedUsd);
+    await ctx.db.patch(requestId, { status: "done" });
+  },
+});
+
+/** Calls not finished: in flight, or with proposals still to apply. */
+export const openRequests = query({
+  args: {},
+  handler: async (ctx) => {
+    const inFlight = await ctx.db.query("assistantRequests").withIndex("by_status", (q) => q.eq("status", "inFlight")).collect();
+    const settled = await ctx.db.query("assistantRequests").withIndex("by_status", (q) => q.eq("status", "settled")).collect();
+    return [...inFlight, ...settled].map((r) => ({ _id: r._id, status: r.status, at: r.at, proposals: r.proposals ?? [] }));
+  },
+});
+
+async function resolveProposal(
+  ctx: MutationCtx,
+  requestId: Id<"assistantRequests">,
+  index: number,
+  state: "applied" | "refused",
+  tzOffsetMin?: number
+) {
+  const req = await ctx.db.get(requestId);
+  if (!req) throw new Error(`Request ${requestId} does not exist`);
+  const proposals = req.proposals ?? [];
+  if (!Number.isInteger(index) || index < 0 || index >= proposals.length) throw new Error(`No proposal ${index} in this request`);
+  if (proposals[index].state !== "pending") return;
+  if (state === "applied") await applyAll(ctx, { actions: [proposals[index].proposal], tzOffsetMin });
+  const next = proposals.map((p, i) => (i === index ? { ...p, state } : p));
+  await ctx.db.patch(requestId, { proposals: next, ...(next.every((p) => p.state !== "pending") && { status: "done" as const }) });
+}
+
+/** Apply one kept proposal, once. Throws (and changes nothing) when Geekspace won't take it. */
+export const applyProposal = mutation({
+  args: { requestId: v.id("assistantRequests"), index: v.number(), tzOffsetMin: v.optional(v.number()) },
+  handler: (ctx, { requestId, index, tzOffsetMin }) => resolveProposal(ctx, requestId, index, "applied", tzOffsetMin),
+});
+
+/** A kept proposal Geekspace refused: it is not tried again. */
+export const refuseProposal = mutation({
+  args: { requestId: v.id("assistantRequests"), index: v.number() },
+  handler: (ctx, { requestId, index }) => resolveProposal(ctx, requestId, index, "refused"),
 });

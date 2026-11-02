@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { remainingLabel } from "../../lib/callPrompt";
+import { promptAfterFetch, remainingLabel } from "../../lib/callPrompt";
 import {
   answerCall,
   currentCallPrompt,
@@ -21,19 +21,23 @@ export function CallPrompt() {
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Busy for one call only: a slow answer for an earlier call never locks a newer prompt.
+  const [busyFor, setBusyFor] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  // Whether an event has come in: then the first fetch's answer is older than it.
+  const heard = useRef(false);
 
   useEffect(() => {
     let live = true;
     const off = onCallPrompt((p) => {
+      heard.current = true;
       setPrompt(p);
       setError(null);
     });
     void currentCallPrompt().then((r) => {
       if (!live) return;
       // An event that arrived first is newer than this answer.
-      if (r.ok) setPrompt((current) => current ?? r.data);
+      if (r.ok) setPrompt((current) => promptAfterFetch({ heard: heard.current, current }, r.data));
       else if (dayRecorderAvailable()) setError(r.error);
     });
     return () => {
@@ -62,11 +66,13 @@ export function CallPrompt() {
     ) : null;
   }
 
+  const shownId = prompt.callId;
+  const busy = busyFor === shownId;
   async function run(action: () => Promise<{ ok: boolean; error?: string }>) {
-    setBusy(true);
+    setBusyFor(shownId);
     const r = await action();
-    setBusy(false);
-    setError(r.ok ? null : (r.error ?? "That didn't go through."));
+    setBusyFor((current) => (current === shownId ? null : current));
+    if (!r.ok) setError(r.error ?? "That didn't go through.");
   }
 
   const panel = "fade-in fixed bottom-5 left-5 z-[60] w-[340px] rounded-xl border bg-raised p-4 text-[13px]";
