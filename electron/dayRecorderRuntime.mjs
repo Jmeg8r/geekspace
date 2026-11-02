@@ -241,6 +241,8 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),
       logEvent: (event) => logEvent(event),
       screenshot: (screenshotId) => client.query(api.assistant.screenshot, { screenshotId }),
+      dayRecord: (args) => client.query(api.assistant.dayRecord, args),
+      saveSummary: (args) => client.mutation(api.assistant.saveSummary, args),
     },
     resolvePath: (rel) => resolveMediaPath(mediaRoot, rel),
     toJpeg: (file) => screenshotJpeg(file, imageWork),
@@ -311,6 +313,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     linear,
     assistant: {
       requestImage: (screenshotId) => assistant.sendImage(logImageSent, screenshotId),
+      summarize: (day, from, to) => assistant.summarize(day, from, to),
     },
     service,
     view,

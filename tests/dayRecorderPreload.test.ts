@@ -14,7 +14,7 @@ type IpcEventStub = { sender: string };
 type DayRecorderEvent = { type: "status"; status: { status: string } };
 type IpcListener = (event: IpcEventStub, data: DayRecorderEvent) => void;
 type IpcReply = { ok: boolean };
-type PreloadArg = boolean | string | ((event: DayRecorderEvent) => void);
+type PreloadArg = boolean | string | number | ((event: DayRecorderEvent) => void);
 type PreloadFn = (...args: PreloadArg[]) => Promise<IpcReply> | (() => void);
 type Namespaces = Record<string, Record<string, PreloadFn>>;
 

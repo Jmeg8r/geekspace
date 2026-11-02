@@ -600,7 +600,7 @@ describe("registerAssistantIpc", () => {
     const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() };
     const requestImage = vi.fn(async () => ({ ok: true as const, actions: 0 }));
     let running = false;
-    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => (running ? { requestImage } : null) });
+    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => (running ? { requestImage, summarize: vi.fn() } : null) });
     const ask = handlers.get("gs:assistant:requestImage")!;
     await expect(Promise.resolve(ask({ screenshotId: "shot1" }))).resolves.toEqual({ ok: false, reason: "The Day Recorder isn't running" });
     running = true;

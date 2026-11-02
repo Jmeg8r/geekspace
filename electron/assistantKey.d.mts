@@ -23,13 +23,23 @@ export function createKeyStore(options: {
 }): KeyStore;
 
 type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
+type SummaryResult = { ok: true; items: number } | { ok: false; reason: string };
 
 export function registerAssistantIpc(options: {
   handle: (
     channel: string,
-    fn: (args: { key?: string | number | null; screenshotId?: string | number | null }) => boolean | void | ImageResult | Promise<ImageResult>
+    fn: (args: {
+      key?: string | number | null;
+      screenshotId?: string | number | null;
+      day?: string | number | null;
+      from?: string | number | null;
+      to?: string | number | null;
+    }) => boolean | void | ImageResult | SummaryResult | Promise<ImageResult | SummaryResult>
   ) => void;
   keyStore: Pick<KeyStore, "set" | "has" | "clear">;
   /** The running recorder's image requests; null when the recorder is not running. */
-  assistant: () => { requestImage: (screenshotId: string) => Promise<ImageResult> } | null;
+  assistant: () => {
+    requestImage: (screenshotId: string) => Promise<ImageResult>;
+    summarize: (day: string, from: number, to: number) => Promise<SummaryResult>;
+  } | null;
 }): void;

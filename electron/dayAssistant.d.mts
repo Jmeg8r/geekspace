@@ -53,8 +53,19 @@ export type ImageSentLogger = (event: { screenshotId: string }) => Promise<void>
 /** What came of an image request, in words for the page. */
 export type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
 
+/** What came of a summary request, in words for the page. */
+export type SummaryResult = { ok: true; items: number } | { ok: false; reason: string };
+
+type DayRecordRows = {
+  transcripts: { _id: string; segmentId: string; start: number; end: number; text: string }[];
+  screenshots: { _id: string; takenAt: number; ocrText: string; purged: boolean; appBundleId?: string }[];
+  more: { transcripts: boolean; screenshots: boolean };
+};
+
 export type DayAssistant = {
   runBatch: () => Promise<void>;
+  /** The end-of-day summary of one local day (`from`–`to`), on request. */
+  summarize: (day: string, from: number, to: number) => Promise<SummaryResult>;
   /** The logger is required and comes first (spec R9): an unlogged send does not compile. */
   sendImage: (logImageSent: ImageSentLogger, screenshotId: string) => Promise<ImageResult>;
   stop: () => Promise<void>;
@@ -103,6 +114,8 @@ export function createDayAssistant(options: {
     applyProposal: (args: { requestId: string; index: number; tzOffsetMin?: number }) => Promise<void>;
     refuseProposal: (args: { requestId: string; index: number }) => Promise<void>;
     logEvent: (event: { kind: "capPaused"; detail: string }) => Promise<void>;
+    dayRecord: (args: { from: number; to: number }) => Promise<DayRecordRows>;
+    saveSummary: (args: { day: string; items: { text: string; sourceSegmentId?: string; sourceScreenshotId?: string }[] }) => Promise<void>;
     screenshot: (screenshotId: string) => Promise<{ _id: string; path: string; takenAt: number; appBundleId?: string } | null>;
   };
   log: (message: string) => void;
