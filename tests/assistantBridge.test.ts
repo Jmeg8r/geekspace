@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { approveDraft, assistantAvailable, clearApiKey, hasApiKey, hasLinearKey, saveApiKey, saveLinearKey } from "../src/lib/assistantBridge";
+import {
+  approveDraft,
+  assistantAvailable,
+  clearApiKey,
+  hasApiKey,
+  hasLinearKey,
+  requestImage as requestImage_,
+  saveApiKey,
+  saveLinearKey,
+  summarizeDay,
+} from "../src/lib/assistantBridge";
 
 // WHAT: the page's side of the assistant's key (plan PR 6a, spec F4). WHY tested: the key goes
 // in and never comes back out, and a failure to save it must come back as an error the
@@ -61,5 +71,24 @@ describe("assistantBridge, Linear", () => {
   it("needs the desktop app", async () => {
     vi.stubGlobal("window", {});
     expect(await hasLinearKey()).toEqual({ ok: false, error: "Linear needs the desktop app." });
+  });
+});
+
+// Plan PR 6c: the Day Record view asks for a screen's image by id, and for the day's summary.
+describe("assistantBridge, image and summary requests", () => {
+  const installAssistant = (bridge: Record<string, unknown>) => vi.stubGlobal("window", { geekspace: { assistant: bridge } });
+
+  it("asks for one screenshot's image by id", async () => {
+    const requestImage = vi.fn(async () => ({ ok: true as const, data: { ok: true as const, actions: 1 } }));
+    installAssistant({ requestImage });
+    expect(await requestImage_("shot1")).toEqual({ ok: true, data: { ok: true, actions: 1 } });
+    expect(requestImage).toHaveBeenCalledWith("shot1");
+  });
+
+  it("asks for a day's summary with its window, and passes a refusal through", async () => {
+    const summarize = vi.fn(async () => ({ ok: true as const, data: { ok: false as const, reason: "Today's cap is used up" } }));
+    installAssistant({ summarize });
+    expect(await summarizeDay("2026-11-02", 1, 2)).toEqual({ ok: true, data: { ok: false, reason: "Today's cap is used up" } });
+    expect(summarize).toHaveBeenCalledWith("2026-11-02", 1, 2);
   });
 });

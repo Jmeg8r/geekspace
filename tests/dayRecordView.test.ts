@@ -39,7 +39,7 @@ const draft: DayAction = { _id: "a3", kind: "draftLinear", at: at(11), groupId: 
 
 describe("groupActions and undoLabel", () => {
   it("groups a task with its block, oldest first, and keeps whether the group was undone", () => {
-    const groups = groupActions([draft, block, task, { ...task, _id: "a4", groupId: "g3", undoneAt: at(12) }]);
+    const groups = groupActions([draft, block, task, { ...task, _id: "a4", at: at(12), groupId: "g3", undoneAt: at(12, 30) }]);
     expect(groups.map((g) => [g.groupId, g.actions.map((a) => a._id), g.undone])).toEqual([
       ["g1", ["a1", "a2"], false],
       ["g2", ["a3"], false],
