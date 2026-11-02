@@ -50,6 +50,25 @@ const reply = (actions: object[], usage: Reply["usage"] = { input_tokens: 2_000,
   usage,
 });
 
+type DayRecord = {
+  transcripts: { _id: string; segmentId: string; start: number; end: number; text: string }[];
+  screenshots: { _id: string; takenAt: number; ocrText: string; purged: boolean; appBundleId?: string }[];
+  more: { transcripts: boolean; screenshots: boolean };
+};
+const DAY_RECORD: DayRecord = {
+  transcripts: [{ _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 540_000, text: "SYNTHETIC: I'll send the deck by Thursday" }],
+  screenshots: [{ _id: "shot1", takenAt: Date.now() - 300_000, ocrText: "SYNTHETIC: Q4 plan draft", purged: false, appBundleId: "com.example.editor" }],
+  more: { transcripts: false, screenshots: false },
+};
+const summaryReply = (items: object[]): Reply => ({
+  content: [{ type: "text", text: JSON.stringify({ items }) }],
+  stop_reason: "end_turn",
+  model: MODEL,
+  usage: { input_tokens: 3_000, output_tokens: 400 },
+});
+const FROM = Date.now() - 86_400_000;
+const TO = Date.now();
+
 // SYNTHETIC: stands in for a converted screenshot.
 const JPEG = Buffer.from("SYNTHETIC JPEG BYTES");
 
@@ -69,8 +88,11 @@ function harness(
     open?: Open[];
     shot?: { _id: string; path: string; takenAt: number; appBundleId?: string } | null;
     resolveFails?: boolean;
+    day?: DayRecord;
+    saveFails?: boolean;
   } = {}
 ) {
+  const summaries: { day: string; items: object[] }[] = [];
   const requests: AssistantRequest[] = [];
   const calls: string[] = [];
   const unreadArgs: { transcriptAfter?: object; screenshotAfter?: object }[] = [];
@@ -126,6 +148,11 @@ function harness(
         open = open.map((r) => (r._id === requestId ? { ...r, proposals: r.proposals.map((p, i) => (i === index ? { ...p, state: "refused" } : p)) } : r));
       },
       logEvent: async (e: { kind: string; detail?: string }) => void events.push(e),
+      dayRecord: async () => opts.day ?? DAY_RECORD,
+      saveSummary: async (args: { day: string; items: object[] }) => {
+        if (opts.saveFails) throw new Error("backend down");
+        summaries.push(args);
+      },
       screenshot: async (screenshotId: string) =>
         opts.shot === undefined ? { _id: screenshotId, path: "2026-11-02/shot-1.heic", takenAt: Date.now() - 60_000, appBundleId: "com.example.editor" } : opts.shot,
     },
@@ -139,7 +166,7 @@ function harness(
     },
     log: (m: string) => void logs.push(m),
   });
-  return { assistant, client, requests, calls, begun, settled, events, logs, unreadArgs };
+  return { assistant, client, requests, calls, begun, settled, events, logs, unreadArgs, summaries };
 }
 
 describe("costOf", () => {
@@ -552,7 +579,13 @@ describe("registerAssistantIpc", () => {
     const handlers = new Map<string, IpcHandler>();
     const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn(), get: vi.fn(() => "sk-ant-SYNTHETIC") };
     registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => null });
-    expect([...handlers.keys()].sort()).toEqual(["gs:assistant:clearApiKey", "gs:assistant:hasApiKey", "gs:assistant:requestImage", "gs:assistant:setApiKey"]);
+    expect([...handlers.keys()].sort()).toEqual([
+      "gs:assistant:clearApiKey",
+      "gs:assistant:hasApiKey",
+      "gs:assistant:requestImage",
+      "gs:assistant:setApiKey",
+      "gs:assistant:summarize",
+    ]);
     expect(handlers.get("gs:assistant:hasApiKey")!({})).toBe(true);
     expect(handlers.get("gs:assistant:setApiKey")!({ key: "sk-ant-SYNTHETIC" })).toBeUndefined();
     expect(store.set).toHaveBeenCalledWith("sk-ant-SYNTHETIC");
@@ -575,6 +608,28 @@ describe("registerAssistantIpc", () => {
     expect(requestImage).toHaveBeenCalledWith("shot1");
     for (const bad of [42, "", "../shot", "a".repeat(65), null]) expect(() => ask({ screenshotId: bad })).toThrow(/screenshot/);
     expect(requestImage).toHaveBeenCalledOnce();
+  });
+
+  it("summarizes one local day, and refuses anything but a day and its window", async () => {
+    const handlers = new Map<string, IpcHandler>();
+    const summarize = vi.fn(async () => ({ ok: true as const, items: 2 }));
+    registerAssistantIpc({
+      handle: (ch, fn) => void handlers.set(ch, fn),
+      keyStore: { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() },
+      assistant: () => ({ requestImage: vi.fn(), summarize }),
+    });
+    const ask = handlers.get("gs:assistant:summarize")!;
+    const from = Date.UTC(2026, 10, 2, 5);
+    await expect(Promise.resolve(ask({ day: "2026-11-02", from, to: from + 86_400_000 }))).resolves.toEqual({ ok: true, items: 2 });
+    expect(summarize).toHaveBeenCalledWith("2026-11-02", from, from + 86_400_000);
+    for (const bad of [
+      { day: "Nov 2", from, to: from + 1 },
+      { day: "2026-11-02", from: "x", to: from },
+      { day: "2026-11-02", from, to: from - 1 },
+      { day: "2026-11-02", from, to: from + 3 * 86_400_000 },
+    ])
+      expect(() => ask(bad)).toThrow(/day/);
+    expect(summarize).toHaveBeenCalledOnce();
   });
 });
 
@@ -721,3 +776,66 @@ describe("the image work folder", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 });
+
+// Plan PR 6c, spec R13: the end-of-day summary, made when James asks, every item linked to
+// its source; under the same cap, ledger and logging as a batch.
+describe("summarize", () => {
+  it("sends the day's text with the summary instructions, and keeps each item with its source", async () => {
+    const h = harness({
+      reply: summaryReply([
+        { text: "Agreed to send the deck by Thursday", source: "t1" },
+        { text: "Worked on the Q4 plan", source: "s1" },
+        { text: "A day of steady work" },
+      ]),
+    });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 3 });
+    const sent = h.requests[0];
+    expect(sent.system[0].text).toMatch(/summary/i);
+    expect(sent.messages[0].content).toEqual(expect.stringContaining("SYNTHETIC: I'll send the deck by Thursday"));
+    expect(h.summaries).toEqual([
+      {
+        day: "2026-11-02",
+        items: [
+          { text: "Agreed to send the deck by Thursday", sourceSegmentId: "seg1" },
+          { text: "Worked on the Q4 plan", sourceScreenshotId: "shot1" },
+          { text: "A day of steady work" },
+        ],
+      },
+    ]);
+    // Paid for like any call, and nothing is proposed or marked read.
+    expect(h.settled[0]).toMatchObject({ proposals: [] });
+    expect(h.begun[0]).toMatchObject({ transcriptIds: [], screenshotIds: [] });
+    expect(h.logs.join("\n")).not.toContain("SYNTHETIC");
+  });
+
+  it("an item naming no item of the day keeps no source", async () => {
+    const h = harness({ reply: summaryReply([{ text: "Something", source: "t9" }]) });
+    await h.assistant.summarize("2026-11-02", FROM, TO);
+    expect(h.summaries[0].items).toEqual([{ text: "Something" }]);
+  });
+
+  it("sends nothing for a day with nothing captured, without a key, or with the cap used up", async () => {
+    const empty = harness({ day: { transcripts: [], screenshots: [], more: { transcripts: false, screenshots: false } } });
+    expect(await empty.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: false, reason: "Nothing was captured that day" });
+    const noKey = harness({ key: null });
+    expect((await noKey.assistant.summarize("2026-11-02", FROM, TO)).ok).toBe(false);
+    const full = harness({ cap: { capUsd: 1, spentUsd: 1, reached: true } });
+    expect((await full.assistant.summarize("2026-11-02", FROM, TO)).ok).toBe(false);
+    expect(full.events.map((e) => e.kind)).toContain("capPaused");
+    for (const h of [empty, noKey, full]) expect(h.requests).toHaveLength(0);
+  });
+
+  it("an answer that is not a summary is paid for, and nothing is saved", async () => {
+    const h = harness({ reply: { ...summaryReply([]), content: [{ type: "text", text: "not json" }] } });
+    const result = await h.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result.ok).toBe(false);
+    expect(h.settled).toHaveLength(1);
+    expect(h.summaries).toHaveLength(0);
+  });
+
+  it("says so when the summary can't be saved", async () => {
+    const h = harness({ reply: summaryReply([{ text: "Something" }]), saveFails: true });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: false, reason: "The summary was made but couldn't be saved" });
+  });
+});
+
