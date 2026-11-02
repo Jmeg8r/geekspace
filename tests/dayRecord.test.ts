@@ -83,7 +83,10 @@ describe("assistant.dayActions", () => {
     expect(actions.find((a) => a.kind === "createTask")).toMatchObject({ title: "Send the deck" });
     expect(actions.find((a) => a.kind === "createBlock")).toMatchObject({ start: blockStart, end: blockStart + HOUR });
     expect(actions.find((a) => a.kind === "draftLinear")).toMatchObject({ issueRef: "ENG-42" });
-    expect(new Set(actions.map((a) => a.groupId)).size).toBe(1);
+    // One Undo per commitment: a task and its block share a group; the draft has its own.
+    const group = (kind: string) => actions.find((a) => a.kind === kind)!.groupId;
+    expect(group("createTask")).toBe(group("createBlock"));
+    expect(group("draftLinear")).not.toBe(group("createTask"));
   });
 });
 

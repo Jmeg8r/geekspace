@@ -14,6 +14,7 @@ import {
   assertDay,
   assertDraftBody,
   assertIssueRef,
+  assertText,
   assertTime,
   assertTitle,
   rowFingerprint,
@@ -711,3 +712,123 @@ export const refuseProposal = mutation({
   args: { requestId: v.id("assistantRequests"), index: v.number() },
   handler: (ctx, { requestId, index }) => resolveProposal(ctx, requestId, index, "refused"),
 });
+
+// The Day Record view (plan PR 6c, spec R12, R13): one day of what was captured, what the
+// assistant did with it, what waits for approval, and the summary James asked for.
+
+// A local day is 23 to 25 hours; a little more is allowed, and nothing like two days.
+const MAX_DAY_MS = 25 * 60 * 60_000;
+const MAX_DAY_ROWS = 500;
+const MAX_QUEUE = 100;
+const MAX_SUMMARY_ITEMS = 50;
+const MAX_SUMMARY_TEXT = 2000;
+
+function assertDayWindow(from: number, to: number) {
+  assertTime("from", from);
+  assertTime("to", to);
+  if (!(to > from) || to - from > MAX_DAY_MS) throw new Error("The window must be one day, start before end");
+}
+
+/** One local day's transcripts and screens, oldest first, at most MAX_DAY_ROWS of each. */
+export const dayRecord = query({
+  args: { from: v.number(), to: v.number() },
+  handler: async (ctx, { from, to }) => {
+    assertDayWindow(from, to);
+    const transcripts = await ctx.db
+      .query("transcripts")
+      .withIndex("by_start", (q) => q.gte("start", from).lt("start", to))
+      .take(MAX_DAY_ROWS + 1);
+    const screenshots = await ctx.db
+      .query("screenshots")
+      .withIndex("by_takenAt", (q) => q.gte("takenAt", from).lt("takenAt", to))
+      .take(MAX_DAY_ROWS + 1);
+    return {
+      transcripts: transcripts.slice(0, MAX_DAY_ROWS).map((r) => ({ _id: r._id, segmentId: r.segmentId, start: r.start, end: r.end, text: r.text })),
+      screenshots: screenshots.slice(0, MAX_DAY_ROWS).map((r) => ({
+        _id: r._id,
+        takenAt: r.takenAt,
+        ocrText: r.ocrText,
+        purged: r.purgedAt !== undefined,
+        ...(r.appBundleId !== undefined && { appBundleId: r.appBundleId }),
+      })),
+      more: { transcripts: transcripts.length > MAX_DAY_ROWS, screenshots: screenshots.length > MAX_DAY_ROWS },
+    };
+  },
+});
+
+/** The day's assistant actions, oldest first, each with what it names: a task's title, a
+ * block's times, a draft's issue. Undo takes a whole group (convex undo). */
+export const dayActions = query({
+  args: { from: v.number(), to: v.number() },
+  handler: async (ctx, { from, to }) => {
+    assertDayWindow(from, to);
+    const actions = await ctx.db
+      .query("assistantActions")
+      .withIndex("by_at", (q) => q.gte("at", from).lt("at", to))
+      .take(MAX_DAY_ROWS);
+    const out = [];
+    for (const a of actions) {
+      const base = {
+        _id: a._id,
+        kind: a.kind,
+        at: a.at,
+        groupId: a.groupId,
+        ...(a.undoneAt !== undefined && { undoneAt: a.undoneAt }),
+        ...(a.sourceSegmentId !== undefined && { sourceSegmentId: a.sourceSegmentId }),
+        ...(a.sourceScreenshotId !== undefined && { sourceScreenshotId: a.sourceScreenshotId }),
+      };
+      if (a.kind === "createTask") out.push({ ...base, title: (await ctx.db.get(a.rowId))?.title ?? null });
+      else if (a.kind === "createBlock") out.push({ ...base, start: a.start, end: a.end });
+      else out.push({ ...base, issueRef: (await ctx.db.get(a.draftId))?.issueRef ?? null });
+    }
+    return out;
+  },
+});
+
+/** Drafts waiting for James's approval, oldest first. */
+export const reviewQueue = query({
+  args: {},
+  handler: async (ctx) => {
+    const drafts = await ctx.db
+      .query("externalDrafts")
+      .withIndex("by_status", (q) => q.eq("status", "pending"))
+      .take(MAX_QUEUE);
+    return drafts
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((d) => ({ _id: d._id, issueRef: d.issueRef, body: d.body, createdAt: d.createdAt, deliveryUnknown: d.deliveryUnknown === true }));
+  },
+});
+
+const summaryItem = v.object({
+  text: v.string(),
+  sourceSegmentId: v.optional(v.id("captureSegments")),
+  sourceScreenshotId: v.optional(v.id("screenshots")),
+});
+
+/** Keep a summary of a day (electron/dayAssistant.mjs summarize). */
+export const saveSummary = mutation({
+  args: { day: v.string(), items: v.array(summaryItem) },
+  handler: async (ctx, { day, items }) => {
+    assertDay(day);
+    if (items.length > MAX_SUMMARY_ITEMS) throw new Error(`At most ${MAX_SUMMARY_ITEMS} summary items`);
+    for (const item of items) {
+      if (!item.text.trim()) throw new Error("A summary item is empty");
+      assertText("Summary item", item.text, MAX_SUMMARY_TEXT);
+    }
+    return ctx.db.insert("daySummaries", { day, at: Date.now(), items });
+  },
+});
+
+/** The newest summary of a day, or null. */
+export const daySummary = query({
+  args: { day: v.string() },
+  handler: async (ctx, { day }) => {
+    assertDay(day);
+    return ctx.db
+      .query("daySummaries")
+      .withIndex("by_day_at", (q) => q.eq("day", day))
+      .order("desc")
+      .first();
+  },
+});
+

@@ -222,6 +222,8 @@ export default defineSchema({
     readChars: v.optional(v.number()),
   })
     .index("by_segment", ["segmentId"])
+    // The Day Record view's day (plan PR 6c).
+    .index("by_start", ["start"])
     // What the assistant has not read yet, oldest first (plan PR 6a, Codex review round 1).
     .index("by_read_start", ["readAt", "start"])
     .searchIndex("search_text", { searchField: "text" }),
@@ -240,6 +242,7 @@ export default defineSchema({
     readChars: v.optional(v.number()),
   })
     .index("by_purged_takenAt", ["purgedAt", "takenAt"])
+    .index("by_takenAt", ["takenAt"])
     .index("by_read_takenAt", ["readAt", "takenAt"])
     .searchIndex("search_ocr", { searchField: "ocrText" }),
 
@@ -352,6 +355,20 @@ export default defineSchema({
   })
     .index("by_status", ["status"])
     .index("by_day_status", ["day", "status"]),
+
+  // The end-of-day summary James asked for (plan PR 6c, spec R13): each item links to its
+  // source. A day keeps every summary made; the view shows the newest.
+  daySummaries: defineTable({
+    day: v.string(),
+    at: v.number(),
+    items: v.array(
+      v.object({
+        text: v.string(),
+        sourceSegmentId: v.optional(v.id("captureSegments")),
+        sourceScreenshotId: v.optional(v.id("screenshots")),
+      })
+    ),
+  }).index("by_day_at", ["day", "at"]),
 
   assistantUsage: defineTable({
     day: v.string(),
