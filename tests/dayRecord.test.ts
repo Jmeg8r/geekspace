@@ -111,16 +111,47 @@ describe("assistant day summaries", () => {
     const t = await seeded();
     const seg = await transcript(t, Date.UTC(2026, 10, 2, 15), "SYNTHETIC");
     expect(await t.query(api.assistant.daySummary, { day: DAY })).toBeNull();
-    await t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "SYNTHETIC first pass" }] });
+    await t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "SYNTHETIC first pass", sourceSegmentId: seg }] });
     await t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "SYNTHETIC agreed to send the deck", sourceSegmentId: seg }] });
     expect(await t.query(api.assistant.daySummary, { day: DAY })).toMatchObject({ items: [{ text: "SYNTHETIC agreed to send the deck", sourceSegmentId: seg }] });
   });
 
-  it("refuses a bad day, an empty or overlong item, or too many items", async () => {
+  it("refuses a bad day, an empty or overlong item, too many items, or an item without exactly one source", async () => {
     const t = await seeded();
-    await expect(t.mutation(api.assistant.saveSummary, { day: "Nov 2", items: [] })).rejects.toThrow();
-    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "" }] })).rejects.toThrow();
-    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "x".repeat(2001) }] })).rejects.toThrow();
-    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: Array.from({ length: 51 }, () => ({ text: "x" })) })).rejects.toThrow();
+    const seg = await transcript(t, Date.UTC(2026, 10, 2, 15), "SYNTHETIC");
+    const shot = await screen(t, Date.UTC(2026, 10, 2, 16), "SYNTHETIC");
+    const ok = (text: string) => ({ text, sourceSegmentId: seg });
+    await expect(t.mutation(api.assistant.saveSummary, { day: "Nov 2", items: [ok("x")] })).rejects.toThrow();
+    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: [ok("")] })).rejects.toThrow();
+    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: [ok("x".repeat(2001))] })).rejects.toThrow();
+    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: Array.from({ length: 51 }, () => ok("x")) })).rejects.toThrow();
+    // Codex 6c r1 P1: spec R13, every item links to its source.
+    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "x" }] })).rejects.toThrow(/source/);
+    await expect(t.mutation(api.assistant.saveSummary, { day: DAY, items: [{ text: "x", sourceSegmentId: seg, sourceScreenshotId: shot }] })).rejects.toThrow(/source/);
   });
 });
+
+// Codex 6c r1 P1: the summary reads the whole day a page at a time, not the view's first 500.
+describe("assistant.dayPage", () => {
+  it("pages one kind of the day's items, oldest first, to the end", async () => {
+    const t = await seeded();
+    const from = Date.UTC(2026, 10, 2, 5);
+    for (let i = 0; i < 5; i++) await transcript(t, from + i * MIN, `SYNTHETIC ${i}`);
+    await screen(t, from + HOUR, "SYNTHETIC screen");
+    const first = await t.query(api.assistant.dayPage, { from, to: from + 24 * HOUR, kind: "transcripts", paginationOpts: { numItems: 2, cursor: null } });
+    expect(first.page.map((r) => r.text)).toEqual(["SYNTHETIC 0", "SYNTHETIC 1"]);
+    expect(first.isDone).toBe(false);
+    let cursor = first.continueCursor;
+    const rest: string[] = [];
+    for (;;) {
+      const next = await t.query(api.assistant.dayPage, { from, to: from + 24 * HOUR, kind: "transcripts", paginationOpts: { numItems: 2, cursor } });
+      rest.push(...next.page.map((r) => r.text));
+      if (next.isDone) break;
+      cursor = next.continueCursor;
+    }
+    expect(rest).toEqual(["SYNTHETIC 2", "SYNTHETIC 3", "SYNTHETIC 4"]);
+    const screens = await t.query(api.assistant.dayPage, { from, to: from + 24 * HOUR, kind: "screenshots", paginationOpts: { numItems: 10, cursor: null } });
+    expect(screens.page.map((r) => r.ocrText)).toEqual(["SYNTHETIC screen"]);
+  });
+});
+

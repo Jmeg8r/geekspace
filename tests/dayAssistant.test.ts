@@ -89,6 +89,7 @@ function harness(
     shot?: { _id: string; path: string; takenAt: number; appBundleId?: string } | null;
     resolveFails?: boolean;
     day?: DayRecord;
+    pageSize?: number;
     saveFails?: boolean;
   } = {}
 ) {
@@ -133,7 +134,8 @@ function harness(
           throw new Error("backend down");
         }
         settled.push(args);
-        open = [{ _id: args.requestId, status: "settled", proposals: args.proposals.map((proposal) => ({ proposal, state: "pending" })) }];
+        // Kept beside the other open requests, as Convex keeps them (Codex 6c r1).
+        open = [...open.filter((r) => r._id !== args.requestId), { _id: args.requestId, status: "settled", proposals: args.proposals.map((proposal) => ({ proposal, state: "pending" })) }];
       },
       failRequest: async ({ requestId }: { requestId: string }) => void calls.push(`fail ${requestId}`),
       abandonRequest: async ({ requestId }: { requestId: string }) => void calls.push(`abandon ${requestId}`),
@@ -148,7 +150,13 @@ function harness(
         open = open.map((r) => (r._id === requestId ? { ...r, proposals: r.proposals.map((p, i) => (i === index ? { ...p, state: "refused" } : p)) } : r));
       },
       logEvent: async (e: { kind: string; detail?: string }) => void events.push(e),
-      dayRecord: async () => opts.day ?? DAY_RECORD,
+      dayPage: async ({ kind, cursor }: { from: number; to: number; kind: "transcripts" | "screenshots"; cursor: string | null }) => {
+        const rows = (opts.day ?? DAY_RECORD)[kind];
+        const size = opts.pageSize ?? 100;
+        const at = cursor === null ? 0 : Number(cursor);
+        calls.push(`page ${kind} ${at}`);
+        return { rows: rows.slice(at, at + size), done: at + size >= rows.length, cursor: String(at + size) };
+      },
       saveSummary: async (args: { day: string; items: object[] }) => {
         if (opts.saveFails) throw new Error("backend down");
         summaries.push(args);
@@ -785,10 +793,9 @@ describe("summarize", () => {
       reply: summaryReply([
         { text: "Agreed to send the deck by Thursday", source: "t1" },
         { text: "Worked on the Q4 plan", source: "s1" },
-        { text: "A day of steady work" },
       ]),
     });
-    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 3 });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0 });
     const sent = h.requests[0];
     expect(sent.system[0].text).toMatch(/summary/i);
     expect(sent.messages[0].content).toEqual(expect.stringContaining("SYNTHETIC: I'll send the deck by Thursday"));
@@ -798,7 +805,6 @@ describe("summarize", () => {
         items: [
           { text: "Agreed to send the deck by Thursday", sourceSegmentId: "seg1" },
           { text: "Worked on the Q4 plan", sourceScreenshotId: "shot1" },
-          { text: "A day of steady work" },
         ],
       },
     ]);
@@ -808,10 +814,68 @@ describe("summarize", () => {
     expect(h.logs.join("\n")).not.toContain("SYNTHETIC");
   });
 
-  it("an item naming no item of the day keeps no source", async () => {
-    const h = harness({ reply: summaryReply([{ text: "Something", source: "t9" }]) });
+  // Codex 6c r1 P1: spec R13, every item links to its source.
+  it("leaves out a line with no source, or one naming no item of the day, and counts them", async () => {
+    const h = harness({
+      reply: summaryReply([{ text: "Something", source: "t9" }, { text: "A day of steady work" }, { text: "Worked on the Q4 plan", source: "s1" }]),
+    });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 2, leftOut: 0 });
+    expect(h.summaries[0].items).toEqual([{ text: "Worked on the Q4 plan", sourceScreenshotId: "shot1" }]);
+  });
+
+  it("saves nothing when no line names its source, and says so", async () => {
+    const h = harness({ reply: summaryReply([{ text: "A day of steady work" }]) });
+    const result = await h.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result.ok).toBe(false);
+    expect(h.summaries).toHaveLength(0);
+    expect(h.settled).toHaveLength(1);
+  });
+
+  // Codex 6c r1 P1: a summary applies nothing, not even what earlier calls left pending.
+  it("never applies proposals, not an older request's, nor one whose record it writes first", async () => {
+    const old = { _id: "old", status: "settled" as const, proposals: [{ proposal: { type: "createTask", title: "Old", estimateMin: 5 }, state: "pending" }] };
+    const h = harness({ open: [old], reply: summaryReply([{ text: "Worked on the Q4 plan", source: "s1" }]) });
     await h.assistant.summarize("2026-11-02", FROM, TO);
-    expect(h.summaries[0].items).toEqual([{ text: "Something" }]);
+    expect(h.calls.filter((c) => c.startsWith("apply"))).toEqual([]);
+
+    const pending = harness({ settleFails: 1 });
+    await pending.assistant.runBatch();
+    pending.client.messages.create.mockImplementation(async (params: AssistantRequest) => {
+      pending.requests.push(params);
+      return summaryReply([{ text: "Worked on the Q4 plan", source: "s1" }]);
+    });
+    await pending.assistant.summarize("2026-11-02", FROM, TO);
+    expect(pending.settled).toHaveLength(2);
+    expect(pending.calls.filter((c) => c.startsWith("apply"))).toEqual([]);
+  });
+
+  // Codex 6c r1 P1: the whole day is read, a page at a time, not the view's first 500 rows.
+  it("reads the whole day page by page, and counts what didn't fit the cap", async () => {
+    const transcripts = Array.from({ length: 250 }, (_, i) => ({
+      _id: `tr${i}`,
+      segmentId: `seg${i}`,
+      start: FROM + i * 60_000,
+      end: FROM + i * 60_000 + 30_000,
+      text: `SYNTHETIC line ${i}`,
+    }));
+    const h = harness({
+      day: { transcripts, screenshots: [], more: { transcripts: false, screenshots: false } },
+      pageSize: 100,
+      reply: summaryReply([{ text: "The last thing", source: "t250" }]),
+    });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 0, leftOut: 0 });
+    expect(h.calls.filter((c) => c.startsWith("page transcripts"))).toEqual(["page transcripts 0", "page transcripts 100", "page transcripts 200"]);
+    expect(h.requests[0].messages[0].content).toEqual(expect.stringContaining("SYNTHETIC line 249"));
+    expect(h.summaries[0].items).toEqual([{ text: "The last thing", sourceSegmentId: "seg249" }]);
+
+    const tight = harness({
+      day: { transcripts, screenshots: [], more: { transcripts: false, screenshots: false } },
+      cap: { capUsd: 0.08, spentUsd: 0, reached: false },
+      reply: summaryReply([{ text: "The first thing", source: "t1" }]),
+    });
+    const result = await tight.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result).toMatchObject({ ok: true, items: 1 });
+    expect(result.ok && result.leftOut).toBeGreaterThan(0);
   });
 
   it("sends nothing for a day with nothing captured, without a key, or with the cap used up", async () => {
@@ -834,8 +898,7 @@ describe("summarize", () => {
   });
 
   it("says so when the summary can't be saved", async () => {
-    const h = harness({ reply: summaryReply([{ text: "Something" }]), saveFails: true });
+    const h = harness({ reply: summaryReply([{ text: "Something", source: "t1" }]), saveFails: true });
     expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: false, reason: "The summary was made but couldn't be saved" });
   });
 });
-
