@@ -282,10 +282,11 @@ const draftStatus = v.union(v.literal("pending"), v.literal("approved"), v.liter
 type DraftStatus = Doc<"externalDrafts">["status"];
 // "sent" and "discarded" are final: nothing that left Geekspace can be unsent. The one step
 // back, a failed send from approved to pending, is releaseDraft's, which keeps whether the
-// send is in doubt.
+// send is in doubt; on to sent is markDraftSent's. Both need the claim that holds the draft.
 const NEXT = {
   pending: ["approved", "discarded"],
-  approved: ["sent", "discarded"],
+  // Sent, or back to pending, only through the claim that holds it (markDraftSent, releaseDraft).
+  approved: ["discarded"],
   sent: [],
   discarded: [],
 } satisfies Record<DraftStatus, readonly DraftStatus[]>;
@@ -327,9 +328,10 @@ const CLAIM_LEASE_MS = 5 * 60_000;
  * the send checks with Linear first.
  */
 export const claimDraft = mutation({
-  args: { draftId: v.id("externalDrafts"), commentId: v.string() },
-  handler: async (ctx, { draftId, commentId }) => {
+  args: { draftId: v.id("externalDrafts"), commentId: v.string(), claimId: v.string() },
+  handler: async (ctx, { draftId, commentId, claimId }) => {
     if (!UUID_V4.test(commentId)) throw new Error("The comment id must be a UUID v4");
+    if (!UUID_V4.test(claimId)) throw new Error("The claim id must be a UUID v4");
     const draft = await ctx.db.get(draftId);
     if (!draft) throw new Error(`Draft ${draftId} does not exist`);
     const now = Date.now();
@@ -337,19 +339,39 @@ export const claimDraft = mutation({
     if (draft.status !== "pending" && !abandoned) throw new Error(`Cannot move a draft from ${draft.status} to approved`);
     const id = draft.commentId ?? commentId;
     const deliveryUnknown = draft.deliveryUnknown === true || abandoned;
-    await ctx.db.patch(draftId, { status: "approved", commentId: id, deliveryUnknown, updatedAt: now });
+    await ctx.db.patch(draftId, { status: "approved", commentId: id, deliveryUnknown, claimId, updatedAt: now });
     return { issueRef: draft.issueRef, body: draft.body, commentId: id, deliveryUnknown };
   },
 });
 
-/** The send did not finish: back in the queue. A send in doubt stays in doubt until it is sent. */
+/** Whether `claimId` still holds the draft: false once it was released, sent or taken over. */
+async function heldBy(ctx: MutationCtx, draftId: Id<"externalDrafts">, claimId: string) {
+  const draft = await ctx.db.get(draftId);
+  if (!draft) throw new Error(`Draft ${draftId} does not exist`);
+  return draft.status === "approved" && draft.claimId === claimId ? draft : null;
+}
+
+/**
+ * The send did not finish: back in the queue. A send in doubt stays in doubt until it is sent.
+ * False, changing nothing, when this claim no longer holds the draft.
+ */
 export const releaseDraft = mutation({
-  args: { draftId: v.id("externalDrafts"), deliveryUnknown: v.boolean() },
-  handler: async (ctx, { draftId, deliveryUnknown }) => {
-    const draft = await ctx.db.get(draftId);
-    if (!draft) throw new Error(`Draft ${draftId} does not exist`);
-    if (draft.status !== "approved") throw new Error(`Cannot move a draft from ${draft.status} to pending`);
+  args: { draftId: v.id("externalDrafts"), claimId: v.string(), deliveryUnknown: v.boolean() },
+  handler: async (ctx, { draftId, claimId, deliveryUnknown }) => {
+    const draft = await heldBy(ctx, draftId, claimId);
+    if (!draft) return false;
     await ctx.db.patch(draftId, { status: "pending", deliveryUnknown: draft.deliveryUnknown === true || deliveryUnknown, updatedAt: Date.now() });
+    return true;
+  },
+});
+
+/** Linear has the comment: the draft is sent. False, changing nothing, for a claim taken over. */
+export const markDraftSent = mutation({
+  args: { draftId: v.id("externalDrafts"), claimId: v.string() },
+  handler: async (ctx, { draftId, claimId }) => {
+    if (!(await heldBy(ctx, draftId, claimId))) return false;
+    await ctx.db.patch(draftId, { status: "sent", deliveryUnknown: false, updatedAt: Date.now() });
+    return true;
   },
 });
 

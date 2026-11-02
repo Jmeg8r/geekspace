@@ -681,6 +681,10 @@ describe("sendImage", () => {
 // Codex 6b r2 P1: the JPEG made for an image request never outlives it, even across a crash;
 // r3 P1: two conversions at once, even from two instances, never see each other's file.
 describe("the image work folder", () => {
+  // Real files have real times; the fixed clock the other tests use would make all of them old.
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
   const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), "gs-image-test-"));
 
   it("sweepImageWork removes what a crash left, keeps a conversion still running, and is owner-only", () => {

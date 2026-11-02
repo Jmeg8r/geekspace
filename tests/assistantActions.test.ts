@@ -257,8 +257,10 @@ describe("assistant drafts", () => {
     await expect(t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "sent" })).rejects.toThrow(
       /pending.*sent/i
     );
-    await t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "approved" });
-    await t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "sent" });
+    // Approved to sent is the claim's (markDraftSent; Codex 6b r3).
+    const claimId = "00000000-0000-4000-8000-000000000009";
+    await t.mutation(api.assistant.claimDraft, { draftId: id, commentId: "00000000-0000-4000-8000-000000000008", claimId });
+    await t.mutation(api.assistant.markDraftSent, { draftId: id, claimId });
     await expect(
       t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "discarded" })
     ).rejects.toThrow(/sent.*discarded/i);

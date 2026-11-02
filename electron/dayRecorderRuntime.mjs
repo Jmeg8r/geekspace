@@ -254,9 +254,9 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     keyStore: { get: () => linearKeyStore?.get() ?? null },
     fetch: globalThis.fetch,
     convex: {
-      claim: (draftId, commentId) => client.mutation(api.assistant.claimDraft, { draftId, commentId }),
-      release: (draftId, deliveryUnknown) => client.mutation(api.assistant.releaseDraft, { draftId, deliveryUnknown }),
-      markSent: (draftId) => client.mutation(api.assistant.setDraftStatus, { draftId, status: "sent" }),
+      claim: (draftId, commentId, claimId) => client.mutation(api.assistant.claimDraft, { draftId, commentId, claimId }),
+      release: (draftId, claimId, deliveryUnknown) => client.mutation(api.assistant.releaseDraft, { draftId, claimId, deliveryUnknown }),
+      markSent: (draftId, claimId) => client.mutation(api.assistant.markDraftSent, { draftId, claimId }),
     },
     log,
   });

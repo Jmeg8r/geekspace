@@ -60,6 +60,8 @@ const IMAGE_TOKENS = 5_000;
 const JPEG_QUALITY = 80;
 const MAX_IMAGE_BYTES = 3_750_000;
 const SIPS_TIMEOUT_MS = 30_000;
+// A conversion folder older than this was left by a crash: sips is stopped long before it.
+const ABANDONED_WORK_MS = 10 * 60_000;
 
 // USD per million tokens (claude-api skill, cached 2026-10-06). Cache writes are 1.25x input.
 export const PRICES = {
@@ -189,13 +191,17 @@ function imageText(row, now) {
 }
 
 /**
- * Empty the image work folder (creating it, owner-only). Run before and after each conversion
- * and when the recorder starts, so a copy a crash left behind goes at the next of those.
+ * Make the image work folder (owner-only) and remove the conversions a crash left in it. A
+ * conversion still running, here or in another Geekspace, is younger than ABANDONED_WORK_MS
+ * and is kept (Codex 6b r3). Run when the recorder starts and before each conversion.
  */
-export function sweepImageWork(workDir) {
-  fsSync.rmSync(workDir, { recursive: true, force: true });
+export function sweepImageWork(workDir, now = Date.now()) {
   fsSync.mkdirSync(workDir, { recursive: true, mode: 0o700 });
   fsSync.chmodSync(workDir, 0o700);
+  for (const entry of fsSync.readdirSync(workDir)) {
+    const p = path.join(workDir, entry);
+    if (now - fsSync.lstatSync(p).mtimeMs > ABANDONED_WORK_MS) fsSync.rmSync(p, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -208,16 +214,21 @@ export function sweepImageWork(workDir) {
 export async function screenshotJpeg(file, workDir) {
   if (process.platform !== "darwin") throw new Error("Screenshots are converted with sips, which only macOS has");
   sweepImageWork(workDir);
+  // Each conversion has a folder of its own, so two at once never read each other's file.
+  const own = await fs.mkdtemp(path.join(workDir, "c-"));
   try {
-    const out = path.join(workDir, "screen.jpg");
-    await promisify(execFile)(
-      "/usr/bin/sips",
-      ["-s", "format", "jpeg", "-s", "formatOptions", String(JPEG_QUALITY), "-Z", String(IMAGE_LONG_EDGE), file, "--out", out],
-      { timeout: SIPS_TIMEOUT_MS }
-    );
+    const out = path.join(own, "screen.jpg");
+    const run = (args) => promisify(execFile)("/usr/bin/sips", args, { timeout: SIPS_TIMEOUT_MS });
+    // -Z scales the long edge to the size given, up as well as down: only a larger image is
+    // shrunk, so a small one is not enlarged and billed for pixels it never had.
+    const { stdout } = await run(["-g", "pixelWidth", "-g", "pixelHeight", file]);
+    const longEdge = Math.max(...[...stdout.matchAll(/pixel(?:Width|Height):\s*(\d+)/g)].map((m) => Number(m[1])));
+    if (!Number.isFinite(longEdge)) throw new Error("sips did not report the screenshot's size");
+    const resize = longEdge > IMAGE_LONG_EDGE ? ["-Z", String(IMAGE_LONG_EDGE)] : [];
+    await run(["-s", "format", "jpeg", "-s", "formatOptions", String(JPEG_QUALITY), ...resize, file, "--out", out]);
     return await fs.readFile(out);
   } finally {
-    sweepImageWork(workDir);
+    await fs.rm(own, { recursive: true, force: true });
   }
 }
 

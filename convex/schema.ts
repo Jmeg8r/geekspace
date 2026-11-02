@@ -314,6 +314,9 @@ export default defineSchema({
     // A send failed after the comment request left: whether Linear has it is not known, so
     // the next approval asks Linear first. Cleared only by sending.
     deliveryUnknown: v.optional(v.boolean()),
+    // The claim that holds an approved draft: only it may release the draft or mark it sent, so
+    // a late write from a claim that was taken over changes nothing (Codex 6b r3).
+    claimId: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_status", ["status"]),

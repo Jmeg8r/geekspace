@@ -63,8 +63,8 @@ export type DayAssistant = {
 /** A screenshot as JPEG bytes (macOS: sips), made in `workDir` and swept from it. */
 export function screenshotJpeg(file: string, workDir: string): Promise<Buffer>;
 
-/** Empty the image work folder, creating it owner-only. */
-export function sweepImageWork(workDir: string): void;
+/** Make the image work folder owner-only and remove conversions a crash left in it. */
+export function sweepImageWork(workDir: string, now?: number): void;
 
 type Proposal = Record<string, string | number | { start: number; end: number } | undefined>;
 

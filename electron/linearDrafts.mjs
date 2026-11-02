@@ -75,15 +75,21 @@ export function createLinearDrafts({ keyStore, fetch, convex, log, newId = () =>
     return reply?.data ?? {};
   }
 
-  /** Whether Linear has the comment of an earlier send in doubt. Unknown throws. */
+  /**
+   * Whether Linear has the comment of an earlier send in doubt. True only for that comment;
+   * false only when Linear says it has none (Codex 6b r2, r3); anything else is unknown, and
+   * throws.
+   */
   async function delivered(key, commentId) {
+    let data;
     try {
-      return (await graphql(key, FIND, { id: commentId })).comment?.id === commentId;
+      data = await graphql(key, FIND, { id: commentId });
     } catch (err) {
-      // Only Linear saying it has no such comment proves it is not there (Codex 6b r2).
       if (err instanceof LinearError && err.notFound) return false;
       throw err;
     }
+    if (data.comment?.id === commentId) return true;
+    throw new LinearError("Linear's answer to the delivery check was not one it gives");
   }
 
   return {
@@ -91,12 +97,19 @@ export function createLinearDrafts({ keyStore, fetch, convex, log, newId = () =>
     async approve(draftId) {
       const key = keyStore.get();
       if (!key) throw new Error("Add your Linear API key in Settings first");
-      const draft = await convex.claim(draftId, newId());
+      const commentId = newId();
+      const claimId = newId();
+      const draft = await convex.claim(draftId, commentId, claimId);
+      // A false here means another approval took the draft over after this claim's lease; that
+      // one checks with Linear before it sends, so this send's outcome is left to it.
+      const finish = async (how) => {
+        if (await convex.markSent(draftId, claimId)) log(`linear: draft ${draftId} ${how}`);
+        else log(`linear: draft ${draftId} ${how}, but its claim was taken over; the newer one records it`);
+      };
       let requested = false;
       try {
         if (draft.deliveryUnknown && (await delivered(key, draft.commentId))) {
-          await convex.markSent(draftId);
-          log(`linear: draft ${draftId} was already on its issue; marked sent`);
+          await finish("was already on its issue; marked sent");
           return;
         }
         const found = await graphql(key, ISSUE, { id: draft.issueRef });
@@ -109,14 +122,13 @@ export function createLinearDrafts({ keyStore, fetch, convex, log, newId = () =>
         const inDoubt = requested && !(err instanceof LinearError && err.answered);
         log(`linear: draft ${draftId} not sent: ${why}; it is back in the queue${inDoubt ? ", and checked with Linear before it is sent again" : ""}`);
         try {
-          await convex.release(draftId, inDoubt);
+          if (!(await convex.release(draftId, claimId, inDoubt))) log(`linear: draft ${draftId}'s claim was taken over; the newer one decides`);
         } catch (backErr) {
           log(`linear: draft ${draftId} could not go back in the queue (${backErr?.name ?? "Error"}); it stays approved`);
         }
         throw new Error(why);
       }
-      await convex.markSent(draftId);
-      log(`linear: draft ${draftId} sent`);
+      await finish("sent");
     },
   };
 }
