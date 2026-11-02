@@ -1743,3 +1743,25 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     meaning, the uncached input.
   - **The page asks for an image by id only** (`gs:assistant:requestImage`, a document id or
     nothing); the review UI that calls it is PR 6c.
+- **2026-11-02, PR 6c, the Day Record view.** Built as James chose (one view, an on-request
+  summary), with these choices:
+  - **One sidebar view, "Day record", stepped by local day.** It has four parts. Drafts
+    waiting for approval come first, with Send and Discard named by issue. Next is what the
+    assistant did, one line per commitment with an Undo named by what it undoes. Then the
+    summary, and last the day's record. Days step by calendar day, so a DST change gives a
+    23- or 25-hour day.
+  - **Sources link inside the view.** A summary line or an action links to its item in the
+    day's record ("said at 10:42", "on screen at 10:50"). The view never opens media files, so
+    it gives the renderer no file access.
+  - **The summary is made only when asked.** It is one call, reserved against the cap like a
+    batch, with its own instructions and output format. Each line keeps the segment or
+    screenshot it names, and nothing is proposed or marked read. It uses the batch model
+    until James answers the open question on a model per job.
+  - **A screen's image goes to Claude only from that screen's own button** (spec R9). It is
+    not offered for a screenshot whose image was deleted after 30 days.
+  - **exchange() takes the job** (instructions, format, how the reply is read), so batches,
+    images and summaries share one reserved-call path. On-request jobs run one at a time.
+  - **Verified in a browser tab without a backend:** the route, sidebar entry, header, day
+    stepping and loading state. The view was not run against live data, because running
+    `convex dev` from the branch would deploy its functions to James's local deployment. The
+    tests cover the queries, the summary and the view's logic.
