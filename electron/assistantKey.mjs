@@ -33,11 +33,16 @@ export function createKeyStore({ file, safeStorage, fs }) {
   };
 }
 
+// A Convex document id: letters and digits only, so a page can't pass a path or anything else.
+const SCREENSHOT_ID_RE = /^[a-z0-9]{1,64}$/i;
+
 /**
- * The page's key channels, through main.mjs's guarded handle(). Write-only (spec F4): a page
- * can set the key, clear it, or ask whether there is one; nothing returns the key itself.
+ * The page's assistant channels, through main.mjs's guarded handle(). The key is write-only
+ * (spec F4): a page can set it, clear it, or ask whether there is one; nothing returns it. An
+ * image is asked for by screenshot id only (spec R9); `assistant` is the running recorder's
+ * handle, null when it is not running.
  */
-export function registerAssistantIpc({ handle, keyStore }) {
+export function registerAssistantIpc({ handle, keyStore, assistant }) {
   handle("gs:assistant:hasApiKey", () => keyStore.has());
   handle("gs:assistant:setApiKey", ({ key }) => {
     if (typeof key !== "string") throw new Error("An API key is text");
@@ -45,5 +50,11 @@ export function registerAssistantIpc({ handle, keyStore }) {
   });
   handle("gs:assistant:clearApiKey", () => {
     keyStore.clear();
+  });
+  handle("gs:assistant:requestImage", ({ screenshotId }) => {
+    if (typeof screenshotId !== "string" || !SCREENSHOT_ID_RE.test(screenshotId)) throw new Error("That is not a screenshot id");
+    const running = assistant();
+    if (!running) return { ok: false, reason: "The Day Recorder isn't running" };
+    return running.requestImage(screenshotId);
   });
 }

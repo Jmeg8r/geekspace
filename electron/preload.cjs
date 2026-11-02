@@ -86,6 +86,8 @@ const api = {
     setApiKey: (key) => invoke("gs:assistant:setApiKey", { key }),
     clearApiKey: () => invoke("gs:assistant:clearApiKey"),
     hasApiKey: () => invoke("gs:assistant:hasApiKey"),
+    // Spec R9: one screenshot's image goes to Claude only when James asks, by its id.
+    requestImage: (screenshotId) => invoke("gs:assistant:requestImage", { screenshotId }),
   },
   // Linear drafts (plan PR 6b, spec R12): the key is write-only as the assistant's is, and a
   // draft is sent only by approving it, by id.

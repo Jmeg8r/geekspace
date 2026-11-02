@@ -2,7 +2,8 @@
 // reads the day's new transcript and screen text, asks Claude for the commitments in it, and
 // applies them as tasks, locked time blocks and Linear drafts (convex/assistant.ts applyActions,
 // which logs each one for undo). Every call is priced and recorded; nothing is sent once the
-// day's cap is reached, or without a cap, or without a key.
+// day's cap is reached, or without a cap, or without a key. A screenshot's image is sent only
+// when James asks for that one (spec R9, sendImage), never in a batch.
 // WHY captured text is data: it is other people's words and whatever was on screen (F6), so the
 // prompt marks it as material to read, never instructions to follow, and the reply is limited to
 // the allowed actions by a schema, checked again here (spec Security: "Claude output is
@@ -12,6 +13,11 @@
 // day's cap before it is made, with max_tokens sized to fit; the reply's real cost, the items it
 // read and its proposals are written together; then each proposal is applied once. A reply that
 // is not valid output is still paid for, and one whose write failed is written first next time.
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import Anthropic from "@anthropic-ai/sdk";
 import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
@@ -45,6 +51,15 @@ const LINE_SLACK_BYTES = 16;
 const REFUSED_BEFORE_WORK = new Set([400, 401, 403, 404, 413, 422, 429, 529]);
 // How long a quit waits for a batch in flight.
 export const STOP_GRACE_MS = 15_000;
+// An image request (spec R9): the screenshot is sent as a JPEG at most IMAGE_LONG_EDGE wide,
+// the largest the model reads at full detail, and its cost is reserved at IMAGE_TOKENS (up to
+// ~4,784 tokens at that size, by the claude-api skill). Base64 adds a third, so MAX_IMAGE_BYTES
+// keeps the encoded image under the API's 5 MB.
+const IMAGE_LONG_EDGE = 2576;
+const IMAGE_TOKENS = 5_000;
+const JPEG_QUALITY = 80;
+const MAX_IMAGE_BYTES = 3_750_000;
+const SIPS_TIMEOUT_MS = 30_000;
 
 // USD per million tokens (claude-api skill, cached 2026-10-06). Cache writes are 1.25x input.
 export const PRICES = {
@@ -166,6 +181,34 @@ function material(input, now) {
   return { text: `${header}\n\n${lines.join("\n")}`, sources, transcriptEnds, screenshotEnds };
 }
 
+/** The text that goes with one requested screen: the clock, and the screen as item s1. */
+function imageText(row, now) {
+  const app = row.appBundleId ? ` app="${escape(row.appBundleId)}"` : "";
+  const { text } = material({ transcripts: [], screenshots: [] }, now);
+  return `${text}\n<screen key="s1" at="${new Date(row.takenAt).toISOString()}"${app}>James asked you to read this screen; it is the attached image.</screen>`;
+}
+
+/**
+ * A screenshot as JPEG bytes, for an image request. macOS only, as the recorder is: gs-capture
+ * writes HEIC, which the API does not take, and sips (built into macOS) converts and resizes it.
+ * The copy is written to a private temp folder and removed once read.
+ */
+export async function screenshotJpeg(file) {
+  if (process.platform !== "darwin") throw new Error("Screenshots are converted with sips, which only macOS has");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gs-image-"));
+  try {
+    const out = path.join(dir, "screen.jpg");
+    await promisify(execFile)(
+      "/usr/bin/sips",
+      ["-s", "format", "jpeg", "-s", "formatOptions", String(JPEG_QUALITY), "-Z", String(IMAGE_LONG_EDGE), file, "--out", out],
+      { timeout: SIPS_TIMEOUT_MS }
+    );
+    return await fs.readFile(out);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
 /** One proposal from the model, as applyActions takes it, or null when it can't be used. */
 function toProposal(raw, sources) {
   const parsed = Action.safeParse(raw);
@@ -240,7 +283,7 @@ function replyActions(response) {
   }
 }
 
-export function createDayAssistant({ client, convex, log, model = MODEL }) {
+export function createDayAssistant({ client, convex, log, resolvePath, toJpeg = screenshotJpeg, model = MODEL }) {
   let running = null;
   let stopped = false;
   let capNoticeDay = null;
@@ -282,6 +325,79 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
     return applied;
   }
 
+  /** A paid call whose record failed is written before anything new is sent. */
+  async function settlePending() {
+    if (!unsettled) return true;
+    try {
+      await convex.settleRequest(unsettled);
+      unsettled = null;
+    } catch (err) {
+      log(`assistant: a paid call is still not recorded (${err?.name ?? "Error"}); nothing new is sent until it is`);
+      return false;
+    }
+    await applyOpen();
+    return true;
+  }
+
+  /**
+   * One reserved call: make it, then record what it cost and proposed and apply that. A failed
+   * call frees its reservation only when the API refused it before any work; a record that
+   * failed is kept and written first next time.
+   */
+  async function exchange(anthropic, { requestId, maxTokens, content, sources }) {
+    let response;
+    try {
+      response = await anthropic.messages.create({
+        model,
+        max_tokens: maxTokens,
+        output_config: { effort: EFFORT, format: FORMAT },
+        system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
+        messages: [{ role: "user", content }],
+      });
+    } catch (err) {
+      // The items are read again next time. Only a refusal that came before any work frees the
+      // reservation; anything else may have been paid for, and stays charged at it.
+      const refused = typeof err?.status === "number" && REFUSED_BEFORE_WORK.has(err.status);
+      log(
+        `assistant: the request failed (${err?.name ?? "Error"}${err?.status ? ` ${err.status}` : ""}); ` +
+          `${refused ? "nothing was paid" : "it stays charged at its reservation"}, and its items are tried again next batch`
+      );
+      try {
+        await (refused ? convex.failRequest({ requestId }) : convex.abandonRequest({ requestId }));
+      } catch (failErr) {
+        log(`assistant: could not close the failed call (${failErr?.name ?? "Error"}); it stays counted at its reservation`);
+      }
+      return { status: "failed" };
+    }
+    // Priced as it was reserved: with no fallback, the model asked for is the one that answered
+    // (a dated id in response.model would price at the dearest rate, past the reservation).
+    const costUsd = costOf(response.usage, model);
+    const raw = response.stop_reason === "refusal" ? [] : replyActions(response);
+    if (raw === null) log(`assistant: the reply was not valid output (${response.stop_reason}); it is paid for, and nothing is applied`);
+    const proposals = (raw ?? []).map((a) => toProposal(a, sources)).filter(Boolean);
+    const rejected = (raw ?? []).length - proposals.length;
+    if (rejected) log(`assistant: rejected ${rejected} action(s) outside the allowed set`);
+    const settle = {
+      requestId,
+      costUsd,
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+      // Cached input is priced in costUsd, so it is logged too (spec R8; Codex 6a r6).
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+      proposals,
+    };
+    try {
+      await convex.settleRequest(settle);
+    } catch (err) {
+      unsettled = settle;
+      log(`assistant: could not record a paid call (${err?.name ?? "Error"}); it is written first next batch`);
+      return { status: "unsettled", costUsd };
+    }
+    const applied = await applyOpen();
+    return { status: "done", applied, proposed: proposals.length, costUsd };
+  }
+
   async function batch() {
     const anthropic = client();
     if (!anthropic) {
@@ -289,14 +405,7 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
       return;
     }
     if (unsettled) {
-      try {
-        await convex.settleRequest(unsettled);
-        unsettled = null;
-      } catch (err) {
-        log(`assistant: a paid call is still not recorded (${err?.name ?? "Error"}); nothing new is sent until it is`);
-        return;
-      }
-      await applyOpen();
+      await settlePending();
       return;
     }
     await applyOpen();
@@ -366,60 +475,85 @@ export function createDayAssistant({ client, convex, log, model = MODEL }) {
       await capPaused(day, `the daily cap of $${cap.capUsd} has no room for another call`);
       return;
     }
-    let response;
+    const outcome = await exchange(anthropic, { requestId, maxTokens: sized.maxTokens, content: made.text, sources: made.sources });
+    if (outcome.status !== "done") return;
+    log(`assistant: ${outcome.applied} action(s) from ${input.transcripts.length} transcript(s) and ${input.screenshots.length} screen(s), $${outcome.costUsd.toFixed(4)}`);
+  }
+
+  /**
+   * One screenshot's image, on James's request (spec R9). `logImageSent` writes the imageSent
+   * event; it runs after the cap is reserved and before the request is made, and a log that
+   * fails sends nothing. Answers with what came of it, in words for the page.
+   */
+  async function image(logImageSent, screenshotId) {
+    const no = (reason) => ({ ok: false, reason });
+    const anthropic = client();
+    if (!anthropic) return no("No Anthropic API key is set");
+    if (!(await settlePending())) return no("A paid call is still being recorded; try again in a moment");
+    const row = await convex.screenshot(screenshotId);
+    if (!row) return no("That screenshot is no longer on this Mac");
+    let jpeg;
     try {
-      response = await anthropic.messages.create({
-        model,
-        max_tokens: sized.maxTokens,
-        output_config: { effort: EFFORT, format: FORMAT },
-        system: [{ type: "text", text: SYSTEM, cache_control: { type: "ephemeral" } }],
-        messages: [{ role: "user", content: made.text }],
-      });
+      jpeg = await toJpeg(resolvePath(row.path));
     } catch (err) {
-      // The items are read again next time. Only a refusal that came before any work frees the
-      // reservation; anything else may have been paid for, and stays charged at it.
-      const refused = typeof err?.status === "number" && REFUSED_BEFORE_WORK.has(err.status);
-      log(
-        `assistant: the request failed (${err?.name ?? "Error"}${err?.status ? ` ${err.status}` : ""}); ` +
-          `${refused ? "nothing was paid" : "it stays charged at its reservation"}, and its items are tried again next batch`
-      );
+      log(`assistant: screenshot ${screenshotId} could not be read for sending (${err?.name ?? "Error"})`);
+      return no("That screenshot couldn't be read");
+    }
+    if (jpeg.length > MAX_IMAGE_BYTES) return no("That screenshot is too large to send");
+    const now = Date.now();
+    const day = localDay(now);
+    const cap = await convex.capStatus(day);
+    if (cap.reached) {
+      await capPaused(day, cap.capUsd === null ? "no daily cap is set" : `the daily cap of $${cap.capUsd} is used up`);
+      return no(cap.capUsd === null ? "No daily cap is set" : "Today's cap is used up");
+    }
+    const text = imageText(row, now);
+    const sized = fitBytes(utf8Bytes(text) + IMAGE_TOKENS, cap.capUsd - cap.spentUsd, model);
+    const requestId = sized && (await convex.beginRequest({ day, reservedUsd: sized.reservedUsd, transcriptIds: [], screenshotIds: [] }));
+    if (!requestId) {
+      await capPaused(day, `what is left of the daily cap of $${cap.capUsd} can't cover an image`);
+      return no("What is left of today's cap can't cover an image");
+    }
+    try {
+      await logImageSent({ screenshotId });
+    } catch (err) {
+      log(`assistant: imageSent could not be logged (${err?.name ?? "Error"}), so screenshot ${screenshotId} was not sent`);
       try {
-        await (refused ? convex.failRequest({ requestId }) : convex.abandonRequest({ requestId }));
+        await convex.failRequest({ requestId });
       } catch (failErr) {
-        log(`assistant: could not close the failed call (${failErr?.name ?? "Error"}); it stays counted at its reservation`);
+        log(`assistant: could not free the unused reservation (${failErr?.name ?? "Error"}); it stays counted`);
       }
-      return;
+      return no("The send couldn't be logged, so nothing was sent");
     }
-    // Priced as it was reserved: with no fallback, the model asked for is the one that answered
-    // (a dated id in response.model would price at the dearest rate, past the reservation).
-    const costUsd = costOf(response.usage, model);
-    const raw = response.stop_reason === "refusal" ? [] : replyActions(response);
-    if (raw === null) log(`assistant: the reply was not valid output (${response.stop_reason}); it is paid for, and nothing is applied`);
-    const proposals = (raw ?? []).map((a) => toProposal(a, made.sources)).filter(Boolean);
-    const rejected = (raw ?? []).length - proposals.length;
-    if (rejected) log(`assistant: rejected ${rejected} action(s) outside the allowed set`);
-    const settle = {
-      requestId,
-      costUsd,
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      // Cached input is priced in costUsd, so it is logged too (spec R8; Codex 6a r6).
-      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
-      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
-      proposals,
-    };
-    try {
-      await convex.settleRequest(settle);
-    } catch (err) {
-      unsettled = settle;
-      log(`assistant: could not record a paid call (${err?.name ?? "Error"}); it is written first next batch`);
-      return;
-    }
-    const applied = await applyOpen();
-    log(`assistant: ${applied} action(s) from ${input.transcripts.length} transcript(s) and ${input.screenshots.length} screen(s), $${costUsd.toFixed(4)}`);
+    const content = [
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: jpeg.toString("base64") } },
+      { type: "text", text },
+    ];
+    const outcome = await exchange(anthropic, { requestId, maxTokens: sized.maxTokens, content, sources: new Map([["s1", { sourceScreenshotId: row._id }]]) });
+    if (outcome.status === "failed") return no("Claude couldn't be reached; nothing was applied");
+    if (outcome.status === "unsettled") return no("Claude answered, but the answer couldn't be recorded yet");
+    log(`assistant: ${outcome.applied} action(s) from screenshot ${screenshotId}, $${outcome.costUsd.toFixed(4)}`);
+    return { ok: true, actions: outcome.proposed };
   }
 
   return {
+    /**
+     * One screenshot's image, sent when James asks (spec R9). The logger comes first and is
+     * required: there is no way to send an image without it. Waits for a batch in flight.
+     */
+    async sendImage(logImageSent, screenshotId) {
+      if (typeof logImageSent !== "function") throw new Error("sendImage needs the imageSent logger first (spec R9)");
+      while (running) await running;
+      if (stopped) return { ok: false, reason: "The assistant is stopping" };
+      const sent = image(logImageSent, screenshotId).catch((err) => {
+        log(`assistant: the image request stopped (${err?.name ?? "Error"})`);
+        return { ok: false, reason: "Something went wrong; nothing more was sent" };
+      });
+      running = sent.finally(() => {
+        running = null;
+      });
+      return sent;
+    },
     /** One batch. A batch already running, or a stop, makes this a no-op. */
     runBatch() {
       if (running || stopped) return Promise.resolve();

@@ -301,6 +301,19 @@ export const listDrafts = query({
   },
 });
 
+/**
+ * Where a screenshot's image is, for an image request (spec R9); null once the image is purged
+ * or the row is gone. Never the OCR text: the request sends the image itself.
+ */
+export const screenshot = query({
+  args: { screenshotId: v.id("screenshots") },
+  handler: async (ctx, { screenshotId }) => {
+    const row = await ctx.db.get(screenshotId);
+    if (!row || row.purgedAt !== undefined) return null;
+    return { _id: row._id, path: row.path, takenAt: row.takenAt, ...(row.appBundleId !== undefined && { appBundleId: row.appBundleId }) };
+  },
+});
+
 /** One draft, for the Linear send that claimed it (electron/linearDrafts.mjs). */
 export const draft = query({
   args: { draftId: v.id("externalDrafts") },

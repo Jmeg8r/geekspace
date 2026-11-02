@@ -32,8 +32,12 @@ export type AssistantRequest = {
   max_tokens: number;
   output_config: { effort: string; format: { type: "json_schema"; schema: object } };
   system: { type: "text"; text: string; cache_control: { type: "ephemeral" } }[];
-  messages: { role: "user"; content: string }[];
+  messages: { role: "user"; content: string | ContentBlock[] }[];
 };
+
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: "image/jpeg"; data: string } };
 
 type Reply = { content: { type: string; text?: string }[]; stop_reason: string; model: string; usage: Usage };
 
@@ -43,7 +47,21 @@ export type AssistantClient = { messages: { create: (params: AssistantRequest) =
 /** The SDK client for a key, with logging off whatever ANTHROPIC_LOG says. */
 export function assistantClient(apiKey: string): AssistantClient & { logLevel: string | undefined; maxRetries: number };
 
-export type DayAssistant = { runBatch: () => Promise<void>; stop: () => Promise<void> };
+/** Writes the imageSent event for a screenshot about to be sent (spec R9). */
+export type ImageSentLogger = (event: { screenshotId: string }) => Promise<void>;
+
+/** What came of an image request, in words for the page. */
+export type ImageResult = { ok: true; actions: number } | { ok: false; reason: string };
+
+export type DayAssistant = {
+  runBatch: () => Promise<void>;
+  /** The logger is required and comes first (spec R9): an unlogged send does not compile. */
+  sendImage: (logImageSent: ImageSentLogger, screenshotId: string) => Promise<ImageResult>;
+  stop: () => Promise<void>;
+};
+
+/** A screenshot as JPEG bytes (macOS: sips). */
+export function screenshotJpeg(file: string): Promise<Buffer>;
 
 type Proposal = Record<string, string | number | { start: number; end: number } | undefined>;
 
@@ -82,7 +100,11 @@ export function createDayAssistant(options: {
     applyProposal: (args: { requestId: string; index: number; tzOffsetMin?: number }) => Promise<void>;
     refuseProposal: (args: { requestId: string; index: number }) => Promise<void>;
     logEvent: (event: { kind: "capPaused"; detail: string }) => Promise<void>;
+    screenshot: (screenshotId: string) => Promise<{ _id: string; path: string; takenAt: number; appBundleId?: string } | null>;
   };
   log: (message: string) => void;
+  /** A screenshot's path, confined to the media root; throws for one outside it. */
+  resolvePath: (relativePath: string) => string;
+  toJpeg?: (file: string) => Promise<Buffer>;
   model?: string;
 }): DayAssistant;

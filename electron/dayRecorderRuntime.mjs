@@ -231,9 +231,14 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       applyProposal: (args) => client.mutation(api.assistant.applyProposal, args),
       refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),
       logEvent: (event) => logEvent(event),
+      screenshot: (screenshotId) => client.query(api.assistant.screenshot, { screenshotId }),
     },
+    resolvePath: (rel) => resolveMediaPath(mediaRoot, rel),
     log,
   });
+  // Spec R9: the imageSent event is written before an image leaves; a failed write throws, and
+  // sendImage then sends nothing.
+  const logImageSent = ({ screenshotId }) => logEvent({ kind: "imageSent", screenshotId });
   // Linear drafts (plan PR 6b, spec R12): sent only when James approves one.
   const linear = createLinearDrafts({
     keyStore: { get: () => linearKeyStore?.get() ?? null },
@@ -293,6 +298,9 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
 
   return {
     linear,
+    assistant: {
+      requestImage: (screenshotId) => assistant.sendImage(logImageSent, screenshotId),
+    },
     service,
     view,
     notice: {

@@ -538,10 +538,12 @@ describe("createKeyStore", () => {
   });
 });
 
+type IpcHandler = Parameters<Parameters<typeof registerAssistantIpc>[0]["handle"]>[1];
+
 // Plan PR 6a, spec F4: the key goes in from Settings and never comes back out.
 describe("registerAssistantIpc", () => {
   it("registers only the write-only key channels, through the guarded handle()", async () => {
-    const handlers = new Map<string, (args: { key?: string | number | null }) => boolean | void>();
+    const handlers = new Map<string, IpcHandler>();
     const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn(), get: vi.fn(() => "sk-ant-SYNTHETIC") };
     registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => null });
     expect([...handlers.keys()].sort()).toEqual(["gs:assistant:clearApiKey", "gs:assistant:hasApiKey", "gs:assistant:requestImage", "gs:assistant:setApiKey"]);
@@ -555,7 +557,7 @@ describe("registerAssistantIpc", () => {
   });
 
   it("asks for an image only by a screenshot id, and says so when the recorder is not running", async () => {
-    const handlers = new Map<string, (args: { screenshotId?: string | number | null }) => unknown>();
+    const handlers = new Map<string, IpcHandler>();
     const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() };
     const requestImage = vi.fn(async () => ({ ok: true as const, actions: 0 }));
     let running = false;
@@ -629,7 +631,7 @@ describe("sendImage", () => {
     const withoutLogger = () =>
       // @ts-expect-error spec R9: sendImage(logger, screenshotId) takes the logger first, always
       h.assistant.sendImage("shot1");
-    expect(typeof withoutLogger).toBe("function");
+    expect(withoutLogger).toBeInstanceOf(Function);
   });
 
   it("reserves the cap for the image, and sends nothing when the cap has no room", async () => {
@@ -666,6 +668,6 @@ describe("sendImage", () => {
   it("a batch never carries an image: images go only through sendImage", async () => {
     const h = harness();
     await h.assistant.runBatch();
-    expect(typeof h.requests[0].messages[0].content).toBe("string");
+    expect(h.requests[0].messages[0].content).toEqual(expect.any(String));
   });
 });

@@ -566,7 +566,7 @@ const assistantKeys = createKeyStore({
   safeStorage,
   fs,
 });
-registerAssistantIpc({ handle, keyStore: assistantKeys });
+registerAssistantIpc({ handle, keyStore: assistantKeys, assistant: () => dayRecorder?.assistant ?? null });
 // The Linear key (plan PR 6b), kept the same way; a draft is sent only by approving it.
 const linearKeys = createKeyStore({
   file: path.join(app.getPath("appData"), "Geekspace", "linear-key.bin"),
