@@ -3,22 +3,42 @@
 // here that calls Linear. The Linear key is kept like the assistant's (assistantKey.mjs).
 // WHY claim first: the draft moves to "approved" before the request, so two clicks can't post
 // twice; a send that fails moves it back to "pending", to be approved again.
+// WHY a comment id of our own (Codex review of PR 6b, round 1): a send can fail after Linear
+// took the comment (the connection drops, the answer is unreadable). Each draft keeps one id,
+// given at its first claim, and the comment is created under it. A failure after the request
+// left marks the draft in doubt, and the next approval asks Linear for that comment before it
+// posts: there, it is marked sent; not there, it is posted again under the same id, which
+// Linear will not take twice. Only a failure that proves nothing arrived leaves no doubt.
 // WHY no text in the log: a draft is made from captured content, and Linear's error messages
 // can echo what was sent. A failure is logged with the draft id and an HTTP status or error
 // code only, and never with the key.
 // UNVERIFIED until James's key: that `issue(id:)` resolves an identifier like ENG-123 (Linear's
-// GraphQL docs show it) and that a personal key goes in Authorization as is.
+// GraphQL docs show it), that a personal key goes in Authorization as is, and that
+// commentCreate keeps a client-given id and refuses it a second time.
 
 export const LINEAR_API = "https://api.linear.app/graphql";
 const MAX_DRAFT_ID = 64;
 
 const ISSUE = "query Issue($id: String!) { issue(id: $id) { id } }";
-const COMMENT = "mutation Comment($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }";
+const FIND = "query Comment($id: String!) { comment(id: $id) { id } }";
+const COMMENT =
+  "mutation Comment($id: String!, $issueId: String!, $body: String!) { commentCreate(input: { id: $id, issueId: $issueId, body: $body }) { success } }";
+// 4xx is Linear refusing the request, so nothing was done; a request timeout is not that.
+const REQUEST_TIMEOUT = 408;
 
-/** A failure safe to log and to show: a status or a code, never text Linear echoed. */
-class LinearError extends Error {}
+/**
+ * A failure safe to log and to show: a status or a code, never text Linear echoed.
+ * `answered` is true when Linear's answer proves it did not act on the request.
+ */
+class LinearError extends Error {
+  constructor(message, { answered = false, refused = false } = {}) {
+    super(message);
+    this.answered = answered;
+    this.refused = refused;
+  }
+}
 
-export function createLinearDrafts({ keyStore, fetch, convex, log }) {
+export function createLinearDrafts({ keyStore, fetch, convex, log, newId = () => crypto.randomUUID() }) {
   async function graphql(key, query, variables) {
     let res;
     try {
@@ -30,13 +50,32 @@ export function createLinearDrafts({ keyStore, fetch, convex, log }) {
     } catch (err) {
       throw new LinearError(`Linear couldn't be reached (${err?.code ?? err?.name ?? "network error"})`);
     }
-    if (!res.ok) throw new LinearError(`Linear answered HTTP ${res.status}`);
-    const reply = await res.json();
+    if (!res.ok) {
+      const answered = res.status >= 400 && res.status < 500 && res.status !== REQUEST_TIMEOUT;
+      throw new LinearError(`Linear answered HTTP ${res.status}`, { answered });
+    }
+    let reply;
+    try {
+      reply = await res.json();
+    } catch (err) {
+      throw new LinearError(`Linear's answer could not be read (${err?.name ?? "Error"})`);
+    }
     if (Array.isArray(reply?.errors) && reply.errors.length > 0) {
       const code = reply.errors[0]?.extensions?.code;
-      throw new LinearError(`Linear refused it (${typeof code === "string" ? code.slice(0, 40) : "error"})`);
+      // A refusal of a create may be Linear refusing an id it already has: not proof either way.
+      throw new LinearError(`Linear refused it (${typeof code === "string" ? code.slice(0, 40) : "error"})`, { refused: true });
     }
     return reply?.data ?? {};
+  }
+
+  /** Whether Linear has the comment of an earlier send in doubt. Unknown throws. */
+  async function delivered(key, commentId) {
+    try {
+      return (await graphql(key, FIND, { id: commentId })).comment?.id === commentId;
+    } catch (err) {
+      if (err instanceof LinearError && err.refused) return false; // Linear has no comment by that id
+      throw err;
+    }
   }
 
   return {
@@ -44,25 +83,31 @@ export function createLinearDrafts({ keyStore, fetch, convex, log }) {
     async approve(draftId) {
       const key = keyStore.get();
       if (!key) throw new Error("Add your Linear API key in Settings first");
-      await convex.setStatus(draftId, "approved");
+      const draft = await convex.claim(draftId, newId());
+      let requested = false;
       try {
-        const draft = await convex.draft(draftId);
-        if (!draft) throw new LinearError("the draft is gone");
+        if (draft.deliveryUnknown && (await delivered(key, draft.commentId))) {
+          await convex.markSent(draftId);
+          log(`linear: draft ${draftId} was already on its issue; marked sent`);
+          return;
+        }
         const found = await graphql(key, ISSUE, { id: draft.issueRef });
-        if (!found.issue?.id) throw new LinearError("Linear has no such issue");
-        const sent = await graphql(key, COMMENT, { issueId: found.issue.id, body: draft.body });
-        if (sent.commentCreate?.success !== true) throw new LinearError("Linear did not take the comment");
+        if (!found.issue?.id) throw new LinearError("Linear has no such issue", { answered: true });
+        requested = true;
+        const sent = await graphql(key, COMMENT, { id: draft.commentId, issueId: found.issue.id, body: draft.body });
+        if (sent.commentCreate?.success !== true) throw new LinearError("Linear did not take the comment", { answered: true });
       } catch (err) {
         const why = err instanceof LinearError ? err.message : `Linear send failed (${err?.name ?? "Error"})`;
-        log(`linear: draft ${draftId} not sent: ${why}; it is back in the queue`);
+        const inDoubt = requested && !(err instanceof LinearError && err.answered);
+        log(`linear: draft ${draftId} not sent: ${why}; it is back in the queue${inDoubt ? ", and checked with Linear before it is sent again" : ""}`);
         try {
-          await convex.setStatus(draftId, "pending");
+          await convex.release(draftId, inDoubt);
         } catch (backErr) {
           log(`linear: draft ${draftId} could not go back in the queue (${backErr?.name ?? "Error"}); it stays approved`);
         }
         throw new Error(why);
       }
-      await convex.setStatus(draftId, "sent");
+      await convex.markSent(draftId);
       log(`linear: draft ${draftId} sent`);
     },
   };

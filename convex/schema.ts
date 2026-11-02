@@ -308,6 +308,12 @@ export default defineSchema({
     issueRef: v.string(),
     body: v.string(),
     status: v.union(v.literal("pending"), v.literal("approved"), v.literal("sent"), v.literal("discarded")),
+    // The id the Linear comment is created under, fixed at the first claim, so a send that is
+    // tried again can't post a second comment (Codex review of PR 6b, round 1).
+    commentId: v.optional(v.string()),
+    // A send failed after the comment request left: whether Linear has it is not known, so
+    // the next approval asks Linear first. Cleared only by sending.
+    deliveryUnknown: v.optional(v.boolean()),
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_status", ["status"]),

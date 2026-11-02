@@ -311,10 +311,12 @@ describe("assistant drafts, the send", () => {
     return { t, id };
   }
 
-  it("an approved draft whose send failed goes back to pending", async () => {
+  it("an approved draft whose send failed goes back to pending only through releaseDraft", async () => {
     const { t, id } = await aDraft();
     await t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "approved" });
-    await t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "pending" });
+    // Codex 6b r1: the step back must keep whether the send is in doubt, so it has one door.
+    await expect(t.mutation(api.assistant.setDraftStatus, { draftId: id, status: "pending" })).rejects.toThrow(/approved to pending/);
+    await t.mutation(api.assistant.releaseDraft, { draftId: id, deliveryUnknown: false });
     expect((await t.query(api.assistant.draft, { draftId: id }))?.status).toBe("pending");
   });
 

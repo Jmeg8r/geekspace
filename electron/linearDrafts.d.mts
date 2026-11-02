@@ -13,10 +13,15 @@ export function createLinearDrafts(options: {
   keyStore: { get: () => string | null };
   fetch: FetchLike;
   convex: {
-    draft: (draftId: string) => Promise<{ issueRef: string; body: string; status: string } | null>;
-    setStatus: (draftId: string, status: "approved" | "pending" | "sent") => Promise<void>;
+    /** pending → approved; the comment id is the draft's own once it has one. */
+    claim: (draftId: string, commentId: string) => Promise<{ issueRef: string; body: string; commentId: string; deliveryUnknown: boolean }>;
+    /** approved → pending; `deliveryUnknown` once set stays set until the draft is sent. */
+    release: (draftId: string, deliveryUnknown: boolean) => Promise<void>;
+    markSent: (draftId: string) => Promise<void>;
   };
   log: (message: string) => void;
+  /** A UUID v4 for a draft's first claim. */
+  newId?: () => string;
 }): LinearDrafts;
 
 /** What the page may send: a key to save, or a draft id to approve (anything else is refused). */

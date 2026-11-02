@@ -281,11 +281,11 @@ export const listActions = query({
 const draftStatus = v.union(v.literal("pending"), v.literal("approved"), v.literal("sent"), v.literal("discarded"));
 type DraftStatus = Doc<"externalDrafts">["status"];
 // "sent" and "discarded" are final: nothing that left Geekspace can be unsent. The one step
-// back is a failed send, approved to pending.
+// back, a failed send from approved to pending, is releaseDraft's, which keeps whether the
+// send is in doubt.
 const NEXT = {
   pending: ["approved", "discarded"],
-  // Back to pending: the send to Linear failed (plan PR 6b), so it waits to be approved again.
-  approved: ["sent", "discarded", "pending"],
+  approved: ["sent", "discarded"],
   sent: [],
   discarded: [],
 } satisfies Record<DraftStatus, readonly DraftStatus[]>;
@@ -311,6 +311,37 @@ export const screenshot = query({
     const row = await ctx.db.get(screenshotId);
     if (!row || row.purgedAt !== undefined) return null;
     return { _id: row._id, path: row.path, takenAt: row.takenAt, ...(row.appBundleId !== undefined && { appBundleId: row.appBundleId }) };
+  },
+});
+
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * James approved a draft: claim it for the Linear send (pending → approved), so two clicks
+ * can't both send it. The comment id is fixed at the first claim and kept for every later
+ * one (Codex review of PR 6b, round 1).
+ */
+export const claimDraft = mutation({
+  args: { draftId: v.id("externalDrafts"), commentId: v.string() },
+  handler: async (ctx, { draftId, commentId }) => {
+    if (!UUID_V4.test(commentId)) throw new Error("The comment id must be a UUID v4");
+    const draft = await ctx.db.get(draftId);
+    if (!draft) throw new Error(`Draft ${draftId} does not exist`);
+    if (draft.status !== "pending") throw new Error(`Cannot move a draft from ${draft.status} to approved`);
+    const id = draft.commentId ?? commentId;
+    await ctx.db.patch(draftId, { status: "approved", commentId: id, updatedAt: Date.now() });
+    return { issueRef: draft.issueRef, body: draft.body, commentId: id, deliveryUnknown: draft.deliveryUnknown === true };
+  },
+});
+
+/** The send did not finish: back in the queue. A send in doubt stays in doubt until it is sent. */
+export const releaseDraft = mutation({
+  args: { draftId: v.id("externalDrafts"), deliveryUnknown: v.boolean() },
+  handler: async (ctx, { draftId, deliveryUnknown }) => {
+    const draft = await ctx.db.get(draftId);
+    if (!draft) throw new Error(`Draft ${draftId} does not exist`);
+    if (draft.status !== "approved") throw new Error(`Cannot move a draft from ${draft.status} to pending`);
+    await ctx.db.patch(draftId, { status: "pending", deliveryUnknown: draft.deliveryUnknown === true || deliveryUnknown, updatedAt: Date.now() });
   },
 });
 
