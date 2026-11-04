@@ -72,6 +72,9 @@ Usage:
                                                # compiled viewer as a declared exclusion
   bin/blast-radius.py --jsonl-digest BASE HEAD DECL < path/status pairs (NUL-separated)
                                                # review-pr.sh 1c: declared ledgers' digests
+  bin/blast-radius.py --not-applicable VERDICT N < standards (a JSON array)
+                                               # review-pr.sh 5: judge and render a verdict's
+                                               # per-standard not-applicable reasons
 """
 from __future__ import annotations
 
@@ -1308,10 +1311,105 @@ def ledger_digest_cli(args: list[str]) -> int:
     return 0
 
 
+# review-pr.sh section 5's fourth zero-standards exception (CLAUDE.md section 4.7; geekspace
+# forge PR #84, TOML and shell reviewed against rules about Electron and Convex). It lives
+# here, not in review-pr.sh, for the reason the digest above does: review-pr.sh must stay
+# under the per-file cap that reviews its own install PR (selftest case 19).
+# The bounds must match review-broker.py's NA_REASON_MIN_CHARS/MAX_CHARS by inspection.
+NA_REASON_MIN_CHARS = 12
+NA_REASON_MAX_CHARS = 300
+# How many standards are NAMED in the comment, as review-pr.sh's STD_LABEL_CAP; the rest
+# are counted. Each label keeps this many characters of the standard's text.
+NA_LABEL_CAP = 200
+NA_LABEL_CHARS = 100
+# Every control character and Unicode line separator becomes a space, so a label or reason
+# stays one blockquote line and cannot forge a line forge-pr parses.
+_NA_BREAKS = {c: " " for c in [*range(32), 127, 133, 0x2028, 0x2029]}
+
+
+def _na_text(value: object) -> str:
+    return str(value).translate(_NA_BREAKS)
+
+
+def not_applicable_problem(rows: object, n: int) -> str | None:
+    """Why `rows` does NOT say, for every one of `n` standards, that it does not apply and
+    why; None when it does. The broker applies the same rules (_not_applicable_problem); this
+    copy is the client's, so a broker field is never trusted. Each standard 1..n exactly
+    once, `applies` exactly false, a reason NA_REASON_MIN..MAX characters once trimmed, and
+    no reason shared by two standards once case and whitespace are folded: one sentence
+    pasted onto every rule is not a judgement about any of them."""
+    if not isinstance(rows, list) or not rows:
+        return "the verdict carries no standards_not_applicable list"
+    if n <= 0 or len(rows) != n:
+        return f"the list answers {len(rows)} standard(s) of {n}"
+    seen: set = set()
+    reasons: set = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            return "an entry is not an object"
+        num, reason = row.get("standard"), row.get("reason")
+        if isinstance(num, bool) or not isinstance(num, int) or not 1 <= num <= n or num in seen:
+            return f"standard number {num!r} is out of range or repeated"
+        seen.add(num)
+        if row.get("applies") is not False:
+            return f"standard {num} is not marked as not applicable"
+        if not isinstance(reason, str):
+            return f"standard {num}: the reason is not text"
+        text = reason.strip()
+        if not NA_REASON_MIN_CHARS <= len(text) <= NA_REASON_MAX_CHARS:
+            return (f"standard {num}: a reason of {len(text)} character(s), expected "
+                    f"{NA_REASON_MIN_CHARS}..{NA_REASON_MAX_CHARS}")
+        folded = " ".join(text.casefold().split())
+        if folded in reasons:
+            return f"standard {num}: the same reason is given for another standard"
+        reasons.add(folded)
+    return None
+
+
+def not_applicable_cli(args: list[str]) -> int:
+    """--not-applicable VERDICT N, the standards this client sent on stdin as a JSON array.
+    Exit 0 with the comment's blockquote on stdout when VERDICT's standards_not_applicable
+    is acceptable; exit 1 with the reason on stderr when it is not; 2 on bad usage."""
+    if len(args) != 2 or not args[1].isdigit():
+        sys.stderr.write("--not-applicable needs VERDICT N, the standards on stdin\n")
+        return 2
+    n = int(args[1])
+    try:
+        standards = json.loads(sys.stdin.read())
+        verdict = json.loads(Path(args[0]).read_text())
+    except (OSError, ValueError) as e:
+        sys.stderr.write(f"   not-applicable list: unreadable ({e})\n")
+        return 1
+    if not isinstance(standards, list) or len(standards) != n or not isinstance(verdict, dict):
+        sys.stderr.write(f"   not-applicable list: expected {n} standards and a verdict object\n")
+        return 1
+    rows = verdict.get("standards_not_applicable")
+    problem = not_applicable_problem(rows, n)
+    if problem is not None:
+        why = verdict.get("standards_applicability_problem")
+        sys.stderr.write(f"   not-applicable list refused: {problem}"
+                         + (f" (broker: {_na_text(why)[:300]})" if why else "") + "\n")
+        return 1
+    labels = [f"> > - ({r['standard']}) {_na_text(standards[r['standard'] - 1])[:NA_LABEL_CHARS]}"
+              f" → {_na_text(r['reason']).strip()}"
+              for r in sorted(rows, key=lambda r: r["standard"])[:NA_LABEL_CAP]]
+    if n > NA_LABEL_CAP:
+        labels.append(f"> > - …and {n - NA_LABEL_CAP} more, not listed here")
+    sys.stdout.write(
+        "> ℹ️ No standard applies: **no project standard was applied**. The model named "
+        f"none of the {n} standards as checked, and when asked about each one it judged it "
+        "not applicable to this change, for the reason given. This pass means the change "
+        "was read and nothing was flagged. It is not a rule check: read the reasons.\n>\n"
+        + "\n".join(labels) + "\n\n")
+    return 0
+
+
 def main() -> int:
     args = sys.argv[1:]
     if args and args[0] == "--jsonl-digest":
         return ledger_digest_cli(args[1:])
+    if args and args[0] == "--not-applicable":
+        return not_applicable_cli(args[1:])
     as_json = "--json" in args
     declare_generated = "--declare-generated" in args
     args = [a for a in args if a not in ("--json", "--declare-generated")]

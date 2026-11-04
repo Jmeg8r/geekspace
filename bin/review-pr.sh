@@ -641,7 +641,7 @@ if [ "$CTX_TRUNCATED" -gt 0 ]; then
 fi
 
 # ---- 5. ask the broker ------------------------------------------------------------
-V=$(mktemp); BHDR=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR" "$LEDGER_PLAN" "$_LP"' EXIT
+V=$(mktemp); BHDR=$(mktemp); NAF=$(mktemp); trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR" "$NAF" "$LEDGER_PLAN" "$_LP"' EXIT
 # mktemp creates 0600 (verified on BSD and GNU coreutils), so the token is readable
 # only by this user -- unlike argv. An unauthenticated broker leaves the file empty,
 # which curl accepts as "no extra headers".
@@ -661,7 +661,7 @@ print_review_diagnostics() {
       and (.stage as $s | (["initial_review", "changed_files_followup",
         "standards_followup", "coverage_completion_review",
         "coverage_completion_followup", "coverage_fallback_review",
-        "coverage_fallback_followup"] | index($s)) != null)
+        "coverage_fallback_followup", "standards_applicability_followup"] | index($s)) != null)
       and (.result as $r | (["completed", "transport_timeout", "transport_error",
         "http_error", "response_envelope_invalid", "model_output_invalid",
         "budget_exhausted", "internal_error"] | index($r)) != null)
@@ -674,7 +674,7 @@ print_review_diagnostics() {
       and ($d.terminal_stage as $s | (["initial_review", "changed_files_followup",
         "standards_followup", "coverage_completion_review",
         "coverage_completion_followup", "coverage_fallback_review",
-        "coverage_fallback_followup", "cache_hit", "preflight_refusal",
+        "coverage_fallback_followup", "standards_applicability_followup", "cache_hit", "preflight_refusal",
         "admission_wait", "post_model_validation", "complete"] | index($s)) != null)
       and ($d.outcome as $o | (["completed", "transport_timeout", "transport_error",
         "http_error", "response_envelope_invalid", "model_output_invalid",
@@ -683,8 +683,8 @@ print_review_diagnostics() {
       and ($d.cache_state as $c | (["hit", "miss", "unknown"] | index($c)) != null)
       and ($d.elapsed_s | bounded_seconds)
       and ($d.admission_wait_s == null or ($d.admission_wait_s | bounded_seconds))
-      # 7 = the broker DIAGNOSTIC_MAX_CALLS: one call per stage listed above.
-      and ($d.calls | type == "array" and length <= 7 and all(.[]; safe_call))
+      # 8 = the broker DIAGNOSTIC_MAX_CALLS: one call per stage listed above.
+      and ($d.calls | type == "array" and length <= 8 and all(.[]; safe_call))
   ' "$V" >/dev/null 2>&1; then
     echo "   broker diagnostics unavailable (request ID: $REQUEST_ID)" >&2
     return
@@ -805,26 +805,17 @@ if [ "$DELETED_UNREAD" -eq 0 ]; then
   esac
 fi
 REQUIRED_READ=$(( REQUIRED_READ - BINARY_UNREAD ))
-# A PASS that checked only SOME of the rules is REPORTED, not refused. Measured against
-# live traffic before this was written: viceroy PR #16 merged on a real verdict of 2/12
-# standards checked, and claude-memory's fork -- where this port came from -- would have
-# killed it. Partial standards coverage is ordinary model behaviour, not an anomaly, and
-# a gate that fails most real PRs gets worked around, which costs more than the gap it
-# closes. The ratio is already rendered into the posted comment, so the human sees it.
-# Same posture as #68 took for a clamped aggregate: say it, do not die on it.
-# ZERO checked is not the mild end of partial, it is the generic review this gate exists
-# to refuse -- the same thing section 3 already dies on when the extraction comes back
-# empty, arriving from the other end of the pipe. forge-pr decides on the verdict word and
-# never reads this ratio, so nothing downstream would catch it (Codex [P2] on PR #71).
-# The live-traffic evidence that motivated the softening was 2/12, 10/10 and 11/11 -- all
-# non-zero -- so refusing exactly zero costs none of it.
-# Docs-only PRs are the ONE exception to the zero-standards refusal, and it is decided here
-# from this client's own paths, never from the broker's docs_only flag. Every standard in a
-# repo like this one is about code, so on a PR that changes only documentation the model
-# answers truthfully that none apply: 0 of N, even from the WHICH follow-up, and even
-# when a "not-applicable still counts" wording is used (measured 2026-09-25 on #98). Refusing
-# that blocked every docs PR since b0b2c62. Accepted only when every changed file was named
-# as read, and never silently: the comment says no project rule was applied (STD_ZERO_DOCS).
+# A PASS that checked only SOME rules is REPORTED, not refused: viceroy PR #16 merged at a
+# real 2/12 (also 10/10, 11/11), and a gate that fails most real PRs gets worked around.
+# ZERO checked is the generic review this gate exists to refuse, as section 3 does for an
+# empty extraction; forge-pr never reads this ratio, so nothing downstream would catch it
+# (Codex [P2] on PR #71). Four exceptions, each decided here, needing every non-excused
+# changed file read, and disclosed in the comment. Docs-only, from this client's own paths
+# and never the broker's docs_only flag: on documentation the model truthfully names 0 of N
+# code rules, even when told not-applicable counts (#98, 2026-09-25; it blocked every docs
+# PR since b0b2c62). Ledger-only and dependency-only: below. Not-applicable (section 4.7,
+# geekspace #84): blast-radius.py --not-applicable judges the broker's per-rule reasons,
+# trusting none of its fields, and renders them; a bare zero stays refused.
 # DOC_SUFFIXES must match review-broker.py's by inspection. No txt: requirements.txt and
 # CMakeLists.txt are build inputs (Codex [P2], #101). Lowercased through tr because
 # macOS bash 3.2 has no ${x,,}.
@@ -901,6 +892,7 @@ LEDGER_ONLY=0
 STD_ZERO_DOCS=0
 STD_ZERO_DEPS=0
 STD_ZERO_LEDGER=0
+STD_ZERO_NA=0
 if [ "$VERDICT" = "pass" ] && [ "$STD_SUPPLIED" -gt 0 ] && [ "$STD_CHECKED" -eq 0 ]; then
   if [ "$DOCS_ONLY" -eq 1 ] && [ "$EXAMINED_CHANGED" = "$REQUIRED_READ" ]; then
     STD_ZERO_DOCS=1
@@ -911,6 +903,10 @@ if [ "$VERDICT" = "pass" ] && [ "$STD_SUPPLIED" -gt 0 ] && [ "$STD_CHECKED" -eq 
   elif [ "$DOCS_ONLY" -eq 0 ] && [ "$EXAMINED_CHANGED" = "$REQUIRED_READ" ] && deps_only; then
     STD_ZERO_DEPS=1
     echo "   NOTE: dependency-only PR — 0 of $STD_SUPPLIED standard(s) applied; accepted because every changed file is a package.json that differs only in its dependency sections and all $REQUIRED_READ were read, and disclosed in the comment"
+  elif [ "$EXAMINED_CHANGED" = "$REQUIRED_READ" ] && printf '%s' "$STANDARDS" \
+       | "${GATE_BIN:-bin}/blast-radius.py" --not-applicable "$V" "$STD_SUPPLIED" > "$NAF"; then
+    STD_ZERO_NA=1
+    echo "   NOTE: no standard applies — each of $STD_SUPPLIED judged not applicable with a reason, listed in the comment"
   else
     die "broker checked 0 of $STD_SUPPLIED standard(s) — a clean verdict that applied none of this repo's rules is a generic review wearing this gate's badge; UNKNOWN, refusing"
   fi
@@ -1219,6 +1215,7 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
   --argjson unreadable "$BR_UNREADABLE" --argjson stdzerodocs "$STD_ZERO_DOCS" \
   --argjson stdzerodeps "$STD_ZERO_DEPS" \
   --arg ledger "$LEDGER_NOTE" --argjson stdzeroledger "$STD_ZERO_LEDGER" \
+  --argjson stdzerona "$STD_ZERO_NA" --rawfile stdna "$NAF" \
   --argjson stdlow "$STD_LOW" --argjson stdunchecked "$STD_UNCHECKED_LABELS" \
   --argjson stdlowchecked "$STD_LOW_CHECKED" --argjson stdlowsupplied "$STD_LOW_SUPPLIED" \
   --argjson deletedunread "$DELETED_UNREAD" \
@@ -1357,6 +1354,7 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
       "was read and nothing was flagged. It does not check referential integrity or how IDs " +
       "are derived: that belongs in this repository\u0027s own CI.\n\n"
     else "" end) +
+   (if $stdzerona == 1 then $stdna else "" end) +
    # Low standards coverage on a code PR (section 5 decides; this only renders). EVERY
    # line opens with "> ": the forge-pr header, metadata and finding patterns all anchor at
    # line start on something else, and a label is single-line, so no rule text can forge
@@ -1444,7 +1442,7 @@ BODY=$(jq -r --arg sha "${HEAD_SHA:0:8}" --arg br "$BR_COUNT" --arg scanned "$BR
 
 if [ "$POST" -eq 1 ]; then
   FHDR=$(mktemp); CMT=$(mktemp)
-  trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR" "$FHDR" "$CMT" "$LEDGER_PLAN" "$_LP"' EXIT
+  trap 'rm -f "$REQ" "$DTMP" "$CJSON" "$V" "$BHDR" "$NAF" "$FHDR" "$CMT" "$LEDGER_PLAN" "$_LP"' EXIT
   printf 'Authorization: token %s\n' "$FT" > "$FHDR"
   # The body goes through a file too. Not a credential, but a long review on argv is
   # an E2BIG waiting for the PR that finally exceeds the limit.
