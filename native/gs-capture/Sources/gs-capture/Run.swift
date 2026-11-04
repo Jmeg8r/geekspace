@@ -100,14 +100,34 @@ enum Run {
         return blanked
     }
 
-    static func dayAndFile(_ date: Date, prefix: String = "shot", ext: String = "heic") -> (day: String, file: String) {
+    static func dayAndFile(_ date: Date, prefix: String = "shot", ext: String = "heic",
+                           timeZone: TimeZone = .current) -> (day: String, file: String) {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
+        formatter.timeZone = timeZone
         formatter.dateFormat = "yyyy-MM-dd"
         let day = formatter.string(from: date)
         formatter.dateFormat = "HHmmss-SSS"
-        return (day, "\(prefix)-\(formatter.string(from: date)).\(ext)")
+        // The local part is for people; the epoch makes the name unique, because local time
+        // repeats in the DST fall-back hour. Truncated, as SSS is.
+        let epochMs = Int64((date.timeIntervalSince1970 * 1000).rounded(.down))
+        return (day, "\(prefix)-\(formatter.string(from: date))-\(epochMs).\(ext)")
+    }
+
+    /// The supervisor's commands, one per line on stdin (protocol.md "Commands"). An unknown
+    /// or out-of-order command is a supervisor bug, so it fails the run rather than guess.
+    static func readCommands(_ audio: SystemAudioRecorder) {
+        Thread.detachNewThread {
+            while let command = readLine() {
+                switch command {
+                case "call hold": audio.holdCall()
+                case "call release": audio.releaseCall()
+                case "call discard": audio.discardCall()
+                case "call clear": audio.clearCall()
+                default: fail("unknown command on stdin: \(command.prefix(40))")
+                }
+            }
+        }
     }
 
     static func run(_ args: Args) async {
@@ -146,10 +166,30 @@ enum Run {
         }
         line("ready", ["pid": Int(getpid()), "shotSec": shotSec, "segmentSec": segmentSec, "denylist": denylist])
         ProcWatch.detachHALFromMainRunLoop()
-        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec) { event, fields in
+        // How long a call may wait for its notice (CallHold.swift); the supervisor sets it.
+        let maxCallSec = args.double("call-hold-max-sec", default: CallHold.defaultMaxSec)
+        // A helper started while a call waits for its notice or was declined holds from its first
+        // sample, so the call never reaches a sys- file (plan PR 4b).
+        let startHeld: Bool
+        switch args.string("start-held") {
+        case nil: startHeld = false
+        case "yes": startHeld = true
+        // A malformed value must never read as "don't hold" (the --rebuild-ms lesson, PR 3a).
+        case let other?: fail("--start-held takes yes, got \(other)")
+        }
+        // The call apps, from the supervisor: the helper holds a call itself, from before its
+        // poll saw the app start (Codex review of PR 4b, round 3).
+        let callApps = args.list("call-apps"), browsers = args.list("browsers")
+        for id in callApps + browsers where id.range(of: bundleIDPattern, options: .regularExpression) == nil {
+            fail("--call-apps / --browsers entry is not a bundle id: \(id)")
+        }
+        let audio = SystemAudioRecorder(root: root, denylist: denylist, segmentSec: segmentSec, maxCallSec: maxCallSec,
+                                        startHeld: startHeld,
+                                        calls: AudioUse.CallTracker(apps: Set(callApps), browsers: Set(browsers))) { event, fields in
             line(event, fields)
         }
         adopt(audio)
+        readCommands(audio)
         Task.detached {
             while true {
                 try? await Task.sleep(nanoseconds: UInt64(heartbeatSec * 1_000_000_000))
@@ -200,9 +240,10 @@ enum Run {
                 let dir = "\(root)/\(day)"
                 do {
                     try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-                    // Atomic: a kill mid-write must never leave a truncated image behind.
-                    try Screen.encode(image, heic: true, quality: heicQuality)
-                        .write(to: URL(fileURLWithPath: "\(dir)/\(file)"), options: .atomic)
+                    // A kill mid-write must never leave a truncated image behind, and a
+                    // repeated name must never replace an earlier shot.
+                    try writeWithoutReplacing(Screen.encode(image, heic: true, quality: heicQuality),
+                                              to: URL(fileURLWithPath: "\(dir)/\(file)"))
                 } catch {
                     fail("cannot write \(day)/\(file): \(error.localizedDescription)")
                 }

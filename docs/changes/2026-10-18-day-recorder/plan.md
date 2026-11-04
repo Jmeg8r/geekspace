@@ -1043,6 +1043,186 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - Evidence: `pr3b3-signed-build.json` (built from `6a8f9fb`).
   - This commit changes only docs and evidence. The code is exactly what round 5 reviewed.
 
+- **2026-10-20, PR 3c (part 1), the supervisor, service, gates and purge.** This part covers
+  the JS side of 3c. The proofs that need James at the Mac come in the next part (below).
+  - **Files:**
+    - `electron/dayRecorder.mjs`: the supervisor, built against `protocol.md`.
+    - `electron/dayRecorderService.mjs`: settings become a running helper.
+    - `electron/dayRecorderGates.mjs`: the FileVault and Time Machine checks.
+    - `electron/dayRecorderMedia.mjs`: the media root, the path guard and the purge.
+    - `electron/dayRecorderRuntime.mjs`: assembles the real parts.
+    - Wiring in `electron/main.mjs`.
+  - **Main has its own Convex client.** The spec says "the existing client", but the main
+    process had none, and capture can't depend on a window being open.
+    - `ConvexClient` uses `anyApi`, because `convex/` isn't packaged and the generated `api`
+      is `anyApi` anyway.
+    - Settings arrive by subscription to `dayRecorder.getSettings`, so turning the recorder on
+      reaches the helper with no IPC yet (PR 3d).
+  - **The tray indicator moves to 3e** with the rest of the UI. 3c reports status through
+    `service.onStatus`.
+  - **Every start runs both gates.**
+    - FileVault must report exactly `FileVault is On.`.
+    - The media root needs `tmutil addexclusion` (sticky form), confirmed by `isexcluded`
+      reporting `[Excluded]`.
+    - A check that can't run counts as failed. A failed gate gives the state `blocked`, with
+      copy saying how to fix it, plus a `capError` event.
+  - **A denylist or `shotSec` change restarts the helper** (protocol.md). Changes are applied
+    one at a time, so two helpers never run at once (tested with three overlapping changes).
+  - **No automatic restart after a failure.** The state stays "Not recording" with a
+    `capError` event until the settings change or the app relaunches. Retrying could loop on
+    a revoked permission. **This is James's call;** a bounded retry is easy to add.
+  - **Nothing captured is logged.**
+    - A failed screenshot write logs the path and the error *name* only, because a Convex
+      argument-validation error echoes its arguments, OCR text included.
+    - `tapRebuilt` and `tailDropped` are logged as counts. Their bundle fields are never
+      stored.
+    - Tests check every log for synthetic secret strings.
+  - **The purge works from rows, then sweeps folders.**
+    - Expired rows from `expiredMedia` are deleted through `resolveMediaPath`. It accepts only
+      `<day>/<file>`, resolves symlinks, and refuses anything outside the root. A file that
+      is already gone is still marked purged.
+    - Then day folders whose *whole* day is past retention are removed: orphans,
+      `.partial-*` files and all. The day that straddles the cutoff waits a day.
+    - Only real directories named `YYYY-MM-DD` are touched, never a symlink or the key blob.
+    - A refused row is never marked purged, and the loop stops instead of re-serving it.
+      Such a row can't be created through `assertMediaPath`, so this is defence in depth.
+    - The purge runs at each start and every 6 h. R14 asks for daily; 6 h covers a Mac that
+      slept through a run.
+  - **Live probe** (real helper under the real supervisor, unsigned dev build, counts only;
+    the media was deleted afterwards):
+    - A clean stop took 63–77 ms and ended `stopped`.
+    - After `SIGKILL` on the helper, "Not recording" came 61–65 ms later (R3 asks for 10 s).
+  - **The probe found the first-OCR stall again. A new code identity triggers it, but so
+    does something else.**
+    - The first two 15 s runs after a fresh build stored 0 shots. Heartbeats continued, so the
+      status correctly stayed Recording: system audio was capturing.
+    - A copy re-signed with a new ad-hoc identifier had a first OCR of **38.9 s**. The next
+      run of the same copy took 0.5 s.
+    - **But it isn't identity alone.** About 25 minutes later the same, already-warm binary
+      took **36.3 s** on its first OCR again (direct run, 2026-10-21). So the stall also
+      comes back after time or idleness, perhaps a Vision model cache being evicted. The
+      trigger is **unverified**.
+    - **In practice:** capture can go about 40 s without screenshots on an ordinary launch,
+      not just after an update.
+    - **Open (James):** move OCR off the helper's capture loop (Swift; not in this JS part).
+      That now looks necessary rather than optional.
+  - **Verify:** `npm run verify` (44 files, 406 tests) and `npm run build` both pass. The
+    shared `node_modules` lacked `jsdom` (added on `main` earlier), so `npm install` was run
+    in the root checkout; the lockfile is unchanged.
+  - **Still to do in 3c, with James at the Mac, on a signed `npm run package`:**
+    - the 2-hour soak RSS log, keeping the PR 3a leak detail logging so any recurrence of the
+      one unattributed window is attributed;
+    - the R3 screenshots for a revoked permission and a killed helper;
+    - the stalled-delivery check with an output device unplugged mid-run;
+    - the clean-TCC-state proof (spike Q7).
+- **2026-10-20, PR 3c, F5 security gates on #80.**
+  - **`security-review`:** no high-confidence findings. It considered and rejected
+    candidates for command injection, argv injection, traversal, symlinks, TOCTOU, logging
+    and IPC.
+  - **`gstack-cso`** (run `1792555010920-c54230bb614ca230`, diff scope, `--code`): finished
+    as **partial**. It was static only, because the doctor found no qualified scanner images,
+    and the Swift sources outside the diff were not assessed.
+  - **The CSO's one finding, `4016f9d6` (low, high confidence, fixed):**
+    - Convex checks a row's `day`/`path` and its `takenAt`/`start` separately, and the local
+      backend accepts unauthenticated calls. So a forged row with an old time and a
+      current-day path made the purge delete a live recording, inside a 0700 folder that
+      caller can't otherwise touch.
+    - **Fix:** the purge now refuses any row whose path day is newer than the local day of
+      the retention cutoff. Test first: it failed before the guard and passes with it.
+    - The Convex handlers still don't tie `day` to the capture time. That would be a schema
+      boundary change, so it's left for James's call, not made here.
+- **2026-10-21, PR 3c, Codex #80 round 1 (6 × P1, 1 × P2): all fixed, each test first.**
+  - **P1, OCR could reach the console through the Convex client.** It logs a failed
+    mutation's server error, which echoes the arguments, before the promise rejects. Its
+    logger is now `contentFreeLogger`: warnings and errors keep only their level, and `log`
+    and `logVerbose` are dropped.
+  - **P1, a second quit skipped the recorder stop.** It also lost the process-exit kill.
+    `createQuitHold` now holds every quit until the stop finishes and then quits once.
+    `main.mjs` keeps the recorder handle for the exit kill, and the service's `killSync`
+    reaches a supervisor that is still stopping.
+  - **P1, a clean stop didn't wait for the final segment's row.** Row writes are now tracked,
+    and `stop()` waits up to `DRAIN_MS` (5 s) for them, logging any still pending. Tested
+    with the fake helper announcing a segment during SIGTERM.
+  - **P1, turning the recorder off stopped retention.** The purge now runs on the first
+    settings and on its interval for the service's whole life: off, blocked or recording
+    (R14). Off macOS there is no media root, so there is no purge either.
+  - **P1, a restart reported Recording with no helper.** The old supervisor's
+    stopping/off states now count, and the gates run under `starting`.
+  - **P1, malformed or wrong-version lines kept Recording alive.** protocol.md's Failure
+    section is now followed: such a line means Not recording (`protocol`). The helper gets
+    SIGTERM, then SIGKILL after the grace period. Lines after a failure are still stored,
+    but they no longer re-arm the watchdog.
+  - **P2, an apply waiting on a gate could start after shutdown or after Off.** Each await
+    in `applyNow` is now followed by a check for shutdown or a newer apply.
+  - `npm run verify`: 44 files, 418 tests. The live probe still ends `stopped`, and "Not
+    recording" now comes 68 ms after a SIGKILL. No real helper line was rejected.
+- **2026-10-21, PR 3c, Codex #80 round 2 (1 × P1, 1 × P2): both fixed, test first.** Round 2
+  confirmed that all seven round-1 fixes close their failures.
+  - **P1, retention stopped when Convex failed or stalled.** The folder sweep ran only after
+    every database call succeeded, and a query left pending while the client reconnected
+    kept `purging` set forever.
+    - **Fix:** each Convex call in the purge is bounded by `PURGE_DB_TIMEOUT_MS` (60 s).
+    - A failed or timed-out database phase is logged as `dbFailed`, and the database-free
+      day-folder sweep runs anyway.
+  - **P2, diagnostic events skipped validation, but their fields are logged.**
+    - `tapRebuilt` now needs a `trigger` of `listener` or `poll` and numeric counts.
+      `tailDropped` needs a count and the `unjudged` flag. `sampleRateChanged` needs numeric
+      rates, and `sessionUnverified` a numeric `livedMs`.
+    - A line that breaks these shapes counts as a protocol violation.
+    - Checked against the Swift emitter (`Tap.swift`, `Segments.swift`): it always sends
+      these fields.
+- **2026-10-21, PR 3c, Codex #80 round 3 (1 × P1, `[P2] none`): fixed, test first.** Round 3
+  confirmed that both round-2 fixes close their failures and match the Swift emitter.
+  - **P1, retention still waited for the first settings response.** A settings subscription
+    that errors, or never connects, held back the purge for the whole session.
+  - **Fix:** retention starts when the service is created (macOS only) and runs on its
+    interval from then on. Settings now govern capture only.
+  - The interval timer is `unref`'d, so it never keeps the process alive on its own.
+- **2026-10-21, PR 3c, Codex #80 round 4: GATE PASS (`[P1] none`, 1 × P2), and the loop stops
+  here (L42 cap).** Round 4 confirmed the round-3 retention fix.
+  - **P2, fixed after the pass, test first:** the recorder's log stream had no `error`
+    listener. A log file it can't open, or a full disk, would have thrown an uncaught
+    exception in the main process, even with recording off.
+  - `createFileLog` now reports a stream error once through a console fallback and sends
+    later lines there too.
+  - **This commit has had no Codex round.** Whether to run a final check on it is James's call.
+  - Codex reported that the vitest suites can't run in its read-only sandbox (it can't
+    create temp dirs). It checked with direct Node probes instead; `npm run verify` here
+    covers the suites.
+- **2026-10-21, PR 3c, James's decisions on the open items** (his words: "go with your
+  recommendations for 1-4").
+  - **Bounded automatic retry.** A helper that exited or went silent is retried after
+    `RETRY_DELAYS_MS` (5 s, 30 s, 120 s), then left Not recording.
+    - Never retried: a permission failure (a message matching `/permission/i`, such as
+      `SCShareableContent failed (Screen Recording permission?)`), a spawn failure, or a
+      protocol violation.
+    - Every failure and every retry is a `capError` event, so a flapping helper stays
+      visible. The status carries `retryInMs` while a retry is pending.
+    - The budget resets after a run that stays recording for `RETRY_RESET_MS` (10 min), or
+      on any settings change. Off, a newer apply, or shutdown cancels a pending retry.
+  - **Convex ties a row's day to its capture time.** `assertCaptureDay` in
+    `addScreenshot` and `addSegment` requires the capture time to fall inside the window
+    when local day D exists somewhere: D 00:00Z − 14 h to D+1 00:00Z + 12 h (UTC−12 to
+    UTC+14). This closes CSO finding 4016f9d6 at the trust boundary as well as in the purge.
+  - **Move OCR off the helper's capture loop:** its own PR, before the soak.
+  - **A final Codex check** covers these changes and the round-4 P2 fix.
+- **2026-10-21, PR 3c, final Codex check on `2fa4d33`: GATE PASS (`[P1] none`, 1 × P2).** It
+  covered the changes since round 4. The P2 is fixed, test first:
+  - A native ScreenCaptureKit denial ("The user declined TCCs for application, window,
+    display capture", spike Q7) has no "permission" in it, so it was being retried.
+  - The match is now `/permission|declined TCC/i`.
+  - A stable failure marker or exit code from the helper would be sturdier than matching
+    message text. That is a helper change, left for the OCR PR or later.
+- **2026-10-21, PR 3c, CI's "Typecheck & tests" was red on #80 from `2fa4d33` on.** All
+  three heads failed, while every local and Node 22 container run passed.
+  - The runner's log, read from the forge's `actions_log` store, named two service tests
+    that waited on the wall clock: a purge-interval count (2 where at least 3 was expected
+    in 70 ms) and the retry-budget reset (4 starts, expected 5). The shared runner was too
+    slow for 20–30 ms windows.
+  - **Fix:** `tests/dayRecorderService.test.ts` now runs on vitest fake timers throughout,
+    and the fake supervisor's stop is a microtask. The two purge counts are now exact (4).
+  - **Proof:** 20 runs of the Day Recorder suites in a `node:22` container limited to one
+    CPU had 0 failures.
 - **2026-10-21, OCR moves off the helper's capture loop** (James's decision, made before the
   3c soak; branch `feat/day-recorder-ocr-off-loop`).
   - **Why:** the first OCR in a process stalls for ~36–52 s, after a new build and again
@@ -1080,3 +1260,508 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     - `swift test`: 54 tests, one new for the shrinking deadline.
     - Live, on a re-signed copy with `--duration 10` and SIGTERM at 15 s: it exited at
       17.0 s, and the last frame was captured at 5.7 s.
+- **2026-10-21, PR 3c part 2, the runbook is ready:** `part2-runbook.md`.
+  - **Covers:** the signed package and its checks, the three R3 failure proofs, the 2-hour
+    R2 soak, leak attribution after the soak, and the clean-TCC check (spike Q7).
+  - **New tools:**
+    - `scripts/soak-rss.mjs` samples RSS per process role and media-file counts, and judges
+      the 50 MB rule. It reads no content.
+    - `scripts/day-recorder-ctl.mjs` handles on/off and time markers, writing the same
+      settings the future Settings switch will.
+  - **Runtime change:** the recorder log's `status:` line now carries the error and any
+    pending retry. That makes the log the R3 timing record until the UI lands in 3e.
+  - **Tested locally:** `soak-rss` against a live unsigned helper (it found the helper and
+    passed), and `ctl mark` with its label check. **Not exercised:** `ctl on`/`off` against
+    a running packaged app, which needs the backend from step 2.
+- **2026-10-21/22, PR 3c part 2, first run on the signed build (part2-runbook.md).** Built
+  from `aa71ee6` (#80 with #83 merged in). Evidence: `pr3c-part2-signed.json`.
+  - **Step 1, signature: pass.** Signed with `Developer ID Application: James Cruce
+    (Z4CHD4858S)`, not notarized. `codesign --verify --deep --strict` passes. The helper has
+    the runtime flag and team `Z4CHD4858S`, with the same five entitlements as the app.
+    - Prebake needs the gitignored `.convex/local/default/config.json`, so it was copied into
+      the worktree (mode 600). Prebake only copies it into its own scratch directory.
+  - **Step 2, recorder on: pass.** Recording 1.4 s after the settings change.
+    - The first screenshot was on disk 25 s after `ready`.
+    - The media root is `[Excluded]` from Time Machine and `drwx------`, so F8 and the
+      0700 mode hold in the signed build.
+    - No TCC prompt appeared: Geekspace kept its grants from the spike. Step 6 covers the
+      first-grant case.
+  - **Step 3a, helper killed: pass.** "Not recording" came 1.9 s after the marker (an upper
+    bound, since it includes the marker script's own start-up). A retry followed at 5 s, and
+    recording was back 6.3 s after the kill.
+    - **Retry cap:** four kills gave retries at 5 s, 30 s and 120 s, then no retry. It stayed
+      Not recording, checked for 10 s.
+    - **Seen, for 3e:** while a retry clears the failed supervisor, a `status: off` line
+      comes between `notRecording` and `starting`. A UI would flash "Off" there.
+  - **Step 4, 2-hour soak: pass (R2).** Growth from the 10-minute mark:
+    - helper +8.4 MB, main +1.0 MB, renderer +0.3 MB, backend +15.1 MB, other helpers
+      +4.6 MB;
+    - one helper pid for all 120 minutes;
+    - 0 tap rebuilds, 0 dropped tails, 0 Not recording, 0 failed row writes and 0 Convex
+      client errors in the log.
+    - **Media:** 24 segments in 2 h (one per 5 min), split 20 / 4 across local midnight,
+      plus 31 screenshots on a mostly static screen.
+    - **A logger bug the run caught, now fixed:** `soak-rss` counted only today's folder, so
+      its totals dropped to 0 at midnight. It now counts every day folder. The capture
+      itself was fine.
+    - **Two orphan `.partial-` segments** were written at 22:16:44 and 22:17:06 local, the
+      exact times of the first two SIGKILLs. That is the known orphan case, which the 30-day
+      sweep removes. The last two kills came within 0.4 s of `ready`, before any segment
+      began.
+  - **Step 5, leak attribution after the soak: pass.** The PR 3a second-instance proof ran
+    3 times with the **signed** helper: 0 leaked windows each time. The positive control was
+    heard in 11, 12 and 11 windows. PR 3a's unexplained window did not recur.
+  - **Still open, needing James:**
+    - 3b: Screen Recording revoked in System Settings. Changing security settings is
+      James's to do.
+    - 3c: the output device unplugged (physical).
+    - 6: the clean-TCC check, which needs a new macOS user.
+- **2026-10-22, PR 3c part 2, step 3b (Screen Recording revoked): pass, and the proof changed.**
+  - **Revoking reaches the running helper.** macOS's "won't take effect until Geekspace is
+    quit and reopened" warning doesn't apply to ScreenCaptureKit. On the first try, the
+    running helper failed with `SCShareableContent failed (Screen Recording permission?):
+    The user declined TCCs…` and reported Not recording, with no retry in the 60 s before
+    the quit.
+    - That first try *looked* like a miss: the 10-minute watch ended at 12:59:34, before
+      the switch was flipped at about 13:02. Read correctly, it was a detection.
+  - **Timed redo:** the helper reported Not recording at **09:38:44.949** local. James's
+    hand-pressed `date +%T`, run right after his click, read **09:38:46**, so detection came
+    within about the 1–2 s between his click and his key press. That is well inside R3's
+    10 s, and consistent with the 5 s heartbeat authorization check. There were 0 retry
+    lines after it.
+  - **Relaunch while revoked:** fails 103 ms after `ready` with the same message, and no
+    retry.
+  - **Restore:** the switch went back on, then a quit and reopen gave `recording` 1.4 s after
+    start-up. The quit was clean each time: the recorder `stopped` before the backend.
+  - **Orphan:** the helper's failure exit left its open segment as `.partial-` (the known
+    case). The sweep removes it.
+  - **Unverified:** macOS's log has no `tccd` entries for these changes, so the switch-off
+    times come from James's notes only.
+- **2026-10-22, PR 3c part 2, step 3c (output device unplugged): pass, but not as the runbook
+  expected.** An output change is not a capture failure for the CoreAudio tap. It follows the
+  new default device without losing audio, so there is nothing for "Not recording" to report.
+  - **First run** (unplug at 12:06:56): no failure, and the helper kept the same pid. Sound
+    was captured through the Bluetooth speaker the output moved to, at 12:08:03. But nothing
+    was playing across the unplug, so the run couldn't show continuity, and it was re-run.
+  - **Re-run with a continuous 440 Hz tone** looped through the current default output. James
+    plugged the USB device in and selected it at **12:10:23**, then pulled it at **12:11:16**.
+    - Per-second RMS of the segment from 12:09:55 to 12:12:29: **no drop at either switch**.
+    - The window has 1 silent second, at 12:10:07, 16 s before the first switch: a longer gap
+      between tone loops.
+    - The same helper (pid 70704) ran throughout, with no failure and no retry.
+    - One routine `tap rebuilt (listener)` came at 12:12:52, after both switches.
+  - **Changed in the proof:** R3's "unplug → Not recording" isn't a real failure mode for this
+    tap. What R3 needs here is "no *silent* loss", and the level trace proves exactly that.
+  - **Still unproven live:** the 1 s stalled-delivery check (PR 3b-2). No scenario stopped
+    delivery, so it stays covered by `swift test` only.
+- **2026-10-31, PR 3c part 2, step 6 (clean-TCC check on a fresh macOS user): pass, and spike
+  Q7 is answered.** The signed app ran in a new standard user, "GS Test", through
+  `signed-run.cjs`, so Geekspace was the TCC-responsible process.
+  - **Two prompts appeared:**
+    1. "'Geekspace' would like access to record your system audio", with our
+       `NSAudioCaptureUsageDescription` text.
+    2. "'Geekspace' is requesting to bypass the system private window picker and directly
+       access your screen and audio".
+  - **Answer to Q7: the tap needs its own grant.** Afterwards Geekspace was listed under
+    **System Audio Recording Only** and *not* under Screen & System Audio Recording. Spec
+    "Security and data" is updated.
+  - **Result with both allowed:** exit 0, ending `stopped`. There were 2 screenshots, and
+    7 audio segments, each with a peak of about 0.256 from the looping test sound, so system
+    audio was captured.
+  - **Not kept:** the pre-grant outcome. `clean-tcc-1` ran several times and overwrote
+    itself, so the prompts are the pre-grant evidence.
+  - **Unverified:** whether the "bypass the picker" approval persists or macOS asks again.
+    If it lapses, capture fails loudly (3b).
+  - **For 3e:** the onboarding copy must prepare the user for both prompts.
+  - Evidence: `cleanTcc` in `pr3c-part2-signed.json`, plus three cropped screenshots
+    (`pr3c-clean-tcc-*.png`). They were cropped to the prompts and the Settings pane, because
+    the full screenshots show the desktop.
+- **PR 3c part 2: done.** Steps 1, 2, 3a, 3b, 3c, 4, 5 and 6 pass on the signed build. Proofs
+  changed by what was observed:
+  - **3b:** a revoke is caught live, within about 1–2 s of the click.
+  - **3c:** an output change is no failure for the tap, and the proof is now "no silent loss".
+  - **Still unproven live:** the 1 s stalled-delivery check, covered by `swift test` only.
+  - **For 3e's UI:** hide the `status: off` blip during a retry.
+- **2026-10-31, PR 3c, final Codex check before ready: 4 rounds, ending with a clean PASS.**
+  The scope was the code since `2fa4d33`: the TCC-wording retry fix, the fake-timer tests,
+  the status-line logging, `soak-rss` and `day-recorder-ctl`.
+  - **Round 1 (FAIL; 1 × P1, 1 × P2):**
+    - P1: `ctl on` and `settings` printed the whole settings object, denylisted bundle ids
+      included.
+    - P2: `soak-rss` passed if the helper vanished after the first sample.
+    - Fix: a safe settings view (the denylist as a count), and a verdict that requires the
+      helper in every sample and a warmup baseline. The decisions moved to
+      `scripts/lib/dayRecorderTools.mjs`.
+  - **Round 2 (FAIL; 2 × P1, 1 × P2):**
+    - Errors were treated as the script's own by message text, which a backend error could
+      imitate.
+    - The Convex HTTP client printed backend `logLines` itself, the same class as the
+      main-process P1 in #80's round 1.
+    - The soak took no sample after its last sleep.
+    - Fix: `CtlUsageError` (decided by type), `{ logger: false }`, and `soakSchedule` with a
+      final sample at the end. A script-level test now runs the real ctl against a fake
+      backend.
+  - **Round 3 (PASS; 1 × P2):** any `gs-capture` counted as the helper. Fix: `processRole`
+    counts only `Geekspace.app/Contents/Resources/gs-capture`.
+  - **Round 4 (PASS, `[P1] none`, `[P2] none`):** the review loop stops here (L42 cap).
+  - `npm run verify`: 45 files, 466 tests.
+- **2026-10-31, PR 3c, re-check after the dependency bumps (#86, Electron 42.11.18).** A
+  signed `npm run package` from `ed5cadf` passed runbook steps 1 and 2.
+  - The signature and entitlements matched the earlier run.
+  - Recording began 3.4 s after `on`, screenshots landed, and a finished system-audio
+    segment was written.
+  - The first attempt was rejected: settings left on from earlier started the recorder at
+    launch, before `on`. The redo went off, then a marker, then on.
+  - Evidence: `~/gs-part2-evidence/post-deps-2026-10-31/`.
+- **2026-10-31, PR 3 is now 3a–3e with 3d split in two (James).** Same reason as the first
+  split: #80's 30 files strained the ai-review gate.
+  - **3d-1:** the renderer's controls, IPC and preload, and a saved pause.
+  - **3d-2:** mic capture, its own preload, and `probe:segment-decode`.
+- **2026-10-31, PR 3d-1, pause is a saved setting (James).**
+  - `settings.dayRecorderPaused` is apart from `dayRecorderEnabled`, so a paused recorder
+    stays paused across a relaunch or crash.
+  - Runtime-only pause would let a crash quietly resume recording, because the recorder is
+    still enabled.
+  - The service treats paused like stopped, reports `paused`, and never retries a failure
+    once paused. Turning the recorder on clears a saved pause (`day-recorder-ctl on` too).
+- **2026-10-31, PR 3d-1, the preload exposes only the controls that exist.**
+  - `dayRecorder` has `status`, `setEnabled`, `pause`, `resume` and `onEvent`.
+  - `noticeGiven`/`noticeDeclined` move to PR 4. `requestImage`, `approveDraft`, `undo` and
+    `setApiKey` move to PR 6, each with its feature, so the preload never exposes a stub.
+  - Each control is a settings patch, not a direct call into the service: capture follows
+    settings by subscription, so a control behaves the same now and after a relaunch.
+  - `electron/dayRecorderIpc.mjs` registers the four channels through `main.mjs`'s
+    `handle()`, which refuses any sender but the app page. `setEnabled` refuses anything
+    but a boolean. A recorder that failed to start says "not running" rather than
+    reporting off.
+- **2026-10-31, PR 3d-1, live probe (signed package from `245b913`, through the real
+  page).** The DevTools protocol called `window.geekspace.dayRecorder.*` in the running
+  app's page, so the real preload, IPC and `handle()` path ran.
+  - The namespace exposed exactly the five calls.
+  - `setEnabled(true)` reached Recording with one helper. `pause()` stopped it: zero
+    helpers, status `paused`.
+  - A real quit and relaunch came back `paused`, with no `starting` in the log first and no
+    helper. `resume()` reached Recording again, and `setEnabled(false)` reached off with
+    zero helpers.
+  - `setEnabled("yes")` returned `{ ok: false, error: "setEnabled needs true or false" }`,
+    and the status stayed `paused`.
+  - **For 3e:** pause emits `stopping`, then `off`, then `paused`, because the supervisor's
+    own `off` is passed through first. The UI should not flash Off on pause.
+  - Evidence: `~/gs-part2-evidence/pr3d1-ipc-2026-10-31/status.log` (status lines only).
+- **2026-10-31, PR 3d-2, mic capture.** Built as planned, with these changes from plan.md:
+  - **`capture.html` is at the repo root, not under `electron/`.** It's a second Vite page
+    next to `index.html`, so `src/capture/main.ts` builds into `dist/capture.html`.
+  - **The capture window has its own module, `electron/captureWindow.mjs`,** so the app and
+    `probe:segment-decode` open the same window. It's hidden, sandboxed, and denies popups
+    and navigation. `backgroundThrottling` is off, because a hidden window's timers would
+    otherwise slow the segment clock and the silence meter.
+  - **`main.mjs` gains `appWindows()`.** Five lookups took "the first window" as the app
+    window: the meeting quit guard, second instance, activate, the title-bar overlay, and the
+    status push. The hidden window would have broken each of them.
+  - **The next recorder starts before the old one stops**, at every boundary, so the gap is
+    zero or a slight overlap rather than lost audio. One emit queue keeps a segment's last
+    chunk ahead of its `segmentEnd`.
+  - **An empty segment is the controller's call, not the writer's.** The probe's first run
+    flagged a clean stop as a mic failure: a stop just after a boundary leaves a final segment
+    with no audio yet. The writer now drops an empty segment (no file, no row) and reports it.
+    Mid-recording that is a dead mic (`noAudio`); at a stop it is not.
+  - **The mic degrades loudly (James, 2026-10-31).** A denied, missing, lost, silent or
+    misbehaving mic becomes the mic's own state on Recording plus a `capError`. Screens and
+    system audio carry on.
+  - **Sender check.** `micController` accepts `gs:mic:event` and `gs:mic:config` only from
+    its own window's `webContents`. `micSegments` checks every message before it touches the
+    disk: sizes are capped, start times must be near now, segments must be in order, and at
+    most two may be open.
+  - **Shared code.** `recorder.ts` exports `SILENCE_LEVEL` and `rmsLevel` (the same math,
+    moved). `meetingProcessor.mjs` exports `convertToWhisperWav` (the same ffmpeg command,
+    which `processMeeting` now calls), `findFfmpeg` and `measureVolume`. GitNexus rated this
+    HIGH because Meetings flows are touched; the Meetings suites pass unchanged (43 tests).
+  - **Opus averages about 129 kbps, so a 5-minute segment is about 4.8 MB,** not the 2 MB
+    estimated. The 64 MB per-segment cap still leaves room.
+  - **The mic prompt (`NSMicrophoneUsageDescription`) now names the Day Recorder.**
+- **2026-10-31, PR 3d-2, proofs.**
+  - **`probe:segment-decode`** (Chromium's fake device, 3 s segments): segment 2, copied
+    alone into an empty folder, decoded to 3.00 s of 16 kHz wav through
+    `convertToWhisperWav`, and was not silent. The boundary gap was about 0 ms. It passed 3
+    runs out of 3.
+    - **Check of the check:** the same path decodes a whole segment but refuses that segment
+      cut at its second Matroska Cluster, which is what a timeslice continuation is. So
+      PR #70's failure class is caught.
+    - A mutation that split one continuous recorder also failed the probe, but at the writer
+      ("segment 0 was not started"), so that run did not test the decode step.
+  - **Signed `npm run package` from `33aad2a`, real mic, real 300 s segments:**
+    - `setEnabled(true)` gave `mic: starting` then `ok` 448 ms later, and the status was
+      `{ status: "recording", mic: { state: "ok" } }`.
+    - Four segments landed exactly on the 5-minute boundaries, mode 600. Each decoded **alone**
+      to 299.94 or 300.00 s and was not silent.
+    - `pause()` finalized the open segment (70.44 s, decodes alone). The hidden window closed,
+      the helper stopped, and no partial was left.
+    - Each of the five files has exactly one `kind: "mic"` row in the backend store, checked
+      read-only by count.
+    - Evidence: `~/gs-part2-evidence/pr3d2-mic-2026-10-31/` (`decode.txt`, `status.log`).
+      Lengths and levels only; no audio left the machine.
+  - **The run found log noise:** `mic: off` on every non-recording status, and a repeated
+    `status: recording`. Fixed in `d2137ff`, which changes logging only.
+  - **Security review: no findings.** Two rejected candidates were closed anyway: a start far
+    off the clock (an Invalid Date day folder) and an unchecked `silentSec`.
+  - **Still to prove live, with James at the Mac:** a denied mic (revoke it in System
+    Settings) and an unplugged input. Unit tests cover both.
+  - **The verification trap this time:** the first wait-for-segments script reported "0
+    finished" because `touch -t` read a UTC time as local and set a marker about 4 hours in
+    the future. A file listing showed the segments were there.
+- **2026-10-31, PR 3d-2, Codex round 1: FAIL, 5 × P1 and 2 × P2.** All seven are fixed test-first
+  (red commits `e1de53e` and `ea6dc36`).
+  - **The controller works toward the latest request, not what happens to be open.** A
+    `wanted` flag: a stop while macOS is asking for permission cancels the start; a start
+    during a stop runs once the stop is done; two starts during one ask share it, so they
+    open one window, not two. A later stop waits for a teardown the window began itself
+    (device lost), so a quit can't close the backend before the last row is in. A failure
+    keeps the mic down until the next stop and start, because the runtime calls start on
+    every Recording status.
+  - **A window that says stopped unasked, with no error first, is a failure** (`windowGone`),
+    not a quiet mic off.
+  - **A broken segment is dropped.** A refused chunk, a failed or short write, or a chunk the
+    window could not read (`chunkFailed`) leaves the segment with no file and no row.
+    Writes loop until every byte has landed.
+  - **A recorder that will not start is never announced.** `segmentStart` goes out only after
+    `start()` returns. A failure at a boundary still finishes the old segment.
+  - **The capture window's startup is now `src/capture/micWindow.ts`**, split out of
+    `main.ts` so it can be tested without a DOM. The stop listener is registered first; a
+    stop during config or getUserMedia starts nothing, lets go of the mic, and still says
+    stopped.
+  - **A silent mic records one capError per episode** (`mic: no signal for N s`).
+  - **The decode probe now fails a boundary gap past 250 ms.** It passed after the fix, with a
+    gap of about -1 ms.
+  - **Two sessions worked on this round at once.** The handoff's author was still running, so
+    two sessions shared the worktree. The fix was splitting the work by hunk, not by file:
+    the controller and writer fixes were written in one session, the capture side and probe
+    in the other.
+- **2026-10-31, PR 3d-2, Codex rounds 2 and 3 (#89).**
+  - **Round 2 FAIL (4 × P1, 1 × P2), all closed in `223d89c`:**
+    - A stop sent before the page listened is now answered through `gs:mic:config`
+      (`configFor`, "cancelled").
+    - A teardown in progress is joined, never replaced.
+    - Quit goes through a final `mic.shutdown()`. It had reopened the mic, because the mic's
+      own `off` re-emits Recording.
+    - An unreadable final chunk's error is sent before `stopped`.
+    - The two-segment test now checks both segments.
+  - **Signed build from `223d89c`, quit while recording:** after the quit, the mic's `off`
+    re-emitted `status: recording`. Nothing reopened (no `mic: starting`), the log ended
+    `stopping`, `off`, `stopped`, and no processes were left. The 4 s final segment has its
+    row. The recorder was then turned off.
+  - **Round 3 FAIL (2 × P1, [P2] none):**
+    - A recorder error that lands after a stop request is now reported, not dropped by the
+      stop guard.
+    - **Mic file names gain the start's epoch ms:** `mic-HHMMSS-mmm-<epoch>.webm`. Local time
+      repeats in the fall-back hour, and 2026-11-01 01:20:00.005 EDT and EST had the same
+      name, so the second rename replaced the first recording. Finishing is now a no-clobber
+      `link` and `unlink`, so even an unexpected collision is refused and the earlier file
+      kept.
+  - **Same weakness, outside this PR:** gs-capture names `shot-` and `sys-` files with local
+    `HHmmss-SSS` (`Run.dayAndFile`), so a screenshot or system segment in the fall-back hour
+    can collide too. That needs its own fix in the Swift helper.
+- **2026-10-31, PR 3e is split in two (James).** 3e-1 is the main process: the menu-bar
+  indicator, ⌥⌘R, and the status view. 3e-2 is the renderer: the app-chrome indicator, the
+  Settings section, the onboarding for both TCC prompts, and the a11y pass. The Call held
+  prompt, its notice timeout and the Assistant paused cap state stay with PR 4 and PR 6,
+  which build what they show.
+- **2026-10-31, PR 3e-1, menu bar and ⌥⌘R.** Built as planned, with these changes:
+  - **A status view, in the main process (`electron/dayRecorderTray.mjs`).** The tray, the
+    app windows and `gs:dayRecorder:status` all read it instead of the service. It holds an
+    `off` that comes straight after `stopping` or `notRecording` for 250 ms, and drops it
+    when the next status arrives first. The measured gaps are 0–1 ms (3c part 2 `r3-kill`
+    and 3d-1 `status.log`), so a real `off` shows at most 250 ms late. The mic still
+    follows the raw service.
+  - **The tray exists only while the recorder is on**, and owns ⌥⌘R for exactly that long,
+    so the shortcut is not taken from other apps while the recorder is off. macOS only.
+  - **Icons are drawn in code** (`dotPng`), so there are no binary assets and no packaging
+    change. Red `#D93036` and amber `#C27C0E` keep 3:1 on light and dark menu bars. Grey
+    (Not recording) and hollow (Paused, Starting, Stopping) are template images that macOS
+    tints.
+  - **Copy beyond the spec table:** Starting, Stopping, and "Recording without the mic" for a
+    mic error (screens and system audio carry on, per 3d). The mic's own error text is shown
+    as it is; polishing it is 3e-2's copy pass.
+  - **A taken ⌥⌘R is loud:** a log line, a notice in every tooltip, and no accelerator shown
+    on the menu item. The menu's pause and resume still work.
+  - **"Open Geekspace"** reuses the second-instance focus (`focusAppWindow`), and opens a new
+    window when none is left, because a macOS app keeps running without one.
+- **2026-10-31, PR 3e-1, proof on the signed build (`851d392`).** `codesign --verify` OK.
+  Driven through the app's own `dayRecorder` calls over CDP, with ⌥⌘R sent by System Events:
+  - On: the menu bar showed a red dot and **Recording**.
+  - ⌥⌘R paused: the tray showed a hollow dot and **Paused**. The log had
+    `stopping, off, paused`; the page's own listener saw `stopping, paused`. No Off.
+  - ⌥⌘R resumed to Recording. Off: the tray went away, and the page saw the real `off`.
+  - ⌥⌘R while off did nothing (the status stayed `off`), so the shortcut was released.
+  - Quit: no app process and no helper left. The recorder was left off.
+  - **Not exercised live:** clicking the tray menu itself (the unit tests cover its items),
+    and a taken ⌥⌘R.
+  - The P2 fix after this build (`43aaadf`) changes tooltip text only.
+  - Evidence: `~/gs-part2-evidence/pr3e1-tray-2026-10-31/` (status lines and three cropped
+    menu-bar shots).
+- **2026-10-31, PR 3e-1, Codex round 1: PASS ([P1] none, 1 × P2).** The ⌥⌘R notice was in
+  the Recording tooltip only. It is now added to every state's tooltip (`ae3d22f` tests,
+  `43aaadf` fix).
+- **2026-11-01, PR 3e-2, the recorder in the app.** Built as planned, with these changes:
+  - **One state copy for the tray and the app** (`electron/dayRecorderCopy.mjs`, no imports,
+    so the renderer loads it too). Mic errors that were raw protocol notes now read as
+    sentences; the detail stays in the log.
+  - **The indicator sits in the sidebar header**, as a dot and a word with a Pause/Resume
+    button, `role="status"` and polite. It is hidden while the recorder is off.
+  - **Settings, Day Recorder:** the switch (`role="switch"`), the current state (the FileVault
+    and Time Machine gates speak through it), the never-record list and the screenshot
+    interval, checked with the server's own validators. Turning it on first shows the
+    onboarding for both macOS prompts and the mic, non-modal, with focus moved to it. Off
+    macOS the section only says the recorder needs macOS.
+  - **Denylist edits are two atomic mutations**, `dayRecorder.addToDenylist` and
+    `removeFromDenylist`. Codex rounds 1–3 each found another way for a page saving the list
+    whole to undo an edit with a stale copy (an app just denied, or one another window added,
+    lost its protection). Each client-side guard moved the race; the server-side change
+    removed it. `updateSettings` still takes a whole list, for `day-recorder-ctl on
+    --denylist`.
+  - **Not built here:** a taken ⌥⌘R in Settings (the tray and the log say it, 3e-1), and the
+    Call held and Assistant paused states (PR 4 and PR 6).
+- **2026-11-01, PR 3e-2, proof on the signed build (`48d65f9`; `c85576c` after it is one CSS
+  class).** Driven over CDP:
+  - Settings showed the section; the switch is labelled "Record my day". Clicking it showed
+    the onboarding with focus on its heading, all four steps, and no modal around it.
+  - An invalid bundle id was refused with the server's message, `aria-invalid` and a
+    described-by alert. `dev.geekspace.probe` was added and removed through the UI; the list
+    went back to what it was.
+  - "Turn on" reached Recording; the sidebar showed a red dot, **Recording** and "Pause
+    recording"; Settings showed the state sentence. Pause went to **Paused** and "Resume
+    recording"; Resume went back to Recording. The switch turned it off and the indicator
+    went away. Quit: no app process, no helper. The recorder was left off.
+  - Evidence: `~/gs-part2-evidence/pr3e2-ui-2026-11-01/` (status lines and three cropped
+    shots of the section and the sidebar).
+- **2026-11-01, PR 3e-2, Codex: 4 rounds, ending PASS.** Round 1 FAIL (1 × P1, 3 × P2),
+  round 2 FAIL (1 × P1, 2 × P2), round 3 FAIL (2 × P1, 2 × P2), round 4 PASS ([P1] none,
+  1 × P2: the enabled thumb's contrast, fixed in `c85576c`).
+- **2026-11-01, PR 4 is split in two.** 4a is the helper's call hold and the supervisor's
+  commands; 4b is call detection, the room-mic pause, the notice and its prompt. Same reason
+  as 3d and 3e: each reviewable alone, and the gate reads the whole diff.
+- **2026-11-01, PR 4a, the call hold.** Built as planned (spec R5, F3), with these choices:
+  - **Commands on stdin** (`call hold`, `call release`, `call discard`): the helper reads
+    them on a thread and runs them on the recorder's control queue. Unknown or out-of-order
+    commands fail the helper. protocol.md "Commands" is the contract.
+  - **Held call audio is 16 kHz mono 16-bit PCM in memory** (32 KB/s, about 58 MB at the
+    1800 s cap: the 15-minute notice timeout and its one extension). A release writes it as
+    `call-` segments (16 kHz mono AAC, each decodes alone); a discard or a stop drops it.
+  - **Audio is routed sample by sample by when it was captured** (`CallRouter`), against the
+    moments the commands arrived. Codex round 1 found the 500 ms denylist hold-back sent a
+    discarded call's tail to a `sys-` file; round 2 found a chunk straddling a boundary, and
+    a callback that had stamped a chunk but not added it, could still do so. `PCMHold` now
+    registers each chunk under its lock before adding it, and a call settles only when the
+    frontier (held and in-flight chunks included) has passed its end.
+  - **The supervisor** sends the commands, keeps released notices in a queue, stores a `call`
+    segment only with the notice that released it, treats an unreleased one as a broken
+    helper, and stops capture if the command channel breaks.
+- **2026-11-01, PR 4a, live proof** (`npm run probe:call-hold`, release helper, real tap, a
+  synthetic tone): hold then release came back as one `call-` file that decodes at 16 kHz
+  with the tone in it (peak 0.25); hold then discard left nothing on disk; a `sys-` segment
+  closed at the hold, recording resumed after the release, no `sys-` segment covered a call's
+  time, and no partials were left. 11 of 11 checks passed at `57b125e`.
+- **2026-11-01, PR 4a, Codex: 3 rounds, ending PASS.** Round 1 FAIL (3 × P1), round 2 FAIL
+  (2 × P1, 1 × P2), round 3 PASS ([P1] none, 1 × P2: released segments could overshoot a
+  fractional `--segment-sec`, fixed in the commit after `3080b80`).
+- **2026-11-01, PR 4b, calls and the room-mic pause.** Built as planned (spec R5, F2, F3), with
+  these choices, most from Codex rounds 1-3:
+  - **The mic stops for a call instead of holding.** The helper holds system audio (PR 4a); the
+    mic's segments are cut by its page, and a hold there would mean splitting a live WebM. What
+    is lost is James's own voice before he answers.
+  - **The helper holds a call itself (round 3).** Detection in the supervisor came a poll and a
+    round trip late, so a call's opening audio reached a `sys-` file. The helper is given the
+    call apps (`--call-apps`, `--browsers`) and holds from where its previous poll had
+    classified. Round 4 showed a fixed lookback fails when a poll runs late (a long flush), so
+    system audio is delivered only up to what the last poll classified (`audioClassified`).
+  - **Mic chunks wait in memory until gs-capture has classified their time (round 4)**, and a
+    segment is finished only once its end is classified. A call or a never-record app seen
+    meanwhile discards what waits and the open segments, and nothing more is written for that
+    capture window. **Up to one segment (5 minutes) of mic audio from just before a call or a
+    never-record app is lost**, plus what still waits at a stop if classification doesn't
+    catch up within 2 s. That is the price of "nothing of a call on disk before its notice";
+    James can revisit it.
+  - **Every helper starts held** until its first audio-use report, and calls belong to one
+    helper: a restarted helper asks again (round 2). No report within 10 s of ready is Not
+    recording (round 3).
+  - **The mic finishes under the helper that classifies it (round 5).** Before a helper is
+    stopped (pause, off, a restart for a new denylist), the mic stops and its last audio is
+    classified while that helper is still current; a writer takes classification only from
+    the helper it was opened under. At most 16 MB of audio and two finished segments wait,
+    and 10 s without classification fails the mic loudly, keeping nothing that waited.
+  - **A late poll is unchecked time (round 6).** A poll more than 400 ms after the last means
+    a call or a never-record app could have come and gone unseen, so the gap's system audio is
+    dropped and the mic discards what waits and starts again. Writing a long released call
+    out on the control queue is what makes polls late, so **a few seconds of ordinary audio
+    around each long released call can be lost.** Moving that write off the queue would avoid
+    it; it is a larger change.
+  - **A late first poll is a gap from capture start, and the startup hold drops gaps (round
+    7)**, so a `call clear` never writes unchecked startup audio as system audio. The gap
+    clock is read before the tap starts (round 8), not when the watcher is made.
+  - **Codex: rounds 5 to 9, by James's decision (from round 8: until PASS)** after round 4 failed with five P1s (the L42
+    cap), round 5 with four, round 6 with one, and round 7 with two.
+  - **Each hold of the helper's is a call of its own** unless the newest call is unanswered or
+    declined, which it joins; an answer resolves every hold of its call. An app starting after
+    a yes (even one still being saved), or leaving and coming back, is asked about again.
+- **2026-11-02, PR 6a, the assistant engine.** Built as planned (spec R8, R10, F4), with these
+  choices, most from Codex round 1:
+  - **A ledger, not a watermark.** Each transcript and screenshot carries `readAt`, set in the
+    same write (`settleRequest`) that records the call's real cost and keeps its proposals.
+    A time watermark skipped transcripts written late, resent part of a batch, and lost a
+    paid reply's proposals when a later write failed.
+  - **The cap is a reservation.** Before a call, its worst case (every input byte as a cache
+    write at the dearest price, every output token at the dearest price) is reserved against
+    the day's cap in `beginRequest`, and `max_tokens` is sized to fit; no call is made when
+    even 1,024 output tokens don't fit. A call abandoned in flight (a crash) stays counted at
+    its reservation after 30 minutes, and its items are read again.
+  - **No refusal fallback.** The `server-side-fallback` beta could run one call on two
+    models, which no single reservation bounds. The GA `messages.create` with structured
+    output is used, and the reply is parsed here, so invalid output is still paid for.
+  - **It reads from the local midnight of the day it first ran** (`assistantSince`), not a
+    rolling 15 minutes. Earlier days are never read.
+  - **The SDK client never logs** (`logLevel: "off"`, a silent logger), whatever
+    `ANTHROPIC_LOG` says: at debug it logs the request, the whole batch.
+- **2026-11-02, PR 6b, Linear drafts, images on demand, cache tokens.** Built as planned (spec
+  R8, R9, R12), with these choices:
+  - **Linear drafts leave only on approval.** `electron/linearDrafts.mjs` claims a draft
+    (pending → approved), sends it with the Linear key from its own Keychain-encrypted file,
+    then marks it sent; a failed send puts it back to pending. Still unverified until a real
+    key is entered: whether Linear's `issue(id:)` takes an identifier like `ENG-123`.
+  - **An image request reads one screen and proposes from it**, under the same action schema
+    and through the same ledger as a batch: the cap is reserved (5,000 image tokens, the
+    most the model spends on a 2,576 px image), `imageSent` is written, then the request
+    leaves, and the reply is settled and applied with proposals sourced to that screenshot.
+    A log that fails sends nothing and frees the reservation. The spec says what may be
+    sent, not what Claude does with it; this reading keeps every send under R8.
+  - **HEIC becomes JPEG with macOS `sips`**, resized to 2,576 px on the long edge, in a
+    private temp folder removed after reading. The API does not take HEIC, and the recorder
+    is macOS-only (gs-capture is Swift), so this path is macOS-only by design.
+  - **The logger is required twice over:** `sendImage(logImageSent, screenshotId)` does not
+    type-check without it (a `@ts-expect-error` test, checked by mutation: making it
+    optional fails `tsc`), and a non-function logger throws before anything is reserved.
+  - **Cache tokens are kept** (Codex 6a round 6, P2): `cacheWriteTokens` and
+    `cacheReadTokens` on each request and in the day's total; `inputTokens` keeps the API's
+    meaning, the uncached input.
+  - **The page asks for an image by id only** (`gs:assistant:requestImage`, a document id or
+    nothing); the review UI that calls it is PR 6c.
+- **2026-11-02, PR 6c, the Day Record view.** Built as James chose (one view, an on-request
+  summary), with these choices:
+  - **One sidebar view, "Day record", stepped by local day.** It has four parts. Drafts
+    waiting for approval come first, with Send and Discard named by issue. Next is what the
+    assistant did, one line per commitment with an Undo named by what it undoes. Then the
+    summary, and last the day's record. Days step by calendar day, so a DST change gives a
+    23- or 25-hour day.
+  - **Sources link inside the view.** A summary line or an action links to its item in the
+    day's record ("said at 10:42", "on screen at 10:50"). The view never opens media files, so
+    it gives the renderer no file access.
+  - **The summary is made only when asked.** It is one call, reserved against the cap like a
+    batch, with its own instructions and output format. Each line keeps the segment or
+    screenshot it names, and nothing is proposed or marked read. It uses the batch model
+    until James answers the open question on a model per job.
+  - **A screen's image goes to Claude only from that screen's own button** (spec R9). It is
+    not offered for a screenshot whose image was deleted after 30 days.
+  - **exchange() takes the job** (instructions, format, how the reply is read), so batches,
+    images and summaries share one reserved-call path. On-request jobs run one at a time.
+  - **Verified in a browser tab without a backend:** the route, sidebar entry, header, day
+    stepping and loading state. The view was not run against live data, because running
+    `convex dev` from the branch would deploy its functions to James's local deployment. The
+    tests cover the queries, the summary and the view's logic.

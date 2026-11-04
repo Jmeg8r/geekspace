@@ -24,11 +24,22 @@ const LEVEL_INTERVAL_MS = 120;
 // system input, an unplugged interface) reports exactly 0.0 RMS. Real hardware
 // always emits self-noise and room tone well above this, so the threshold
 // separates "nobody is talking" from "nothing is connected".
-const SILENCE_LEVEL = 0.005;
+// Exported: the Day Recorder's mic warning reuses this floor (spec R3).
+export const SILENCE_LEVEL = 0.005;
 
 // WHY 25s: long enough that a genuine pause in a meeting never nags, short
 // enough that a dead device is caught in the first minute instead of the 43rd.
 export const SILENCE_WARN_SEC = 25;
+
+/** The meter level of one analyser frame (byte time-domain data), 0 to 1. Shared with the Day Recorder's mic. */
+export function rmsLevel(buf: Uint8Array): number {
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const x = (buf[i] - 128) / 128;
+    sum += x * x;
+  }
+  return Math.min(1, Math.sqrt(sum / buf.length) * 3.5);
+}
 
 const AUDIO_CONSTRAINTS: MediaTrackConstraints = {
   echoCancellation: true,
@@ -176,13 +187,7 @@ function beginCapture(opened: MediaStream, opts: { meetingId: string; title: str
   levelTimer = setInterval(() => {
     if (state.status !== "recording") return;
     analyser.getByteTimeDomainData(buf);
-    let sum = 0;
-    for (let i = 0; i < buf.length; i++) {
-      const x = (buf[i] - 128) / 128;
-      sum += x * x;
-    }
-    const rms = Math.sqrt(sum / buf.length);
-    const level = Math.min(1, rms * 3.5);
+    const level = rmsLevel(buf);
     // WHY track this: the level was already computed for the meter and then
     // discarded — it is the only in-flight evidence that the chosen input is
     // dead, and surfacing it turns a lost meeting into a 25-second warning.

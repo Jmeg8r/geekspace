@@ -1,0 +1,924 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MODEL,
+  PRICES,
+  STOP_GRACE_MS,
+  assistantClient,
+  costOf,
+  createDayAssistant,
+  type AssistantInput,
+  type AssistantRequest,
+  screenshotJpeg,
+  sweepImageWork,
+} from "../electron/dayAssistant.mjs";
+import { createKeyStore, registerAssistantIpc } from "../electron/assistantKey.mjs";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// WHAT: the Day Recorder's assistant (plan PR 6a, spec R8, R10, F4). WHY tested: it is the only
+// code that sends captured text to a cloud model and turns the reply into tasks and blocks, so
+// it must stay under the daily cap, account every call, accept only the allowed actions, and
+// never run without a key. The client is a stub: no request leaves the test.
+// SYNTHETIC: every id, text and key below is invented.
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-02T15:00:00Z"));
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const INPUT: AssistantInput = {
+  transcripts: [{ _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 300_000, text: "SYNTHETIC: send the deck to Dana by Friday" }],
+  screenshots: [{ _id: "shot1", takenAt: Date.now() - 400_000, appBundleId: "com.example.editor", ocrText: "SYNTHETIC: Q4 plan draft" }],
+};
+
+type Reply = {
+  content: { type: "text"; text: string }[];
+  stop_reason: string;
+  model: string;
+  usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+};
+
+const reply = (actions: object[], usage: Reply["usage"] = { input_tokens: 2_000, output_tokens: 300 }): Reply => ({
+  content: [{ type: "text", text: JSON.stringify({ actions }) }],
+  stop_reason: "end_turn",
+  model: MODEL,
+  usage,
+});
+
+type DayRecord = {
+  transcripts: { _id: string; segmentId: string; start: number; end: number; text: string }[];
+  screenshots: { _id: string; takenAt: number; ocrText: string; purged: boolean; appBundleId?: string }[];
+  more: { transcripts: boolean; screenshots: boolean };
+};
+const DAY_RECORD: DayRecord = {
+  transcripts: [{ _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 540_000, text: "SYNTHETIC: I'll send the deck by Thursday" }],
+  screenshots: [{ _id: "shot1", takenAt: Date.now() - 300_000, ocrText: "SYNTHETIC: Q4 plan draft", purged: false, appBundleId: "com.example.editor" }],
+  more: { transcripts: false, screenshots: false },
+};
+const summaryReply = (items: object[]): Reply => ({
+  content: [{ type: "text", text: JSON.stringify({ items }) }],
+  stop_reason: "end_turn",
+  model: MODEL,
+  usage: { input_tokens: 3_000, output_tokens: 400 },
+});
+const FROM = Date.now() - 86_400_000;
+const TO = Date.now();
+
+// SYNTHETIC: stands in for a converted screenshot.
+const JPEG = Buffer.from("SYNTHETIC JPEG BYTES");
+
+type Open = { _id: string; status: "inFlight" | "settled"; proposals: { proposal: object; state: string }[] };
+
+function harness(
+  opts: {
+    reply?: Reply;
+    replyFn?: () => Promise<Reply>;
+    key?: string | null;
+    cap?: { capUsd: number | null; spentUsd: number; reached: boolean };
+    input?: AssistantInput;
+    pages?: AssistantInput[];
+    begin?: () => string | null;
+    settleFails?: number;
+    applyFails?: boolean;
+    open?: Open[];
+    shot?: { _id: string; path: string; takenAt: number; appBundleId?: string } | null;
+    resolveFails?: boolean;
+    day?: DayRecord;
+    pageSize?: number;
+    saveFails?: boolean;
+  } = {}
+) {
+  const summaries: { day: string; items: object[]; omitted?: object }[] = [];
+  const requests: AssistantRequest[] = [];
+  const calls: string[] = [];
+  const unreadArgs: { transcriptAfter?: object; screenshotAfter?: object }[] = [];
+  const begun: { reservedUsd: number; transcriptIds: string[]; transcriptEnds?: number[]; screenshotIds: string[]; screenshotEnds?: number[] }[] = [];
+  const settled: { requestId: string; costUsd: number; proposals: object[] }[] = [];
+  const events: { kind: string; detail?: string }[] = [];
+  const logs: string[] = [];
+  let settleFails = opts.settleFails ?? 0;
+  let open = opts.open ?? [];
+  const client = {
+    messages: {
+      create: vi.fn(async (params: AssistantRequest) => {
+        requests.push(params);
+        calls.push("create");
+        return opts.replyFn ? opts.replyFn() : (opts.reply ?? reply([{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, source: "t1" }]));
+      }),
+    },
+  };
+  const assistant = createDayAssistant({
+    client: () => (opts.key === null ? null : client),
+    convex: {
+      ensureStart: async ({ at }: { at: number }) => {
+        calls.push(`start ${at}`);
+        return at;
+      },
+      unread: async (args: { transcriptAfter?: object; screenshotAfter?: object }) => {
+        unreadArgs.push(args);
+        return opts.pages ? (opts.pages.shift() ?? { transcripts: [], screenshots: [] }) : (opts.input ?? INPUT);
+      },
+      capStatus: async () => opts.cap ?? { capUsd: 5, spentUsd: 0, reached: false },
+      beginRequest: async (args: { reservedUsd: number; transcriptIds: string[]; transcriptEnds?: number[]; screenshotIds: string[]; screenshotEnds?: number[] }) => {
+        begun.push(args);
+        return opts.begin ? opts.begin() : "req1";
+      },
+      settleRequest: async (args: { requestId: string; costUsd: number; proposals: object[] }) => {
+        if (settleFails > 0) {
+          settleFails -= 1;
+          throw new Error("backend down");
+        }
+        settled.push(args);
+        // Kept beside the other open requests, as Convex keeps them (Codex 6c r1).
+        open = [...open.filter((r) => r._id !== args.requestId), { _id: args.requestId, status: "settled", proposals: args.proposals.map((proposal) => ({ proposal, state: "pending" })) }];
+      },
+      failRequest: async ({ requestId }: { requestId: string }) => void calls.push(`fail ${requestId}`),
+      abandonRequest: async ({ requestId }: { requestId: string }) => void calls.push(`abandon ${requestId}`),
+      openRequests: async () => open,
+      applyProposal: async ({ requestId, index }: { requestId: string; index: number }) => {
+        if (opts.applyFails) throw new Error("refused");
+        calls.push(`apply ${requestId}#${index}`);
+        open = open.map((r) => (r._id === requestId ? { ...r, proposals: r.proposals.map((p, i) => (i === index ? { ...p, state: "applied" } : p)) } : r));
+      },
+      refuseProposal: async ({ requestId, index }: { requestId: string; index: number }) => {
+        calls.push(`refuse ${requestId}#${index}`);
+        open = open.map((r) => (r._id === requestId ? { ...r, proposals: r.proposals.map((p, i) => (i === index ? { ...p, state: "refused" } : p)) } : r));
+      },
+      logEvent: async (e: { kind: string; detail?: string }) => void events.push(e),
+      dayPage: async ({ kind, cursor }: { from: number; to: number; kind: "transcripts" | "screenshots"; cursor: string | null }) => {
+        const rows = (opts.day ?? DAY_RECORD)[kind];
+        const size = opts.pageSize ?? 100;
+        const at = cursor === null ? 0 : Number(cursor);
+        calls.push(`page ${kind} ${at}`);
+        return { rows: rows.slice(at, at + size), done: at + size >= rows.length, cursor: String(at + size) };
+      },
+      saveSummary: async (args: { day: string; items: object[]; omitted?: object }) => {
+        if (opts.saveFails) throw new Error("backend down");
+        summaries.push(args);
+      },
+      screenshot: async (screenshotId: string) =>
+        opts.shot === undefined ? { _id: screenshotId, path: "2026-11-02/shot-1.heic", takenAt: Date.now() - 60_000, appBundleId: "com.example.editor" } : opts.shot,
+    },
+    resolvePath: (rel: string) => {
+      if (opts.resolveFails) throw new Error("outside the media root");
+      return `/media/${rel}`;
+    },
+    toJpeg: async (file: string) => {
+      calls.push(`jpeg ${file}`);
+      return JPEG;
+    },
+    log: (m: string) => void logs.push(m),
+  });
+  return { assistant, client, requests, calls, begun, settled, events, logs, unreadArgs, summaries };
+}
+
+describe("costOf", () => {
+  it("prices input, output and cache tokens by the model that answered", () => {
+    expect(PRICES[MODEL]).toBeDefined();
+    const cost = costOf({ input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }, MODEL);
+    const p = PRICES[MODEL];
+    expect(cost).toBeCloseTo(p.input + p.output + p.cacheRead + p.input * 1.25, 6);
+  });
+
+  it("prices an unknown model at the dearest known rate, so the cap is never under-counted", () => {
+    const dearest = Math.max(...Object.values(PRICES).map((p) => p.output));
+    expect(costOf({ input_tokens: 0, output_tokens: 1_000_000 }, "claude-unknown")).toBe(dearest);
+  });
+});
+
+describe("createDayAssistant.runBatch", () => {
+  it("sends the unread text, settles its cost with the proposals, then applies them", async () => {
+    const h = harness();
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    expect(JSON.stringify(h.requests[0])).toContain("SYNTHETIC: send the deck to Dana by Friday");
+    expect(h.begun[0]).toMatchObject({ transcriptIds: ["tr1"], screenshotIds: ["shot1"] });
+    expect(h.settled).toEqual([
+      {
+        requestId: "req1",
+        inputTokens: 2_000,
+        outputTokens: 300,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
+        costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, MODEL),
+        proposals: [{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, sourceSegmentId: "seg1" }],
+      },
+    ]);
+    expect(h.calls).toContain("apply req1#0");
+  });
+
+  it("[P1] starts from the beginning of the local day, not a rolling 15 minutes", async () => {
+    const h = harness();
+    await h.assistant.runBatch();
+    const midnight = new Date(Date.now());
+    midnight.setHours(0, 0, 0, 0);
+    expect(h.calls[0]).toBe(`start ${midnight.getTime()}`);
+  });
+
+  it("does nothing without an API key", async () => {
+    const h = harness({ key: null });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+    expect(h.logs.some((l) => l.includes("no API key"))).toBe(true);
+  });
+
+  it("skips a batch when the day's cap is reached, and says so once a day", async () => {
+    const h = harness({ cap: { capUsd: 2, spentUsd: 2.01, reached: true } });
+    await h.assistant.runBatch();
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+    expect(h.events.filter((e) => e.kind === "capPaused")).toHaveLength(1);
+  });
+
+  it("does not run with no cap set", async () => {
+    const h = harness({ cap: { capUsd: null, spentUsd: 0, reached: true } });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+  });
+
+  it("[P1] reserves the call's worst case inside what is left, and sizes max_tokens to fit", async () => {
+    const h = harness({ cap: { capUsd: 1, spentUsd: 0.7, reached: false } });
+    await h.assistant.runBatch();
+    expect(h.begun).toHaveLength(1);
+    expect(h.begun[0].reservedUsd).toBeLessThanOrEqual(0.3 + 1e-9);
+    // Priced at the model asked for: with no fallback, it is the one that answers.
+    const out = PRICES[MODEL].output / 1_000_000;
+    expect(h.requests[0].max_tokens * out).toBeLessThan(h.begun[0].reservedUsd + 1e-9);
+  });
+
+  it("[P1] makes no call when what is left can't cover one, and says so", async () => {
+    const h = harness({ cap: { capUsd: 0.05, spentUsd: 0.0499, reached: false } });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+    expect(h.events.some((e) => e.kind === "capPaused")).toBe(true);
+  });
+
+  it("[P1] makes no call when the backend refuses the reservation", async () => {
+    const h = harness({ begin: () => null });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+  });
+
+  it("rejects an action outside the allowed set, logs it without its content, and keeps the rest", async () => {
+    const h = harness({ reply: reply([{ type: "deleteEverything", target: "all" }, { type: "createTask", title: "Book the retro", estimateMin: 15 }]) });
+    await h.assistant.runBatch();
+    expect(h.settled[0].proposals).toEqual([{ type: "createTask", title: "Book the retro", estimateMin: 15 }]);
+    expect(h.logs.some((l) => l.includes("rejected 1 action"))).toBe(true);
+    expect(h.logs.join("\n")).not.toContain("deleteEverything");
+  });
+
+  it("drops a source the batch never had, and maps a screenshot source to its id", async () => {
+    const h = harness({
+      reply: reply([
+        { type: "createTask", title: "Ping Ravi", estimateMin: 10, source: "t99" },
+        { type: "draftLinear", issueRef: "GS-12", body: "SYNTHETIC update", source: "s1" },
+      ]),
+    });
+    await h.assistant.runBatch();
+    expect(h.settled[0].proposals).toEqual([
+      { type: "createTask", title: "Ping Ravi", estimateMin: 10 },
+      { type: "draftLinear", issueRef: "GS-12", body: "SYNTHETIC update", sourceScreenshotId: "shot1" },
+    ]);
+  });
+
+  it("[P1] a reply that isn't valid structured output is still paid for and settled, with no proposals", async () => {
+    const h = harness({ reply: { content: [{ type: "text", text: "not json" }], stop_reason: "end_turn", model: MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
+    await h.assistant.runBatch();
+    expect(h.settled).toHaveLength(1);
+    expect(h.settled[0].costUsd).toBeGreaterThan(0);
+    expect(h.settled[0].proposals).toEqual([]);
+  });
+
+  it("a refusal is settled too, with nothing applied", async () => {
+    const h = harness({ reply: { content: [], stop_reason: "refusal", model: MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
+    await h.assistant.runBatch();
+    expect(h.settled[0].proposals).toEqual([]);
+  });
+
+  it("a call the API refused before any work frees its reservation, with nothing logged of the text", async () => {
+    const h = harness({
+      replyFn: async () => {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      },
+    });
+    await h.assistant.runBatch();
+    expect(h.calls).toContain("fail req1");
+    expect(h.settled).toEqual([]);
+    expect(h.logs.join("\n")).not.toContain("SYNTHETIC");
+  });
+
+  it("[P1] a settle that fails is written first next time, before any new call", async () => {
+    const h = harness({ settleFails: 1 });
+    await h.assistant.runBatch();
+    expect(h.settled).toEqual([]);
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    expect(h.settled).toHaveLength(1);
+  });
+
+  it("[P1] applies an earlier call's kept proposals before making a new one", async () => {
+    const h = harness({
+      open: [{ _id: "req0", status: "settled", proposals: [{ proposal: { type: "createTask", title: "Old", estimateMin: 5 }, state: "pending" }] }],
+    });
+    await h.assistant.runBatch();
+    expect(h.calls.indexOf("apply req0#0")).toBeGreaterThanOrEqual(0);
+    expect(h.calls.indexOf("apply req0#0")).toBeLessThan(h.calls.indexOf("apply req1#0"));
+  });
+
+  it("refuses a proposal Geekspace won't take, so it isn't tried forever", async () => {
+    const h = harness({ applyFails: true });
+    await h.assistant.runBatch();
+    expect(h.calls).toContain("refuse req1#0");
+  });
+
+  it("makes no call when nothing is unread", async () => {
+    const h = harness({ input: { transcripts: [], screenshots: [] } });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+    expect(h.begun).toEqual([]);
+  });
+
+  it("never runs two batches at once, and stop waits for the one running", async () => {
+    let finish: () => void = () => {};
+    const h = harness({
+      replyFn: () =>
+        new Promise<Reply>((resolve) => {
+          finish = () => resolve(reply([]));
+        }),
+    });
+    const first = h.assistant.runBatch();
+    await vi.advanceTimersByTimeAsync(0);
+    await h.assistant.runBatch();
+    let stopped = false;
+    const stopping = h.assistant.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    finish();
+    await first;
+    await stopping;
+    expect(h.requests).toHaveLength(1);
+    expect(h.settled).toHaveLength(1);
+  });
+
+  it("stop gives up on a call that never answers after its grace, and says so", async () => {
+    const h = harness({ replyFn: () => new Promise<Reply>(() => {}) });
+    void h.assistant.runBatch();
+    await vi.advanceTimersByTimeAsync(0);
+    let stopped = false;
+    void h.assistant.stop().then(() => void (stopped = true));
+    await vi.advanceTimersByTimeAsync(STOP_GRACE_MS);
+    expect(stopped).toBe(true);
+    expect(h.logs.some((l) => l.includes("reservation"))).toBe(true);
+  });
+
+  it("asks with structured output and an output cap, on the model it names, without the fallback beta", async () => {
+    const h = harness();
+    await h.assistant.runBatch();
+    expect(h.requests[0]).toMatchObject({
+      model: MODEL,
+      output_config: { effort: expect.any(String), format: { type: "json_schema", schema: expect.anything() } },
+      max_tokens: expect.any(Number),
+    });
+    expect(h.requests[0]).not.toHaveProperty("betas");
+    expect(h.requests[0]).not.toHaveProperty("fallbacks");
+  });
+});
+
+// Codex 6a r1 P1: the SDK took ANTHROPIC_LOG from the environment, and at debug it logs the
+// request: the whole batch of captured text.
+// Codex 6a r2 P1: a dropped connection or a timeout may have been paid for; a long item could
+// never fit and blocked everything after it.
+describe("createDayAssistant.runBatch, round 2", () => {
+  it.each([
+    ["a dropped connection", Object.assign(new Error("socket hang up"), { name: "APIConnectionError" })],
+    ["a timeout", Object.assign(new Error("timed out"), { name: "APIConnectionTimeoutError" })],
+    ["a server error", Object.assign(new Error("internal"), { status: 500 })],
+  ])("[P1] %s keeps the call charged at its reservation", async (_name, err) => {
+    const h = harness({
+      replyFn: async () => {
+        throw err;
+      },
+    });
+    await h.assistant.runBatch();
+    expect(h.calls).toContain("abandon req1");
+    expect(h.calls).not.toContain("fail req1");
+  });
+
+  it("[P1] sends a long item in parts and says how far it got", async () => {
+    const long = "SYNTHETIC ".repeat(8_000);
+    const h = harness({
+      cap: { capUsd: 1, spentUsd: 0, reached: false },
+      input: { transcripts: [{ _id: "tr9", segmentId: "seg9", start: Date.now() - 600_000, end: Date.now() - 300_000, text: long }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    const end = h.begun[0].transcriptEnds?.[0] ?? 0;
+    expect(end).toBeGreaterThan(0);
+    expect(end).toBeLessThan(long.length);
+    expect(JSON.stringify(h.requests[0])).not.toContain(long);
+  });
+
+  it("[P1] continues a long item where the last part ended", async () => {
+    const long = "A".repeat(30_000) + "SYNTHETIC-TAIL";
+    const h = harness({
+      input: { transcripts: [{ _id: "tr9", segmentId: "seg9", start: Date.now() - 600_000, end: Date.now() - 300_000, text: long, readChars: 29_990 }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    expect(JSON.stringify(h.requests[0])).toContain("SYNTHETIC-TAIL");
+    expect(h.begun[0].transcriptEnds).toEqual([long.length]);
+  });
+});
+
+// Codex 6a r3 P1: an oldest item that couldn't fit even in its smallest part blocked an
+// affordable one behind it; and a part could end inside a surrogate pair.
+describe("createDayAssistant.runBatch, round 3", () => {
+  it("[P1] an item that can't fit is left for later, and the ones that fit are sent", async () => {
+    const h = harness({
+      cap: { capUsd: 0.05, spentUsd: 0, reached: false },
+      input: {
+        transcripts: [
+          { _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 500_000, text: "中".repeat(10_000) },
+          { _id: "tr2", segmentId: "seg2", start: Date.now() - 400_000, end: Date.now() - 300_000, text: "SYNTHETIC Send deck" },
+        ],
+        screenshots: [],
+      },
+    });
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    expect(JSON.stringify(h.requests[0])).toContain("SYNTHETIC Send deck");
+    expect(h.begun[0].transcriptIds).toContain("tr2");
+  });
+
+  it("[P1] never ends a part inside a surrogate pair", async () => {
+    const text = "x".repeat(7_999) + "😀" + "tail";
+    const h = harness({
+      input: { transcripts: [{ _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 300_000, text }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    const end = h.begun[0].transcriptEnds?.[0] ?? 0;
+    expect(end).toBe(7_999);
+    const sent = h.requests[0].messages[0].content;
+    expect(sent).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
+
+  it("[P1] continues a text with its pair whole", async () => {
+    const text = "x".repeat(7_999) + "😀" + "tail";
+    const h = harness({
+      input: { transcripts: [{ _id: "tr1", segmentId: "seg1", start: Date.now() - 600_000, end: Date.now() - 300_000, text, readChars: 7_999 }], screenshots: [] },
+    });
+    await h.assistant.runBatch();
+    expect(h.requests[0].messages[0].content).toContain("😀tail");
+  });
+});
+
+// Codex 6a r4 P1: a whole page of rows too long for the cap hid the row after it.
+describe("createDayAssistant.runBatch, round 4", () => {
+  it("[P1] reads past a page of rows that can't fit, to one that can", async () => {
+    const huge = Array.from({ length: 200 }, (_, i) => ({ _id: `big${i}`, takenAt: Date.now() - 900_000 + i, ocrText: "中".repeat(10_000) }));
+    const h = harness({
+      cap: { capUsd: 0.05, spentUsd: 0, reached: false },
+      pages: [
+        { transcripts: [], screenshots: huge, transcriptsDone: true, screenshotsDone: false, screenshotAfter: { at: huge[199].takenAt, ids: ["big199"] } },
+        { transcripts: [], screenshots: [{ _id: "shot201", takenAt: Date.now() - 100_000, ocrText: "SYNTHETIC Send deck" }], transcriptsDone: true, screenshotsDone: true },
+      ],
+    });
+    await h.assistant.runBatch();
+    expect(h.requests).toHaveLength(1);
+    expect(h.begun[0].screenshotIds).toEqual(["shot201"]);
+  });
+});
+
+// Codex 6a r5 P1: every batch began its scan at the top, so 10 pages of rows too long for the
+// cap hid the rows after them for good. The scan keeps its place, and starts over once it
+// has sent something or reached the end.
+describe("createDayAssistant.runBatch, round 5", () => {
+  const big = (n: number) => ({ _id: `big${n}`, takenAt: n, ocrText: "中".repeat(10_000) });
+  const fullPage = (p: number) => ({
+    transcripts: [],
+    screenshots: Array.from({ length: 200 }, (_, i) => big(p * 200 + i)),
+    transcriptsDone: true,
+    screenshotsDone: false,
+    screenshotAfter: { at: p * 200 + 199, ids: [`big${p * 200 + 199}`] },
+  });
+
+  it("[P1] the next batch continues where an exhausted scan stopped, then starts over", async () => {
+    const pages = [
+      ...Array.from({ length: 10 }, (_, p) => fullPage(p)),
+      { transcripts: [], screenshots: [{ _id: "late", takenAt: 5_000, ocrText: "SYNTHETIC Send deck" }], transcriptsDone: true, screenshotsDone: true },
+    ];
+    const h = harness({ cap: { capUsd: 0.05, spentUsd: 0, reached: false }, pages });
+    await h.assistant.runBatch();
+    expect(h.requests).toEqual([]);
+    expect(h.unreadArgs).toHaveLength(10);
+    await h.assistant.runBatch();
+    expect(h.unreadArgs[10].screenshotAfter).toEqual({ at: 1_999, ids: ["big1999"] });
+    expect(h.begun.at(-1)?.screenshotIds).toEqual(["late"]);
+    await h.assistant.runBatch();
+    expect(h.unreadArgs[11].screenshotAfter).toBeUndefined();
+  });
+});
+
+describe("assistantClient", () => {
+  it("[P1] never logs, whatever ANTHROPIC_LOG says", () => {
+    vi.stubEnv("ANTHROPIC_LOG", "debug");
+    const client = assistantClient("sk-ant-SYNTHETIC");
+    expect(client.logLevel).toBe("off");
+    // One reservation covers one attempt: a retried request could be paid twice.
+    expect(client.maxRetries).toBe(0);
+    vi.unstubAllEnvs();
+  });
+});
+
+describe("createKeyStore", () => {
+  function fakes() {
+    const files = new Map<string, { data: Buffer; mode: number }>();
+    const safeStorage = {
+      isEncryptionAvailable: () => true,
+      encryptString: (s: string) => Buffer.from(`enc:${s}`),
+      decryptString: (b: Buffer) => b.toString().replace(/^enc:/, ""),
+    };
+    const fsImpl = {
+      writeFileSync: (p: string, data: Buffer, o: { mode: number }) => void files.set(p, { data, mode: o.mode }),
+      readFileSync: (p: string) => {
+        const f = files.get(p);
+        if (!f) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return f.data;
+      },
+      rmSync: (p: string) => void files.delete(p),
+      existsSync: (p: string) => files.has(p),
+    };
+    return { files, safeStorage, fsImpl };
+  }
+
+  it("keeps the key only encrypted, readable by the owner alone", () => {
+    const f = fakes();
+    const store = createKeyStore({ file: "/x/key.bin", safeStorage: f.safeStorage, fs: f.fsImpl });
+    store.set("sk-ant-SYNTHETIC-key");
+    const saved = f.files.get("/x/key.bin")!;
+    expect(saved.data.toString()).not.toBe("sk-ant-SYNTHETIC-key");
+    expect(saved.mode).toBe(0o600);
+    expect(store.has()).toBe(true);
+    expect(store.get()).toBe("sk-ant-SYNTHETIC-key");
+    store.clear();
+    expect(store.has()).toBe(false);
+    expect(store.get()).toBeNull();
+  });
+
+  it("refuses an empty or malformed key, and refuses to store one unencrypted", () => {
+    const f = fakes();
+    const store = createKeyStore({ file: "/x/key.bin", safeStorage: f.safeStorage, fs: f.fsImpl });
+    expect(() => store.set("")).toThrow(/key/);
+    expect(() => store.set("has spaces in it")).toThrow(/key/);
+    const plain = createKeyStore({ file: "/x/key.bin", safeStorage: { ...f.safeStorage, isEncryptionAvailable: () => false }, fs: f.fsImpl });
+    expect(() => plain.set("sk-ant-SYNTHETIC")).toThrow(/Keychain/);
+  });
+});
+
+type IpcHandler = Parameters<Parameters<typeof registerAssistantIpc>[0]["handle"]>[1];
+
+// Plan PR 6a, spec F4: the key goes in from Settings and never comes back out.
+describe("registerAssistantIpc", () => {
+  it("registers only the write-only key channels, through the guarded handle()", async () => {
+    const handlers = new Map<string, IpcHandler>();
+    const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn(), get: vi.fn(() => "sk-ant-SYNTHETIC") };
+    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => null });
+    expect([...handlers.keys()].sort()).toEqual([
+      "gs:assistant:clearApiKey",
+      "gs:assistant:hasApiKey",
+      "gs:assistant:requestImage",
+      "gs:assistant:setApiKey",
+      "gs:assistant:summarize",
+    ]);
+    expect(handlers.get("gs:assistant:hasApiKey")!({})).toBe(true);
+    expect(handlers.get("gs:assistant:setApiKey")!({ key: "sk-ant-SYNTHETIC" })).toBeUndefined();
+    expect(store.set).toHaveBeenCalledWith("sk-ant-SYNTHETIC");
+    expect(() => handlers.get("gs:assistant:setApiKey")!({ key: 42 })).toThrow(/key/);
+    handlers.get("gs:assistant:clearApiKey")!({});
+    expect(store.clear).toHaveBeenCalledOnce();
+    expect(store.get).not.toHaveBeenCalled();
+  });
+
+  it("asks for an image only by a screenshot id, and says so when the recorder is not running", async () => {
+    const handlers = new Map<string, IpcHandler>();
+    const store = { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() };
+    const requestImage = vi.fn(async () => ({ ok: true as const, actions: 0 }));
+    let running = false;
+    registerAssistantIpc({ handle: (ch, fn) => void handlers.set(ch, fn), keyStore: store, assistant: () => (running ? { requestImage, summarize: vi.fn() } : null) });
+    const ask = handlers.get("gs:assistant:requestImage")!;
+    await expect(Promise.resolve(ask({ screenshotId: "shot1" }))).resolves.toEqual({ ok: false, reason: "The Day Recorder isn't running" });
+    running = true;
+    await expect(Promise.resolve(ask({ screenshotId: "shot1" }))).resolves.toEqual({ ok: true, actions: 0 });
+    expect(requestImage).toHaveBeenCalledWith("shot1");
+    for (const bad of [42, "", "../shot", "a".repeat(65), null]) expect(() => ask({ screenshotId: bad })).toThrow(/screenshot/);
+    expect(requestImage).toHaveBeenCalledOnce();
+  });
+
+  it("summarizes one local day, and refuses anything but a day and its window", async () => {
+    const handlers = new Map<string, IpcHandler>();
+    const summarize = vi.fn(async () => ({ ok: true as const, items: 2, unsourced: 0, leftOut: 0, truncated: 0 }));
+    registerAssistantIpc({
+      handle: (ch, fn) => void handlers.set(ch, fn),
+      keyStore: { set: vi.fn(), has: vi.fn(() => true), clear: vi.fn() },
+      assistant: () => ({ requestImage: vi.fn(), summarize }),
+    });
+    const ask = handlers.get("gs:assistant:summarize")!;
+    const from = Date.UTC(2026, 10, 2, 5);
+    await expect(Promise.resolve(ask({ day: "2026-11-02", from, to: from + 86_400_000 }))).resolves.toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0, truncated: 0 });
+    expect(summarize).toHaveBeenCalledWith("2026-11-02", from, from + 86_400_000);
+    for (const bad of [
+      { day: "Nov 2", from, to: from + 1 },
+      { day: "2026-11-02", from: "x", to: from },
+      { day: "2026-11-02", from, to: from - 1 },
+      { day: "2026-11-02", from, to: from + 3 * 86_400_000 },
+    ])
+      expect(() => ask(bad)).toThrow(/day/);
+    expect(summarize).toHaveBeenCalledOnce();
+  });
+});
+
+// Codex 6a r6 P2: spec R8 logs every call's tokens, and cached input is input too.
+describe("the call's cache tokens", () => {
+  it("are settled alongside the uncached input and output", async () => {
+    const h = harness({
+      reply: reply([], { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 500, cache_read_input_tokens: 250 }),
+    });
+    await h.assistant.runBatch();
+    expect(h.settled[0]).toMatchObject({ inputTokens: 100, outputTokens: 20, cacheWriteTokens: 500, cacheReadTokens: 250 });
+  });
+
+  it("are settled as zero when the reply reports none", async () => {
+    const h = harness({ reply: reply([], { input_tokens: 100, output_tokens: 20 }) });
+    await h.assistant.runBatch();
+    expect(h.settled[0]).toMatchObject({ cacheWriteTokens: 0, cacheReadTokens: 0 });
+  });
+});
+
+// Plan PR 6, spec R9: an image goes to Claude only when James asks for it, and every send is
+// logged as imageSent before the request leaves; the logger is a required parameter.
+describe("sendImage", () => {
+  const logImageSent = (h: { calls: string[] }) => async ({ screenshotId }: { screenshotId: string }) => void h.calls.push(`imageSent ${screenshotId}`);
+
+  it("logs imageSent before the request, then sends that one screen as a JPEG", async () => {
+    const h = harness({ reply: reply([]) });
+    const result = await h.assistant.sendImage(logImageSent(h), "shot1");
+    expect(result).toEqual({ ok: true, actions: 0 });
+    expect(h.calls.indexOf("imageSent shot1")).toBeGreaterThan(-1);
+    expect(h.calls.indexOf("imageSent shot1")).toBeLessThan(h.calls.indexOf("create"));
+    expect(h.calls).toContain("jpeg /media/2026-11-02/shot-1.heic");
+    const content = h.requests[0].messages[0].content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toContainEqual({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: JPEG.toString("base64") } });
+  });
+
+  it("sends nothing, and frees the reservation, when the log can't be written", async () => {
+    const h = harness({ reply: reply([]) });
+    const failing = async () => {
+      throw new Error("backend down");
+    };
+    const result = await h.assistant.sendImage(failing, "shot1");
+    expect(result.ok).toBe(false);
+    expect(h.requests).toHaveLength(0);
+    expect(h.calls).toContain("fail req1");
+  });
+
+  it("refuses a logger that is not a function, at run time too", async () => {
+    const h = harness({ reply: reply([]) });
+    // @ts-expect-error spec R9: the logger is a required function
+    await expect(h.assistant.sendImage(null, "shot1")).rejects.toThrow(/logger/);
+    expect(h.requests).toHaveLength(0);
+    expect(h.begun).toHaveLength(0);
+  });
+
+  it("does not compile without the logger", () => {
+    const h = harness();
+    // Never called: only the type check matters here.
+    const withoutLogger = () =>
+      // @ts-expect-error spec R9: sendImage(logger, screenshotId) takes the logger first, always
+      h.assistant.sendImage("shot1");
+    expect(withoutLogger).toBeInstanceOf(Function);
+  });
+
+  it("reserves the cap for the image, and sends nothing when the cap has no room", async () => {
+    const h = harness({ reply: reply([]) });
+    await h.assistant.sendImage(logImageSent(h), "shot1");
+    // At least the image tokens' worth, priced as cache writes (spec R8).
+    expect(h.begun[0].reservedUsd).toBeGreaterThan((5_000 * PRICES[MODEL].input * 1.25) / 1_000_000);
+    expect(h.begun[0]).toMatchObject({ transcriptIds: [], screenshotIds: [] });
+
+    const full = harness({ cap: { capUsd: 1, spentUsd: 1, reached: true } });
+    expect((await full.assistant.sendImage(logImageSent(full), "shot1")).ok).toBe(false);
+    expect(full.requests).toHaveLength(0);
+    expect(full.calls).not.toContain("imageSent shot1");
+    expect(full.events.map((e) => e.kind)).toContain("capPaused");
+  });
+
+  it("sends nothing without a key, for a screenshot that is gone, or for a path outside the media root", async () => {
+    for (const h of [harness({ key: null }), harness({ shot: null }), harness({ resolveFails: true })]) {
+      expect((await h.assistant.sendImage(logImageSent(h), "shot1")).ok).toBe(false);
+      expect(h.requests).toHaveLength(0);
+      expect(h.begun).toHaveLength(0);
+      expect(h.calls).not.toContain("imageSent shot1");
+    }
+  });
+
+  it("settles what the screen proposes, sourced to that screenshot", async () => {
+    const h = harness({ reply: reply([{ type: "createTask", title: "Reply to the Q4 thread", estimateMin: 10, source: "s1" }]) });
+    const result = await h.assistant.sendImage(logImageSent(h), "shot1");
+    expect(result).toEqual({ ok: true, actions: 1 });
+    expect(h.settled[0].proposals).toEqual([{ type: "createTask", title: "Reply to the Q4 thread", estimateMin: 10, sourceScreenshotId: "shot1" }]);
+    expect(h.calls).toContain("apply req1#0");
+  });
+
+  it("a batch never carries an image: images go only through sendImage", async () => {
+    const h = harness();
+    await h.assistant.runBatch();
+    expect(h.requests[0].messages[0].content).toEqual(expect.any(String));
+  });
+});
+
+// Codex 6b r2 P1: the JPEG made for an image request never outlives it, even across a crash;
+// r3 P1: two conversions at once, even from two instances, never see each other's file.
+describe("the image work folder", () => {
+  // Real files have real times; the fixed clock the other tests use would make all of them old.
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+  const scratch = () => fs.mkdtempSync(path.join(os.tmpdir(), "gs-image-test-"));
+
+  it("sweepImageWork removes what a crash left, keeps a conversion still running, and is owner-only", () => {
+    const root = scratch();
+    const work = path.join(root, ".sending");
+    fs.mkdirSync(path.join(work, "old"), { recursive: true });
+    fs.mkdirSync(path.join(work, "live"));
+    fs.writeFileSync(path.join(work, "old", "screen.jpg"), "SYNTHETIC leftover");
+    fs.writeFileSync(path.join(work, "live", "screen.jpg"), "SYNTHETIC in use");
+    const longAgo = new Date(Date.now() - 60 * 60_000);
+    fs.utimesSync(path.join(work, "old"), longAgo, longAgo);
+    sweepImageWork(work);
+    expect(fs.readdirSync(work)).toEqual(["live"]);
+    expect(fs.statSync(work).mode & 0o777).toBe(0o700);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform === "darwin")("two conversions at once each get their own image, and leave nothing", async () => {
+    const root = scratch();
+    const work = path.join(root, ".sending");
+    // SYNTHETIC: two plain colours of different sizes, made here.
+    const a = path.join(root, "a.heic");
+    const b = path.join(root, "b.heic");
+    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "200", "400", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", a]);
+    execFileSync("/usr/bin/sips", ["-s", "format", "heic", "-z", "300", "500", "/System/Library/Desktop Pictures/Solid Colors/Black.png", "--out", b]);
+    const [ja, jb] = await Promise.all([screenshotJpeg(a, work), screenshotJpeg(b, work)]);
+    const size = (jpeg: Buffer) => {
+      const f = path.join(root, `check-${jpeg.length}.jpg`);
+      fs.writeFileSync(f, jpeg);
+      return execFileSync("/usr/bin/sips", ["-g", "pixelWidth", f]).toString().trim().split(/\s+/).at(-1);
+    };
+    expect([size(ja), size(jb)]).toEqual(["400", "500"]);
+    expect(fs.readdirSync(work)).toEqual([]);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});
+
+// Plan PR 6c, spec R13: the end-of-day summary, made when James asks, every item linked to
+// its source; under the same cap, ledger and logging as a batch.
+describe("summarize", () => {
+  it("sends the day's text with the summary instructions, and keeps each item with its source", async () => {
+    const h = harness({
+      reply: summaryReply([
+        { text: "Agreed to send the deck by Thursday", source: "t1" },
+        { text: "Worked on the Q4 plan", source: "s1" },
+      ]),
+    });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0, truncated: 0 });
+    const sent = h.requests[0];
+    expect(sent.system[0].text).toMatch(/summary/i);
+    expect(sent.messages[0].content).toEqual(expect.stringContaining("SYNTHETIC: I'll send the deck by Thursday"));
+    expect(h.summaries).toEqual([
+      {
+        day: "2026-11-02",
+        items: [
+          { text: "Agreed to send the deck by Thursday", sourceSegmentId: "seg1" },
+          { text: "Worked on the Q4 plan", sourceScreenshotId: "shot1" },
+        ],
+        omitted: { unsourced: 0, leftOut: 0, truncated: 0 },
+      },
+    ]);
+    // Paid for like any call, and nothing is proposed or marked read.
+    expect(h.settled[0]).toMatchObject({ proposals: [] });
+    expect(h.begun[0]).toMatchObject({ transcriptIds: [], screenshotIds: [] });
+    expect(h.logs.join("\n")).not.toContain("SYNTHETIC");
+  });
+
+  // Codex 6c r1 P1: spec R13, every item links to its source.
+  it("leaves out a line with no source, or one naming no item of the day, and counts them", async () => {
+    const h = harness({
+      reply: summaryReply([{ text: "Something", source: "t9" }, { text: "A day of steady work" }, { text: "Worked on the Q4 plan", source: "s1" }]),
+    });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 2, leftOut: 0, truncated: 0 });
+    expect(h.summaries[0].items).toEqual([{ text: "Worked on the Q4 plan", sourceScreenshotId: "shot1" }]);
+  });
+
+  it("saves nothing when no line names its source, and says so", async () => {
+    const h = harness({ reply: summaryReply([{ text: "A day of steady work" }]) });
+    const result = await h.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result.ok).toBe(false);
+    expect(h.summaries).toHaveLength(0);
+    expect(h.settled).toHaveLength(1);
+  });
+
+  // Codex 6c r1 P1: a summary applies nothing, not even what earlier calls left pending.
+  it("never applies proposals, not an older request's, nor one whose record it writes first", async () => {
+    const old = { _id: "old", status: "settled" as const, proposals: [{ proposal: { type: "createTask", title: "Old", estimateMin: 5 }, state: "pending" }] };
+    const h = harness({ open: [old], reply: summaryReply([{ text: "Worked on the Q4 plan", source: "s1" }]) });
+    await h.assistant.summarize("2026-11-02", FROM, TO);
+    expect(h.calls.filter((c) => c.startsWith("apply"))).toEqual([]);
+
+    const pending = harness({ settleFails: 1 });
+    await pending.assistant.runBatch();
+    pending.client.messages.create.mockImplementation(async (params: AssistantRequest) => {
+      pending.requests.push(params);
+      return summaryReply([{ text: "Worked on the Q4 plan", source: "s1" }]);
+    });
+    await pending.assistant.summarize("2026-11-02", FROM, TO);
+    expect(pending.settled).toHaveLength(2);
+    expect(pending.calls.filter((c) => c.startsWith("apply"))).toEqual([]);
+  });
+
+  // Codex 6c r1 P1: the whole day is read, a page at a time, not the view's first 500 rows.
+  it("reads the whole day page by page, and counts what didn't fit the cap", async () => {
+    const transcripts = Array.from({ length: 250 }, (_, i) => ({
+      _id: `tr${i}`,
+      segmentId: `seg${i}`,
+      start: FROM + i * 60_000,
+      end: FROM + i * 60_000 + 30_000,
+      text: `SYNTHETIC line ${i}`,
+    }));
+    const h = harness({
+      day: { transcripts, screenshots: [], more: { transcripts: false, screenshots: false } },
+      pageSize: 100,
+      reply: summaryReply([{ text: "The last thing", source: "t250" }]),
+    });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 0, leftOut: 0, truncated: 0 });
+    expect(h.calls.filter((c) => c.startsWith("page transcripts"))).toEqual(["page transcripts 0", "page transcripts 100", "page transcripts 200"]);
+    expect(h.requests[0].messages[0].content).toEqual(expect.stringContaining("SYNTHETIC line 249"));
+    expect(h.summaries[0].items).toEqual([{ text: "The last thing", sourceSegmentId: "seg249" }]);
+
+    const tight = harness({
+      day: { transcripts, screenshots: [], more: { transcripts: false, screenshots: false } },
+      cap: { capUsd: 0.08, spentUsd: 0, reached: false },
+      reply: summaryReply([{ text: "The first thing", source: "t1" }]),
+    });
+    const result = await tight.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result).toMatchObject({ ok: true, items: 1 });
+    expect(result.ok && result.leftOut).toBeGreaterThan(0);
+  });
+
+  // Codex 6c r2 P1: a long row goes whole when the cap allows; one cut short is counted.
+  it("sends a long row whole when it fits, counts one it had to cut, and saves what it left out", async () => {
+    const long = "SYNTHETIC ".repeat(800) + "FINAL DECISION: ship Friday";
+    const day = {
+      transcripts: [{ _id: "tr1", segmentId: "seg1", start: FROM, end: FROM + 60_000, text: long }],
+      screenshots: [],
+      more: { transcripts: false, screenshots: false },
+    };
+    const roomy = harness({ day, reply: summaryReply([{ text: "Decided to ship Friday", source: "t1" }]) });
+    expect(await roomy.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 1, unsourced: 0, leftOut: 0, truncated: 0 });
+    expect(roomy.requests[0].messages[0].content).toEqual(expect.stringContaining("FINAL DECISION: ship Friday"));
+    expect(roomy.summaries[0].omitted).toEqual({ unsourced: 0, leftOut: 0, truncated: 0 });
+
+    const tight = harness({ day, cap: { capUsd: 0.05, spentUsd: 0, reached: false }, reply: summaryReply([{ text: "Something", source: "t1" }]) });
+    const result = await tight.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result).toMatchObject({ ok: true, truncated: 1 });
+    expect(tight.summaries[0].omitted).toMatchObject({ truncated: 1 });
+  });
+
+  it("sends nothing for a day with nothing captured, without a key, or with the cap used up", async () => {
+    const empty = harness({ day: { transcripts: [], screenshots: [], more: { transcripts: false, screenshots: false } } });
+    expect(await empty.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: false, reason: "Nothing was captured that day" });
+    const noKey = harness({ key: null });
+    expect((await noKey.assistant.summarize("2026-11-02", FROM, TO)).ok).toBe(false);
+    const full = harness({ cap: { capUsd: 1, spentUsd: 1, reached: true } });
+    expect((await full.assistant.summarize("2026-11-02", FROM, TO)).ok).toBe(false);
+    expect(full.events.map((e) => e.kind)).toContain("capPaused");
+    for (const h of [empty, noKey, full]) expect(h.requests).toHaveLength(0);
+  });
+
+  it("an answer that is not a summary is paid for, and nothing is saved", async () => {
+    const h = harness({ reply: { ...summaryReply([]), content: [{ type: "text", text: "not json" }] } });
+    const result = await h.assistant.summarize("2026-11-02", FROM, TO);
+    expect(result.ok).toBe(false);
+    expect(h.settled).toHaveLength(1);
+    expect(h.summaries).toHaveLength(0);
+  });
+
+  it("says so when the summary can't be saved", async () => {
+    const h = harness({ reply: summaryReply([{ text: "Something", source: "t1" }]), saveFails: true });
+    expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: false, reason: "The summary was made but couldn't be saved" });
+  });
+});

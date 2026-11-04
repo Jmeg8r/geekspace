@@ -53,6 +53,18 @@ final class PCMHoldTests: XCTestCase {
         XCTAssertEqual(hold.rate, 44_100)
     }
 
+    // Codex 4a r2 P1: with nothing held, the frontier was a wall-clock guess, so a callback
+    // that had taken its timestamp but not yet added its chunk could be settled past.
+    func testTheFrontierWaitsForAnIngestStillInFlight() {
+        let (hold, _, _) = makeHold()
+        let token = hold.beginIngest(at: 1_495, frames: 10)
+        XCTAssertEqual(hold.frontier(limit: 2_010), 1_485, accuracy: 0.001)
+        hold.endIngest(token, PCMChunk(endMs: 1_495, samples: [Float](repeating: 0, count: 10)))
+        XCTAssertEqual(hold.frontier(limit: 2_010), 1_485, accuracy: 0.001, "now held, so the held chunk bounds it")
+        hold.release(now: 2_010)
+        XCTAssertEqual(hold.frontier(limit: 2_010), 1_510, accuracy: 0.001)
+    }
+
     func testSampleCountSpansDrops() {
         let (hold, _, _) = makeHold()
         ingest(hold, [0, 0, 0], at: 1)

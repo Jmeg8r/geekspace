@@ -80,6 +80,19 @@ describe("dayRecorder.addTranscript", () => {
     await t.mutation(api.dayRecorder.addTranscript, { segmentId, start: s.start, end: s.end, text: "I'll send the deck." });
     expect((await t.run((ctx) => ctx.db.get(segmentId)))?.status).toBe("transcribed");
   });
+
+  // Codex 5 r3: a write that committed but whose answer was lost is sent again (a retry, or the
+  // next start). The segment's result is already in, so the second write adds nothing.
+  it("adds no second transcript for a segment that already has its result", async () => {
+    const t = convexTest(schema, modules);
+    const segmentId = await t.mutation(api.dayRecorder.addSegment, segment());
+    const s = segment();
+    const row = { segmentId, start: s.start, end: s.end, text: "I'll send the deck." };
+    await t.mutation(api.dayRecorder.addTranscript, row);
+    await expect(t.mutation(api.dayRecorder.addTranscript, row)).resolves.toBeNull();
+    const rows = await t.run((ctx) => ctx.db.query("transcripts").collect());
+    expect(rows).toHaveLength(1);
+  });
 });
 
 // Codex review of PR 3b-1: the helper names no app when a denylisted app owned the menu bar
@@ -134,6 +147,15 @@ describe("dayRecorder retention", () => {
     expect(expired.screenshots.map((s) => s._id)).toEqual([oldShot]);
   });
 
+  // Codex 5 r2 P1: a segment purged while it waited for transcription made the queue retry
+  // forever, because marking it failed was refused. Purged is terminal: a later status is a no-op.
+  it("leaves a purged segment purged when its transcription result arrives", async () => {
+    const { t, old, oldShot } = await aged();
+    await t.mutation(api.dayRecorder.markPurged, { segmentIds: [old], screenshotIds: [oldShot], at: NOW });
+    await expect(t.mutation(api.dayRecorder.setSegmentStatus, { segmentId: old, status: "failed" })).resolves.toBeNull();
+    expect((await t.run((ctx) => ctx.db.get(old)))?.status).toBe("purged");
+  });
+
   it("marks purged media, logs one purge event with the count, and keeps the text", async () => {
     const { t, old, oldShot } = await aged();
     await t.mutation(api.dayRecorder.markPurged, { segmentIds: [old], screenshotIds: [oldShot], at: NOW });
@@ -160,10 +182,11 @@ describe("dayRecorder retention", () => {
 });
 
 describe("dayRecorder settings", () => {
-  it("defaults to off, an empty denylist, no cap, 30 s shots and 15 min batches", async () => {
+  it("defaults to off, unpaused, an empty denylist, no cap, 30 s shots and 15 min batches", async () => {
     const t = convexTest(schema, modules);
     expect(await t.query(api.dayRecorder.getSettings, {})).toEqual({
       enabled: false,
+      paused: false,
       denylist: [],
       dailyCapUsd: null,
       batchMin: 15,
@@ -185,6 +208,15 @@ describe("dayRecorder settings", () => {
     });
   });
 
+  it("saves pause apart from enabled, so a paused recorder stays enabled", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.updateSettings, { enabled: true });
+    await t.mutation(api.dayRecorder.updateSettings, { paused: true });
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ enabled: true, paused: true });
+    await t.mutation(api.dayRecorder.updateSettings, { paused: false });
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ enabled: true, paused: false });
+  });
+
   it.each([
     [{ denylist: ["not a bundle id"] }, /bundle/i],
     [{ dailyCapUsd: -1 }, /cap/i],
@@ -193,5 +225,110 @@ describe("dayRecorder settings", () => {
   ])("rejects %j", async (patch, message) => {
     const t = convexTest(schema, modules);
     await expect(t.mutation(api.dayRecorder.updateSettings, patch)).rejects.toThrow(message);
+  });
+});
+
+describe("dayRecorder capture day vs capture time", () => {
+  // Decision 2026-10-21 (CSO finding 4016f9d6): a row's day must be a local day its own
+  // capture time could fall on, in some timezone (UTC-12 to UTC+14), so the purge, which
+  // selects by time, can never be pointed at a current day's file.
+  it("rejects a screenshot whose day is far from its takenAt", async () => {
+    const t = convexTest(schema, modules);
+    await expect(
+      t.mutation(api.dayRecorder.addScreenshot, {
+        day: "2026-10-18",
+        path: "2026-10-18/shot-150000-000.heic",
+        takenAt: 0,
+        ocrText: "SYNTHETIC",
+      })
+    ).rejects.toThrow(/does not match its capture time/);
+  });
+
+  it("rejects a segment whose day is far from its start", async () => {
+    const t = convexTest(schema, modules);
+    await expect(
+      t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 31 * DAY_MS }))
+    ).rejects.toThrow(/does not match its capture time/);
+  });
+
+  it.each([
+    ["UTC+14, just after local midnight", Date.UTC(2026, 9, 17, 10, 0, 1)],
+    ["UTC-12, just before local midnight", Date.UTC(2026, 9, 19, 11, 59, 59)],
+  ])("accepts the edge of the day window: %s", async (_name, start) => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.addSegment, segment({ start }))).resolves.toBeTruthy();
+  });
+
+  it.each([
+    ["before any timezone's midnight", Date.UTC(2026, 9, 17, 9, 59, 59)],
+    ["after every timezone's midnight", Date.UTC(2026, 9, 19, 12, 0, 0)],
+  ])("rejects just outside the window: %s", async (_name, start) => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.addSegment, segment({ start }))).rejects.toThrow(
+      /does not match its capture time/
+    );
+  });
+});
+
+// Codex 3e-2 r1–r3: saving the denylist whole from the page let a stale copy undo an edit,
+// so an app just denied, or one another window added, could lose its protection (R4). Each
+// edit is now one atomic change to the list as the server holds it.
+describe("dayRecorder denylist edits", () => {
+  const list = async (t: ReturnType<typeof convexTest>) => (await t.query(api.dayRecorder.getSettings, {})).denylist;
+
+  it("adds to the list as it is now, once", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.editor" });
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    expect(await list(t)).toEqual(["com.example.mail", "com.example.editor"]);
+  });
+
+  it("removes only that app, and keeps what another window added", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.editor" });
+    // Another window, between this window's edits.
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.notes" });
+    await t.mutation(api.dayRecorder.removeFromDenylist, { id: "com.example.mail" });
+    expect(await list(t)).toEqual(["com.example.editor", "com.example.notes"]);
+  });
+
+  it("removing an app that is not listed changes nothing", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.addToDenylist, { id: "com.example.mail" });
+    await t.mutation(api.dayRecorder.removeFromDenylist, { id: "com.example.other" });
+    expect(await list(t)).toEqual(["com.example.mail"]);
+  });
+
+  it("refuses an invalid bundle id at the boundary", async () => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.addToDenylist, { id: "not a bundle id" })).rejects.toThrow(
+      'Invalid app bundle id "not a bundle id"'
+    );
+    await expect(t.mutation(api.dayRecorder.removeFromDenylist, { id: "../x" })).rejects.toThrow("Invalid app bundle id");
+  });
+});
+
+// Plan PR 5: the transcription queue reads closed segments, oldest first.
+describe("dayRecorder.pendingSegments", () => {
+  it("lists closed segments oldest first, up to the limit, and nothing else", async () => {
+    const t = convexTest(schema, modules);
+    const a = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 900_000, path: "2026-10-18/mic-a.webm" }));
+    const b = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 1_200_000, path: "2026-10-18/mic-b.webm" }));
+    const c = await t.mutation(api.dayRecorder.addSegment, segment({ start: NOW - 600_000, path: "2026-10-18/mic-c.webm" }));
+    await t.mutation(api.dayRecorder.setSegmentStatus, { segmentId: c, status: "transcribed" });
+    const rows = await t.query(api.dayRecorder.pendingSegments, { limit: 10 });
+    expect(rows.map((r) => r._id)).toEqual([b, a]);
+    expect(rows[0]).toEqual({ _id: b, path: "2026-10-18/mic-b.webm", start: NOW - 1_200_000, end: NOW - 900_000 });
+    expect((await t.query(api.dayRecorder.pendingSegments, { limit: 1 })).map((r) => r._id)).toEqual([b]);
+  });
+});
+
+// Codex 5 r1 P2: a non-finite limit reached .take() unchecked.
+describe("dayRecorder.pendingSegments, its argument", () => {
+  it.each([[Number.NaN], [Number.POSITIVE_INFINITY], [2.5], [0]])("refuses limit %s", async (limit) => {
+    const t = convexTest(schema, modules);
+    await expect(t.query(api.dayRecorder.pendingSegments, { limit })).rejects.toThrow(/limit/);
   });
 });

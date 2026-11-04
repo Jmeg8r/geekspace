@@ -1,0 +1,598 @@
+import { afterEach, describe, expect, it } from "vitest";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { BROWSERS, DEDICATED_CALL_APPS } from "../electron/callDetector.mjs";
+import {
+  contentFreeLogger,
+  createFileLog,
+  createSupervisor,
+  parseLine,
+  type ScreenshotRow,
+  type SegmentRow,
+  type SupervisorOptions,
+  type SupervisorState,
+} from "../electron/dayRecorder.mjs";
+
+// WHAT: the Day Recorder supervisor against a real child process (a fake gs-capture that
+// speaks protocol v1), plan PR 3c. WHY a real process: every bug class this guards (a spawn
+// error left to hang, an exit nobody noticed, a wedged helper) lives in the process plumbing
+// a mock would replace. Pattern from the prebake spawn-error fix (PR #68).
+
+const FAKE = path.join(__dirname, "fixtures", "day-recorder", "fake-gs-capture.mjs");
+const SECRETS = /SYNTHETIC-(OCR|MALFORMED|V2|UNKNOWN)|com\.example\.denied/;
+
+type Logged = string[];
+
+function harness(scenario: string, overrides: Partial<SupervisorOptions> = {}) {
+  const logs: Logged = [];
+  const states: SupervisorState[] = [];
+  const rows: ({ table: "screenshots"; args: ScreenshotRow } | { table: "captureSegments"; args: SegmentRow })[] = [];
+  const supervisor = createSupervisor({
+    command: process.execPath,
+    prefixArgs: [FAKE],
+    mediaRoot: "/tmp/gs-fake-media-root",
+    env: { ...process.env, FAKE_SCENARIO: scenario },
+    log: (message) => logs.push(message),
+    onState: (s) => states.push(s),
+    sink: {
+      addScreenshot: async (args) => void rows.push({ table: "screenshots", args }),
+      addSegment: async (args) => void rows.push({ table: "captureSegments", args }),
+    },
+    ...overrides,
+  });
+  return { supervisor, logs, states, rows };
+}
+
+async function until(check: () => boolean, ms = 3000) {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > ms) throw new Error("timed out waiting for condition");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+const live: ReturnType<typeof createSupervisor>[] = [];
+afterEach(async () => {
+  await Promise.all(live.splice(0).map((s) => s.stop()));
+});
+
+function started(h: ReturnType<typeof harness>, denylist: string[] = []) {
+  live.push(h.supervisor);
+  h.supervisor.start({ denylist, shotSec: 30, segmentSec: 300 });
+  return h;
+}
+
+describe("createFileLog", () => {
+  // Codex #80 r4 [P2]: a write stream with no error listener throws in the main process when
+  // the log can't be opened or the disk is full.
+  it("falls back instead of throwing when the log file can't be written", async () => {
+    const fallback: string[] = [];
+    const file = path.join("/nonexistent-dir-for-gs-test", "day-recorder.log");
+    const log = createFileLog(file, (m) => fallback.push(m));
+    log.log("first");
+    await until(() => fallback.length > 0);
+    log.log("after the failure");
+    log.end();
+    expect(fallback[0]).toMatch(/Day Recorder log .* failed \(ENOENT\)/);
+    expect(fallback.at(-1)).toMatch(/after the failure$/);
+  });
+});
+
+describe("contentFreeLogger", () => {
+  it("forwards that the Convex client logged, never what it logged", () => {
+    // Codex #80 r1: the Convex client logs a failed mutation's server error, which can echo
+    // the arguments (OCR text), before the promise rejects.
+    const logs: string[] = [];
+    const logger = contentFreeLogger((m) => logs.push(m));
+    logger.error("[CONVEX M(dayRecorder:addScreenshot)] ArgumentValidationError: SYNTHETIC-OCR-SECRET");
+    logger.warn("reconnecting", { detail: "SYNTHETIC-OCR-SECRET" });
+    logger.log("SYNTHETIC-OCR-SECRET");
+    logger.logVerbose("SYNTHETIC-OCR-SECRET");
+    expect(logs).toEqual([
+      "convex client error (details withheld: they can include captured content)",
+      "convex client warn (details withheld: they can include captured content)",
+    ]);
+  });
+});
+
+describe("parseLine", () => {
+  it("accepts a v1 line with a known event", () => {
+    expect(parseLine('{"event":"heartbeat","t":5,"v":1}')).toEqual({
+      ok: true,
+      message: { event: "heartbeat", t: 5, v: 1 },
+    });
+  });
+
+  it.each([
+    ["not JSON", "nope SYNTHETIC-MALFORMED-SECRET"],
+    ["another version", '{"event":"heartbeat","t":5,"v":2}'],
+    ["an unknown event", '{"event":"mystery","v":1}'],
+    ["a non-object", "[1,2]"],
+    ["a shot without its fields", '{"event":"shot","v":1,"ocrText":"SYNTHETIC-OCR-SECRET"}'],
+    // Codex #80 r2: diagnostic fields are logged, so they are validated like the rest.
+    [
+      "a tapRebuilt with a string count",
+      '{"event":"tapRebuilt","v":1,"trigger":"poll","droppedWindows":"SYNTHETIC-OCR-SECRET","addedProcesses":1,"rebuildMs":80}',
+    ],
+    [
+      "a tapRebuilt with an unknown trigger",
+      '{"event":"tapRebuilt","v":1,"trigger":"SYNTHETIC-OCR-SECRET","droppedWindows":1,"addedProcesses":1,"rebuildMs":80}',
+    ],
+    ["a tailDropped without counts", '{"event":"tailDropped","v":1,"unjudged":"SYNTHETIC-OCR-SECRET"}'],
+    ["a sampleRateChanged with text rates", '{"event":"sampleRateChanged","v":1,"from":"SYNTHETIC-OCR-SECRET","to":48000}'],
+    ["a sessionUnverified without livedMs", '{"event":"sessionUnverified","v":1}'],
+  ])("rejects %s, with a reason that never quotes the line", (_name, text) => {
+    const result = parseLine(text);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).not.toMatch(SECRETS);
+  });
+});
+
+describe("parseLine, valid diagnostics", () => {
+  it.each([
+    '{"event":"tapRebuilt","v":1,"t":1,"trigger":"listener","droppedWindows":5,"addedProcesses":1,"rebuildMs":80,"arrivedBundles":["x.y"],"addedBundles":["x.y"],"droppedMaxRms":0.2,"excludedProcesses":2}',
+    '{"event":"tailDropped","v":1,"t":1,"droppedWindows":3,"unjudged":false,"droppedMaxRms":0,"arrivedBundles":[],"addedProcesses":0,"addedBundles":[]}',
+    '{"event":"sampleRateChanged","v":1,"t":1,"from":44100,"to":48000}',
+    '{"event":"sessionUnverified","v":1,"t":1,"livedMs":120,"endedBy":"rebuild"}',
+  ])("accepts %s", (text) => {
+    expect(parseLine(text).ok).toBe(true);
+  });
+});
+
+describe("Day Recorder supervisor", () => {
+  it("reports Recording once the helper is ready, and Off after a clean stop", async () => {
+    const h = started(harness("healthy"));
+    await until(() => h.supervisor.state().status === "recording");
+    await h.supervisor.stop();
+    expect(h.supervisor.state()).toEqual({ status: "off" });
+    expect(h.states.map((s) => s.status)).toEqual(["starting", "recording", "stopping", "off"]);
+  });
+
+  it("passes the media root, denylist and intervals on argv", async () => {
+    const seen: string[][] = [];
+    const h = started(
+      harness("healthy", {
+        spawnImpl: (cmd, args, opts) => {
+          seen.push(args);
+          return spawn(cmd, args, opts);
+        },
+      }),
+      ["com.example.denied", "com.example.other"]
+    );
+    await until(() => h.supervisor.state().status === "recording");
+    expect(seen[0]).toEqual([
+      FAKE,
+      "run",
+      "--media-root",
+      "/tmp/gs-fake-media-root",
+      "--denylist",
+      "com.example.denied,com.example.other",
+      "--shot-sec",
+      "30",
+      "--segment-sec",
+      "300",
+      // The helper holds calls itself (Codex 4b r3).
+      "--call-apps",
+      [...DEDICATED_CALL_APPS].join(","),
+      "--browsers",
+      [...BROWSERS].join(","),
+    ]);
+  });
+
+  it("leaves out --denylist when the list is empty", async () => {
+    const seen: string[][] = [];
+    const h = started(
+      harness("healthy", {
+        spawnImpl: (cmd, args, opts) => {
+          seen.push(args);
+          return spawn(cmd, args, opts);
+        },
+      })
+    );
+    await until(() => h.supervisor.state().status === "recording");
+    expect(seen[0]).not.toContain("--denylist");
+  });
+
+  it("refuses a denylist entry that is not a bundle id, before spawning", () => {
+    const h = harness("healthy");
+    expect(() => h.supervisor.start({ denylist: ["--evil"], shotSec: 30, segmentSec: 300 })).toThrow(
+      /bundle id/
+    );
+    expect(h.states).toEqual([]);
+  });
+
+  it("surfaces a spawn error in under a second instead of hanging", async () => {
+    const h = harness("healthy", { command: "/nonexistent/gs-capture", prefixArgs: [] });
+    live.push(h.supervisor);
+    const t0 = Date.now();
+    h.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300 });
+    await until(() => h.supervisor.state().status === "notRecording", 1000);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    const s = h.supervisor.state();
+    expect(s.status === "notRecording" && s.error.reason).toBe("spawnFailed");
+  });
+
+  it("goes to Not recording with the helper's own message when it fails", async () => {
+    const h = started(harness("fail"));
+    await until(() => h.supervisor.state().status === "notRecording");
+    const s = h.supervisor.state();
+    expect(s.status === "notRecording" && s.error).toEqual({
+      reason: "exited",
+      message: "Screen Recording permission was revoked",
+      code: 3,
+    });
+  });
+
+  it("treats an exit 0 without `stopped` as a failure", async () => {
+    const h = started(harness("exit0"));
+    await until(() => h.supervisor.state().status === "notRecording");
+    const s = h.supervisor.state();
+    expect(s.status === "notRecording" && s.error.reason).toBe("exited");
+  });
+
+  it("goes to Not recording and kills the helper after it falls silent", async () => {
+    const h = started(harness("silent", { silentLimitMs: 300 }));
+    await until(() => h.supervisor.state().status === "notRecording");
+    const s = h.supervisor.state();
+    expect(s.status === "notRecording" && s.error.reason).toBe("silent");
+    await until(() => !h.supervisor.running());
+  });
+
+  it("treats a malformed line as Not recording, stops the helper, and logs none of its contents", async () => {
+    // protocol.md "Failure": a line that is not valid JSON, or whose v is not 1, means Not
+    // recording. A helper that keeps talking garbage must not keep the watchdog happy (Codex #80 r1).
+    const h = started(harness("malformed"));
+    await until(() => h.supervisor.state().status === "notRecording");
+    const s = h.supervisor.state();
+    expect(s.status === "notRecording" && s.error.reason).toBe("protocol");
+    await until(() => !h.supervisor.running());
+    expect(h.logs.join("\n")).not.toMatch(SECRETS);
+  });
+
+  it("waits for the final segment's row before a clean stop returns", async () => {
+    // Codex #80 r1: the helper announces its last segment during SIGTERM; the backend stops
+    // right after this returns, so an unfinished write would leave that file unindexed.
+    let finished = false;
+    const h = started(
+      harness("finalSegment", {
+        sink: {
+          addScreenshot: async () => {},
+          addSegment: () => new Promise((r) => setTimeout(() => ((finished = true), r()), 200)),
+        },
+      })
+    );
+    await until(() => h.supervisor.state().status === "recording");
+    await h.supervisor.stop();
+    expect(finished).toBe(true);
+  });
+
+  it("gives up waiting on a row write after the drain limit, and says so", async () => {
+    const h = started(
+      harness("finalSegment", {
+        drainMs: 150,
+        sink: { addScreenshot: async () => {}, addSegment: () => new Promise(() => {}) },
+      })
+    );
+    await until(() => h.supervisor.state().status === "recording");
+    const t0 = Date.now();
+    await h.supervisor.stop();
+    expect(Date.now() - t0).toBeLessThan(2000);
+    expect(h.logs.some((l) => l.includes("1 row write still pending"))).toBe(true);
+  });
+
+  it("stores shots and segments, omitting a null appBundleId, and never logs captured text", async () => {
+    const h = started(harness("capture"));
+    await until(() => h.rows.length === 3);
+    expect(h.rows).toEqual([
+      {
+        table: "screenshots",
+        args: {
+          day: "2026-10-20",
+          path: "2026-10-20/shot-101500-000.heic",
+          takenAt: 1_760_969_700_000,
+          ocrText: "SYNTHETIC-OCR-SECRET",
+        },
+      },
+      {
+        table: "screenshots",
+        args: {
+          day: "2026-10-20",
+          path: "2026-10-20/shot-101530-000.heic",
+          takenAt: 1_760_969_730_000,
+          appBundleId: "com.example.editor",
+          ocrText: "SYNTHETIC-OCR-TWO",
+        },
+      },
+      {
+        table: "captureSegments",
+        args: {
+          day: "2026-10-20",
+          kind: "system",
+          path: "2026-10-20/sys-101500-000.m4a",
+          start: 1_760_969_700_000,
+          end: 1_760_970_000_000,
+        },
+      },
+    ]);
+    await until(() => h.logs.some((l) => l.includes("tap rebuilt")));
+    // tapRebuilt names denylisted bundles; the supervisor logs only its counts (protocol.md).
+    expect(h.logs.join("\n")).not.toMatch(SECRETS);
+  });
+
+  it("logs a failed row write without the captured text and keeps recording", async () => {
+    const h = started(
+      harness("capture", {
+        sink: {
+          addScreenshot: async () => {
+            throw new Error("backend down: SYNTHETIC-OCR-SECRET");
+          },
+          addSegment: async () => {},
+        },
+      })
+    );
+    await until(() => h.logs.some((l) => l.includes("could not store")));
+    expect(h.supervisor.state().status).toBe("recording");
+    expect(h.logs.join("\n")).not.toMatch(SECRETS);
+  });
+
+  it("escalates to SIGKILL when the helper ignores SIGTERM", async () => {
+    const h = harness("stubborn", { stopGraceMs: 200 });
+    h.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300 });
+    await until(() => h.supervisor.state().status === "recording");
+    await h.supervisor.stop();
+    expect(h.supervisor.state()).toEqual({ status: "off" });
+    expect(h.supervisor.running()).toBe(false);
+    expect(h.logs.some((l) => l.includes("SIGKILL"))).toBe(true);
+  });
+
+  it("a stop before `ready` ends Off, not as a failure", async () => {
+    const h = harness("healthy");
+    h.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300 });
+    await h.supervisor.stop();
+    expect(h.supervisor.state()).toEqual({ status: "off" });
+  });
+
+  it("refuses a second start while one helper is running", async () => {
+    const h = started(harness("healthy"));
+    await until(() => h.supervisor.state().status === "recording");
+    expect(() => h.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300 })).toThrow(/already/);
+  });
+});
+
+// Plan PR 4a: the call hold. Spec R5 / F3: call audio reaches disk only after the notice, so
+// the supervisor tells the helper when to hold, release or discard, and a `call` segment is
+// stored only with the notice event that released it.
+describe("Day Recorder supervisor, call hold", () => {
+  it("parses the call events and a call segment", () => {
+    expect(parseLine('{"v":1,"event":"callHeld","t":1}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callReleased","segments":2,"heldSec":600,"overflowed":false}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callDiscarded","heldSec":42,"reason":"stop"}').ok).toBe(true);
+    expect(
+      parseLine('{"v":1,"event":"segment","kind":"call","day":"2026-10-20","path":"2026-10-20/call-a.m4a","start":1,"end":2}').ok
+    ).toBe(true);
+    expect(
+      parseLine('{"v":1,"event":"segment","kind":"mic","day":"2026-10-20","path":"2026-10-20/a.m4a","start":1,"end":2}').ok
+    ).toBe(false);
+  });
+
+  it("holds, then stores the released audio as call segments with the notice that released it", async () => {
+    const h = started(harness("call"));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    h.supervisor.holdCall();
+    await until(() => h.logs.some((l) => l.includes("call audio held")));
+    h.supervisor.releaseCall("notice-1");
+    await until(() => h.rows.length === 2);
+    expect(h.rows.map((r) => r.args)).toEqual([
+      expect.objectContaining({ kind: "call", noticeEventId: "notice-1", path: expect.stringContaining("/call-") }),
+      expect.objectContaining({ kind: "call", noticeEventId: "notice-1" }),
+    ]);
+    await until(() => h.logs.some((l) => l.includes("call audio released: 2 segment(s), 600 s")));
+  });
+
+  it("discards held audio, and stores nothing", async () => {
+    const h = started(harness("call"));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    h.supervisor.holdCall();
+    h.supervisor.discardCall();
+    await until(() => h.logs.some((l) => l.includes("call audio discarded: 42 s (command)")));
+    expect(h.rows).toEqual([]);
+  });
+
+  it("never stores a call segment no release asked for, and stops recording over it", async () => {
+    const h = started(harness("call", { env: { ...process.env, FAKE_SCENARIO: "call", FAKE_STRAY_CALL: "1" } }));
+    await until(() => h.states.some((s) => s.status === "notRecording"));
+    expect(h.rows).toEqual([]);
+    expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
+  });
+
+  it("refuses a call command while no helper is running", () => {
+    const h = harness("call");
+    expect(() => h.supervisor.holdCall()).toThrow("The capture helper is not running");
+    expect(() => h.supervisor.releaseCall("notice-1")).toThrow("The capture helper is not running");
+    expect(() => h.supervisor.discardCall()).toThrow("The capture helper is not running");
+  });
+});
+
+// Codex 4a r1 P1s: one `releasing` slot let a second release take the first call's segments,
+// and a command channel that broke after a command was written only logged.
+describe("Day Recorder supervisor, call hold under pressure", () => {
+  it("keeps each released call's notice with its own segments when releases overlap", async () => {
+    const h = started(harness("call"));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    h.supervisor.holdCall();
+    h.supervisor.releaseCall("notice-1");
+    h.supervisor.holdCall();
+    h.supervisor.releaseCall("notice-2");
+    await until(() => h.rows.length === 4);
+    expect(h.rows.map((r) => (r.table === "captureSegments" && r.args.kind === "call" ? r.args.noticeEventId : null))).toEqual([
+      "notice-1",
+      "notice-1",
+      "notice-2",
+      "notice-2",
+    ]);
+    expect(h.states.at(-1)).toEqual({ status: "recording" });
+  });
+
+  it("stops recording when the command channel breaks, so a hold can never be lost silently", async () => {
+    const h = started(harness("call", { env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CLOSE_STDIN: "1" } }));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    await new Promise((r) => setTimeout(r, 100));
+    try {
+      h.supervisor.holdCall();
+    } catch {
+      // Refused at once is fine too; what matters is that capture does not go on.
+    }
+    await until(() => h.states.some((s) => s.status === "notRecording"));
+    expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
+  });
+});
+
+// Plan PR 4b: audioUse feeds call detection and the room-mic pause.
+describe("Day Recorder supervisor, audioUse", () => {
+  it("passes each audioUse line on, as parsed", async () => {
+    const seen: { app: string | null; input: boolean }[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_AUDIO_USE: "1" },
+        onAudioUse: (m) => void seen.push({ app: m.app, input: m.input }),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([{ app: "us.zoom.xos", input: true }]);
+    expect(h.logs.join("\n")).not.toContain("us.zoom.xos");
+  });
+});
+
+// Codex 4b r1 P1: a helper started while a call waits for its notice, or was declined, must
+// hold from its first sample.
+describe("Day Recorder supervisor, start held", () => {
+  it("passes --start-held when asked, and not otherwise", async () => {
+    const argv: string[][] = [];
+    const spawnImpl: SupervisorOptions["spawnImpl"] = (command, args, options) => {
+      argv.push(args);
+      return spawn(command, args, options);
+    };
+    const held = started(harness("healthy", { spawnImpl }));
+    live.push(held.supervisor);
+    await until(() => held.states.some((s) => s.status === "recording"));
+    await held.supervisor.stop();
+    held.supervisor.start({ denylist: [], shotSec: 30, segmentSec: 300, startHeld: true });
+    await until(() => argv.length === 2);
+    expect(argv[0]).not.toContain("--start-held");
+    expect(argv[1]).toContain("--start-held");
+  });
+});
+
+// Codex 4b r2: every helper starts held until its first audio-use report; with no call going
+// on, the held start becomes ordinary system audio.
+describe("Day Recorder supervisor, the first report and the startup hold", () => {
+  it("parses audioUseReady and callCleared", () => {
+    expect(parseLine('{"v":1,"event":"audioUseReady","apps":2,"t":1}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callCleared","segments":1,"heldSec":1.5}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioUseReady","apps":"two","t":1}').ok).toBe(false);
+  });
+
+  it("says when the first report is in, and clears the startup hold into system segments", async () => {
+    let ready = 0;
+    const h = started(harness("call", { onAudioUseReady: () => void (ready += 1) }));
+    await until(() => ready === 1);
+    h.supervisor.clearCall();
+    await until(() => h.rows.length === 1);
+    expect(h.rows[0].args).toMatchObject({ kind: "system", path: expect.stringContaining("/sys-") });
+    expect(h.rows[0].args).not.toHaveProperty("noticeEventId");
+    await until(() => h.logs.some((l) => l.includes("startup hold cleared: 1 segment(s), 1.5 s")));
+  });
+});
+
+// Codex 4b r3 P4: a helper that never sends its first audio-use report kept the mic off and
+// system audio held while the status said Recording. Heartbeats don't count for it.
+describe("Day Recorder supervisor, the first-report deadline", () => {
+  it("[P1] is Not recording, loudly, when no audio-use report comes in time", async () => {
+    const h = started(harness("healthy", { audioUseReadyLimitMs: 200 }));
+    await until(() => h.states.some((s) => s.status === "notRecording"));
+    expect(h.states.at(-1)).toMatchObject({ status: "notRecording", error: { reason: "protocol" } });
+    expect(h.logs.join("\n")).toMatch(/audio-use report/);
+  });
+
+  it("stays Recording when the report comes", async () => {
+    const h = started(harness("call", { audioUseReadyLimitMs: 200 }));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(h.states.at(-1)).toEqual({ status: "recording" });
+  });
+});
+
+// Codex 4b r3 P3: the helper holds a call app's audio itself, so it is told which apps are
+// call apps, and says which app it held.
+describe("Day Recorder supervisor, the helper's own call holds", () => {
+  it("passes the call apps and browsers to the helper", async () => {
+    const argv: string[][] = [];
+    const spawnImpl: SupervisorOptions["spawnImpl"] = (command, args, options) => {
+      argv.push(args);
+      return spawn(command, args, options);
+    };
+    const h = started(harness("healthy", { spawnImpl }));
+    await until(() => h.states.some((s) => s.status === "recording"));
+    const at = (flag: string) => argv[0][argv[0].indexOf(flag) + 1].split(",");
+    expect(at("--call-apps")).toContain("us.zoom.xos");
+    expect(at("--call-apps")).not.toContain("com.google.Chrome");
+    expect(at("--browsers")).toContain("com.google.Chrome");
+  });
+
+  it("passes on which app the helper held, and logs no app", async () => {
+    const seen: string[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CALL_HELD: "1" },
+        onCallHeld: (app) => void seen.push(app),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual(["us.zoom.xos"]);
+    expect(h.logs.join("\n")).not.toContain("us.zoom.xos");
+  });
+
+  it("refuses a callHeld whose app is not a string", () => {
+    expect(parseLine('{"v":1,"event":"callHeld","t":1,"app":"us.zoom.xos"}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"callHeld","t":1,"app":7}').ok).toBe(false);
+  });
+});
+
+// Codex 4b r4 P1: the helper says how far its audio-use polls have classified, so the mic's
+// chunks wait for it; the line is passed on and never logged.
+describe("Day Recorder supervisor, classification", () => {
+  it("parses audioClassified", () => {
+    expect(parseLine('{"v":1,"event":"audioClassified","through":1.5}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioClassified","through":"soon"}').ok).toBe(false);
+  });
+
+  it("passes each classified time on", async () => {
+    const seen: number[] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_CLASSIFIED: "1" },
+        onAudioClassified: (through) => void seen.push(through),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([1_760_970_000_000]);
+    expect(h.logs.join("\n")).not.toMatch(/classif/i);
+  });
+});
+
+// Codex 4b r6 P1: a poll gap is unchecked time; the mic's waiting audio is discarded for it.
+describe("Day Recorder supervisor, a poll gap", () => {
+  it("parses audioGap and passes it on", async () => {
+    expect(parseLine('{"v":1,"event":"audioGap","from":1,"to":2}').ok).toBe(true);
+    expect(parseLine('{"v":1,"event":"audioGap","from":1}').ok).toBe(false);
+    const seen: number[][] = [];
+    const h = started(
+      harness("call", {
+        env: { ...process.env, FAKE_SCENARIO: "call", FAKE_GAP: "1" },
+        onAudioGap: (from, to) => void seen.push([from, to]),
+      })
+    );
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([[1_760_970_000_000, 1_760_970_008_000]]);
+    expect(h.logs.join("\n")).toMatch(/gap/);
+  });
+});

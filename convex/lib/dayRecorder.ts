@@ -49,6 +49,23 @@ export function assertMediaPath(path: string, day: string): void {
   }
 }
 
+// Local time runs from UTC-12 to UTC+14, so local day D starts between D 00:00Z - 14 h and
+// D 00:00Z + 12 h. The backend doesn't know the Mac's timezone, so it accepts that window.
+const EARLIEST_OFFSET_MS = 14 * 3_600_000;
+const LATEST_OFFSET_MS = 12 * 3_600_000;
+
+/**
+ * A row's day must be a local day its own capture time can fall on. WHY: the purge selects
+ * rows by time and deletes by path, so a row whose old time pointed at a current day's file
+ * would delete live media (CSO finding 4016f9d6). The purge refuses that too.
+ */
+export function assertCaptureDay(day: string, at: number): void {
+  const dayStart = Date.parse(`${day}T00:00:00Z`);
+  if (at < dayStart - EARLIEST_OFFSET_MS || at >= dayStart + DAY_MS + LATEST_OFFSET_MS) {
+    throw new Error(`Day ${day} does not match its capture time ${new Date(at).toISOString()}`);
+  }
+}
+
 export function assertTime(name: string, value: number): void {
   if (!Number.isFinite(value) || value < 0) throw new Error(`Invalid ${name}: ${value}`);
 }

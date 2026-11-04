@@ -1,4 +1,4 @@
-import { mutation, query, type QueryCtx } from "./_generated/server";
+import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { DEFAULT_SETTINGS } from "./lib/defaults";
 import {
@@ -8,6 +8,7 @@ import {
   DEFAULT_SHOT_SEC,
   assertBatchMin,
   assertBundleId,
+  assertCaptureDay,
   assertCount,
   assertDailyCap,
   assertDay,
@@ -37,6 +38,7 @@ export const getSettings = query({
     const s = await settingsDoc(ctx);
     return {
       enabled: s?.dayRecorderEnabled ?? false,
+      paused: s?.dayRecorderPaused ?? false,
       denylist: s?.dayRecorderDenylist ?? [],
       // No cap set means the assistant does not run (spec F-cap; see assistant.capStatus).
       dailyCapUsd: s?.assistantDailyCapUsd ?? null,
@@ -51,6 +53,7 @@ export const getSettings = query({
 export const updateSettings = mutation({
   args: {
     enabled: v.optional(v.boolean()),
+    paused: v.optional(v.boolean()),
     denylist: v.optional(v.array(v.string())),
     dailyCapUsd: v.optional(v.number()),
     batchMin: v.optional(v.number()),
@@ -63,6 +66,7 @@ export const updateSettings = mutation({
     if (args.shotSec !== undefined) assertShotSec(args.shotSec);
     const patch = {
       ...(args.enabled !== undefined && { dayRecorderEnabled: args.enabled }),
+      ...(args.paused !== undefined && { dayRecorderPaused: args.paused }),
       ...(args.denylist !== undefined && { dayRecorderDenylist: [...new Set(args.denylist)] }),
       ...(args.dailyCapUsd !== undefined && { assistantDailyCapUsd: args.dailyCapUsd }),
       ...(args.batchMin !== undefined && { assistantBatchMin: args.batchMin }),
@@ -71,6 +75,33 @@ export const updateSettings = mutation({
     const existing = await settingsDoc(ctx);
     if (existing) await ctx.db.patch(existing._id, patch);
     else await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, ...patch });
+  },
+});
+
+// WHY not a whole list from the page: a page saving the list it last rendered can undo an
+// edit made since, by itself or another window, and an app just denied would be captured
+// again (R4; Codex review of PR 3e-2). Each of these is one atomic change to the list as it
+// is stored now.
+async function editDenylist(ctx: MutationCtx, change: (list: string[]) => string[]) {
+  const existing = await settingsDoc(ctx);
+  const dayRecorderDenylist = change(existing?.dayRecorderDenylist ?? []);
+  if (existing) await ctx.db.patch(existing._id, { dayRecorderDenylist });
+  else await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, dayRecorderDenylist });
+}
+
+export const addToDenylist = mutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    assertBundleId(id);
+    await editDenylist(ctx, (list) => (list.includes(id) ? list : [...list, id]));
+  },
+});
+
+export const removeFromDenylist = mutation({
+  args: { id: v.string() },
+  handler: async (ctx, { id }) => {
+    assertBundleId(id);
+    await editDenylist(ctx, (list) => list.filter((entry) => entry !== id));
   },
 });
 
@@ -114,6 +145,7 @@ export const addSegment = mutation({
     assertDay(args.day);
     assertMediaPath(args.path, args.day);
     assertSpan(args.start, args.end);
+    assertCaptureDay(args.day, args.start);
     // Spec R5 / F3: call audio reaches disk only after James gave the recording notice.
     // This is the last line of that guarantee, so it checks the event itself, not a flag.
     if (args.kind === "call") {
@@ -136,8 +168,26 @@ export const setSegmentStatus = mutation({
   handler: async (ctx, args) => {
     const segment = await ctx.db.get(args.segmentId);
     if (!segment) throw new Error(`Segment ${args.segmentId} does not exist`);
-    if (segment.status === "purged") throw new Error("A purged segment cannot change status");
+    // Purged is terminal: its media is gone. A result that arrives later changes nothing, and
+    // is not an error, or the transcription queue would retry it forever (Codex review of PR 5).
+    if (segment.status === "purged") return null;
     await ctx.db.patch(args.segmentId, { status: args.status });
+    return null;
+  },
+});
+
+// The transcription queue's input (plan PR 5): closed segments, oldest first.
+const MAX_PENDING = 100;
+export const pendingSegments = query({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }) => {
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) throw new Error(`Invalid limit: ${limit}`);
+    const n = Math.min(MAX_PENDING, limit ?? 20);
+    const rows = await ctx.db
+      .query("captureSegments")
+      .withIndex("by_status_start", (q) => q.eq("status", "closed"))
+      .take(n);
+    return rows.map((r) => ({ _id: r._id, path: r.path, start: r.start, end: r.end }));
   },
 });
 
@@ -153,8 +203,11 @@ export const addTranscript = mutation({
     if (!segment) throw new Error(`Segment ${args.segmentId} does not exist`);
     assertSpan(args.start, args.end);
     assertText("Transcript", args.text);
+    // Already has its result (a write sent again after its answer was lost), or purged: a
+    // second row would duplicate the text (Codex review of PR 5, round 3).
+    if (segment.status !== "closed") return null;
     const id = await ctx.db.insert("transcripts", args);
-    if (segment.status === "closed") await ctx.db.patch(args.segmentId, { status: "transcribed" });
+    await ctx.db.patch(args.segmentId, { status: "transcribed" });
     return id;
   },
 });
@@ -171,6 +224,7 @@ export const addScreenshot = mutation({
     assertDay(args.day);
     assertMediaPath(args.path, args.day);
     assertTime("takenAt", args.takenAt);
+    assertCaptureDay(args.day, args.takenAt);
     if (args.appBundleId !== undefined) assertBundleId(args.appBundleId);
     assertText("OCR text", args.ocrText);
     return ctx.db.insert("screenshots", args);

@@ -285,9 +285,15 @@ write-only: there is no getter.
     and the process tap. `com.apple.security.device.audio-input` stays for the mic.
   - The helper is signed with the app's identity and inherits `entitlementsInherit`
     automatically (`codesign -d --entitlements -` shows the same five keys).
-  - TCC: Screen & System Audio Recording (screenshots fail without it), plus System Audio
-    Recording for the tap. Whether the tap needs its own grant is not isolated yet; PR 3
-    checks on a clean TCC state.
+  - TCC: **two separate grants**, settled on a clean macOS user (PR 3c part 2, 2026-10-31).
+    - **The audio tap needs its own grant:** "would like access to record your system
+      audio", which shows our `NSAudioCaptureUsageDescription`. It lands under "System Audio
+      Recording Only".
+    - **Screenshots need ScreenCaptureKit's "bypass the system private window picker"
+      approval.** Geekspace was then *not* listed under "Screen & System Audio Recording", yet
+      capture worked. Whether macOS asks again later is unverified. If it lapses, the helper
+      fails loudly with the permission error (R3).
+    - The 3e UI copy must cover both prompts.
   - Info.plist: set a real `NSAudioCaptureUsageDescription` in `extendInfo` (electron-builder
     injects a generic default). Screen recording has no usage key.
 - **Public repo.** Fixtures are synthetic and live under `tests/fixtures/day-recorder/`,
