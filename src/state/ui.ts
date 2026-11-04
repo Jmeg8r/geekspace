@@ -11,6 +11,7 @@ export type Nav =
   | { kind: "knowledge"; initialQuery?: string }
   | { kind: "docs" }
   | { kind: "reader" }
+  | { kind: "dayRecord" }
   | { kind: "page"; pageId: string };
 
 /** Why a page view couldn't show its page: it threw, or the page no longer exists. */

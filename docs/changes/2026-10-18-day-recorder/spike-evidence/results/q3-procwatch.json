@@ -1,0 +1,90 @@
+{
+  "pollMs": 100,
+  "output": {
+    "toneEvents": [
+      {
+        "event": "started",
+        "mode": "play",
+        "pid": 13363,
+        "t": 1792332143111.859,
+        "windowless": false
+      },
+      {
+        "event": "stopped",
+        "mode": "play",
+        "t": 1792332146267.689
+      }
+    ],
+    "detectedOnMs": -25.14,
+    "detectedOffMs": 40.72
+  },
+  "input": {
+    "toneEvents": [
+      {
+        "event": "started",
+        "mode": "listen",
+        "pid": 13430,
+        "t": 1792332150227.262,
+        "windowless": false
+      },
+      {
+        "event": "stopped",
+        "mode": "listen",
+        "t": 1792332153384.1482
+      }
+    ],
+    "detectedOnMs": -25.91,
+    "detectedOffMs": 124.88
+  },
+  "pollCost": {
+    "seconds": 60,
+    "cpuSec": 0.72,
+    "percentOfOneCore": 1.2
+  },
+  "toneLines": [
+    {
+      "bundle": "dev.geekspace.spike.tone",
+      "input": false,
+      "object": 156,
+      "output": true,
+      "pid": 13363,
+      "reason": "listener",
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "responsiblePid": 13363,
+      "t": 1792332143086.719
+    },
+    {
+      "bundle": "dev.geekspace.spike.tone",
+      "input": false,
+      "object": 156,
+      "output": false,
+      "pid": 13363,
+      "reason": "listener",
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "responsiblePid": 13363,
+      "t": 1792332146308.408
+    },
+    {
+      "bundle": "dev.geekspace.spike.tone",
+      "input": true,
+      "object": 157,
+      "output": false,
+      "pid": 13430,
+      "reason": "poll",
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "responsiblePid": 13430,
+      "t": 1792332150201.353
+    },
+    {
+      "bundle": "dev.geekspace.spike.tone",
+      "input": false,
+      "object": 157,
+      "output": false,
+      "pid": 13430,
+      "reason": "poll",
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "responsiblePid": 13430,
+      "t": 1792332153509.033
+    }
+  ]
+}

@@ -21,8 +21,6 @@ import { useDayStart } from "../../lib/useDayStart";
 import {
   integrationsAvailable,
   macFetchInbox,
-  macIsRunning,
-  macOpenApp,
   macOpenMessage,
   type MacMailMessage,
 } from "../../lib/integrations";
@@ -297,18 +295,13 @@ function MailWidget() {
   const setContent = useMutation(api.rows.setContent);
   const openRow = useUI((s) => s.openRow);
   const [messages, setMessages] = useState<MacMailMessage[]>([]);
-  const [state, setState] = useState<"loading" | "ok" | "not-running" | "error">("loading");
+  const [state, setState] = useState<"loading" | "ok" | "error">("loading");
   const [error, setError] = useState("");
   const enabled = Boolean(integrationsAvailable() && settings?.mailWidget);
 
   async function load() {
     setState("loading");
-    const running = await macIsRunning("Mail");
-    if (!running.ok || !running.data) {
-      setState("not-running");
-      return;
-    }
-    const r = await macFetchInbox(10);
+    const r = await macFetchInbox(12);
     if (!r.ok) {
       setError(r.error);
       setState("error");
@@ -358,20 +351,6 @@ function MailWidget() {
         action={{ label: "Refresh", onClick: () => void load() }}
       />
       {state === "loading" && <p className="py-3 text-[13px] text-ink-3">Reading Mail…</p>}
-      {state === "not-running" && (
-        <p className="flex items-center gap-2 py-3 text-[13px] text-ink-3">
-          Mail isn't running.
-          <button
-            onClick={async () => {
-              await macOpenApp("Mail");
-              setTimeout(() => void load(), 2500);
-            }}
-            className="rounded-md border border-border px-2 py-0.5 text-[12px] text-ink-2 hover:bg-hov"
-          >
-            Open Mail
-          </button>
-        </p>
-      )}
       {state === "error" && <p className="py-3 text-[12.5px] text-[var(--pal-red)]">{error}</p>}
       {state === "ok" && messages.length === 0 && (
         <p className="py-3 text-[13px] text-ink-3">Inbox zero. Legend.</p>

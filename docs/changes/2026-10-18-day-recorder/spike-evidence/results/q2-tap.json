@@ -1,0 +1,61 @@
+{
+  "silenceBaseline": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "tone-control": {
+    "dbfs": -15.053,
+    "peak": 0.24999994039535522,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "tone-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 1,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone"
+    ]
+  },
+  "tone-windowless-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 1,
+    "excludedBundles": [
+      "dev.geekspace.spike.tone"
+    ]
+  },
+  "electron-control": {
+    "dbfs": -15.052,
+    "peak": 0.2511032521724701,
+    "excludedProcesses": 0,
+    "excludedBundles": []
+  },
+  "electron-excluded": {
+    "dbfs": -999,
+    "peak": 0,
+    "excludedProcesses": 1,
+    "excludedBundles": [
+      "com.github.Electron.helper"
+    ]
+  },
+  "late-control": {
+    "updates": [],
+    "toneStartedT": 1792336767961,
+    "leakedWindows100ms": 41,
+    "leakFirstT": 1792336768061.633,
+    "leakLastT": 1792336772061.582
+  },
+  "late-static": {
+    "updates": [],
+    "toneStartedT": 1792336776480,
+    "leakedWindows100ms": 41,
+    "leakFirstT": 1792336776613.929,
+    "leakLastT": 1792336780613.997
+  },
+  "late-follow": {
+    "error": "gs-capture tap exited 1: gs-capture: update tap exclusion list failed, OSStatus 560492391"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "uid": 501,
+  "euidIsRoot": false,
+  "dir": "$GS_SPIKE_DIR/tm-exclusion-1eRdRU",
+  "addexclusion": {
+    "status": 0,
+    "stderr": ""
+  },
+  "isexcluded": {
+    "status": 0,
+    "stdout": "[Excluded]  $GS_SPIKE_DIR/tm-exclusion-1eRdRU"
+  },
+  "stickyXattrPresent": true,
+  "fixedPathVariant": {
+    "status": 80,
+    "stderr": "tmutil: addexclusion requires root privileges."
+  }
+}

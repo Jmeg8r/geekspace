@@ -1,0 +1,89 @@
+{
+  "app": "com.github.Electron",
+  "tone": {
+    "startT": 1792341527340,
+    "stopT": 1792341537346
+  },
+  "control": {
+    "dbfs": -18.503,
+    "excludedApps": 0,
+    "window": {
+      "startT": 1792341529539.894,
+      "endT": 1792341531636
+    }
+  },
+  "excluded": {
+    "dbfs": -16.08,
+    "peak": 0.266676664352417,
+    "excludedApps": 1,
+    "window": {
+      "startT": 1792341532070.963,
+      "endT": 1792341534186
+    }
+  },
+  "coreAudio": [
+    {
+      "t": 1792341526226.326,
+      "reason": "initial",
+      "bundle": "dev.geekspace.spike.tone",
+      "pid": 33498,
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "input": false,
+      "output": true
+    },
+    {
+      "t": 1792341527385.374,
+      "reason": "listener",
+      "bundle": "com.github.Electron.helper",
+      "pid": 33556,
+      "responsibleBundle": "",
+      "input": false,
+      "output": true
+    },
+    {
+      "t": 1792341529564.388,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": true,
+      "output": false
+    },
+    {
+      "t": 1792341531643.163,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": false,
+      "output": false
+    },
+    {
+      "t": 1792341532064.513,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": true,
+      "output": false
+    },
+    {
+      "t": 1792341532838.455,
+      "reason": "poll",
+      "bundle": "dev.geekspace.spike.tone",
+      "pid": 33498,
+      "responsibleBundle": "dev.geekspace.spike.tone",
+      "input": false,
+      "output": false
+    },
+    {
+      "t": 1792341534250.237,
+      "reason": "poll",
+      "bundle": "com.apple.replayd",
+      "pid": 40656,
+      "responsibleBundle": "",
+      "input": false,
+      "output": false
+    }
+  ]
+}

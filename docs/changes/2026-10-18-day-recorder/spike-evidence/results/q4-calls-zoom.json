@@ -1,0 +1,27 @@
+{
+  "seconds": 240,
+  "events": [
+    {
+      "bundle": "com.apple.avconferenced",
+      "input": true,
+      "object": 125,
+      "output": false,
+      "pid": 1175,
+      "reason": "initial",
+      "responsibleBundle": "com.apple.avconferenced",
+      "responsiblePid": 1175,
+      "t": 1792335880119.089
+    },
+    {
+      "bundle": "us.zoom.xos",
+      "input": true,
+      "object": 158,
+      "output": true,
+      "pid": 39571,
+      "reason": "listener",
+      "responsibleBundle": "us.zoom.xos",
+      "responsiblePid": 39571,
+      "t": 1792336031663.375
+    }
+  ]
+}

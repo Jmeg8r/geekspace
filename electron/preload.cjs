@@ -60,6 +60,45 @@ const api = {
     },
     saveDone: (ok, error) => invoke("gs:recorder:saveDone", { ok: ok === true, error }),
   },
+  // Day Recorder controls (plan PR 3d-1). Each is a saved settings change; capture follows.
+  // The rest of the spec's namespace lands with its feature: notices in PR 4, images, drafts,
+  // undo and the API key in PR 6.
+  dayRecorder: {
+    status: () => invoke("gs:dayRecorder:status"),
+    setEnabled: (enabled) => invoke("gs:dayRecorder:setEnabled", { enabled }),
+    pause: () => invoke("gs:dayRecorder:pause"),
+    resume: () => invoke("gs:dayRecorder:resume"),
+    // The call notice's answers (plan PR 4b): each names the call it answers.
+    noticeGiven: (callId) => invoke("gs:dayRecorder:noticeGiven", { callId }),
+    noticeDeclined: (callId) => invoke("gs:dayRecorder:noticeDeclined", { callId }),
+    extendNotice: (callId) => invoke("gs:dayRecorder:extendNotice", { callId }),
+    dismissCallWarning: () => invoke("gs:dayRecorder:dismissCallWarning"),
+    callPrompt: () => invoke("gs:dayRecorder:callPrompt"),
+    onEvent: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on("gs:dayRecorder:event", listener);
+      return () => ipcRenderer.removeListener("gs:dayRecorder:event", listener);
+    },
+  },
+  // The Day Recorder assistant's API key (plan PR 6a, spec F4): write-only. A page can set or
+  // clear it, or ask whether one is saved; nothing returns the key.
+  assistant: {
+    setApiKey: (key) => invoke("gs:assistant:setApiKey", { key }),
+    clearApiKey: () => invoke("gs:assistant:clearApiKey"),
+    hasApiKey: () => invoke("gs:assistant:hasApiKey"),
+    // Spec R9: one screenshot's image goes to Claude only when James asks, by its id.
+    requestImage: (screenshotId) => invoke("gs:assistant:requestImage", { screenshotId }),
+    // Spec R13: the end-of-day summary of one local day, when James asks for it.
+    summarize: (day, from, to) => invoke("gs:assistant:summarize", { day, from, to }),
+  },
+  // Linear drafts (plan PR 6b, spec R12): the key is write-only as the assistant's is, and a
+  // draft is sent only by approving it, by id.
+  linear: {
+    setApiKey: (key) => invoke("gs:linear:setApiKey", { key }),
+    clearApiKey: () => invoke("gs:linear:clearApiKey"),
+    hasApiKey: () => invoke("gs:linear:hasApiKey"),
+    approve: (draftId) => invoke("gs:linear:approve", { draftId }),
+  },
   chrome: {
     setOverlay: (color, symbolColor) => invoke("gs:chrome:setOverlay", { color, symbolColor }),
   },

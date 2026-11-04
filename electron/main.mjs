@@ -1,7 +1,7 @@
 // WHAT: Electron main process — creates the Geekspace window and exposes the
 // macOS Calendar/Mail integration over IPC.
 // WHY: kept dependency-free plain ESM so there is no build step for the main process.
-import { app, BrowserWindow, dialog, ipcMain, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell, systemPreferences } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,11 @@ import { architectAuthOk, resetArchitect, runArchitect } from "./architect.mjs";
 import { oneTurnAtATime } from "./agentShared.mjs";
 import { isAppUrl, isLocalStorageUrl, isSafeExternalUrl } from "./desktopSafety.mjs";
 import { localArchitectStatus, resetLocalArchitect, runArchitectLocal } from "./architectLocal.mjs";
+import { forwardCallPrompt, forwardStatus, registerDayRecorderIpc } from "./dayRecorderIpc.mjs";
+import { createKeyStore, registerAssistantIpc } from "./assistantKey.mjs";
+import { registerLinearIpc } from "./linearDrafts.mjs";
+import { startDayRecorder } from "./dayRecorderRuntime.mjs";
+import { createQuitHold } from "./dayRecorderService.mjs";
 import {
   getFunctionSyncResult,
   getLogPath as convexLogPath,
@@ -52,6 +57,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const devServerUrl = process.env.VITE_DEV_SERVER_URL;
 const INDEX_FILE = path.join(__dirname, "../dist/index.html");
+// The Day Recorder's hidden mic window (plan PR 3d-2).
+const CAPTURE_FILE = path.join(__dirname, "../dist/capture.html");
 // The only pages that are "the app": the dev server's exact origin, or the built index.
 const APP_PAGES = { devServerUrl, indexFile: INDEX_FILE };
 
@@ -76,14 +83,17 @@ try {
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) app.quit();
 
-app.on("second-instance", () => {
-  const w = BrowserWindow.getAllWindows()[0];
-  if (w) {
-    if (w.isMinimized()) w.restore();
-    w.show();
-    w.focus();
-  }
-});
+/** Bring the app window forward. Returns false when there is none to bring. */
+function focusAppWindow() {
+  const w = appWindows()[0];
+  if (!w) return false;
+  if (w.isMinimized()) w.restore();
+  w.show();
+  w.focus();
+  return true;
+}
+
+app.on("second-instance", () => void focusAppWindow());
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -196,7 +206,7 @@ handle("gs:chrome:setOverlay", ({ color, symbolColor }) => {
   if (process.platform !== "win32") return;
   const isHexColor = (s) => typeof s === "string" && /^#[0-9a-fA-F]{6}$/.test(s);
   if (!isHexColor(color) || !isHexColor(symbolColor)) return;
-  for (const win of BrowserWindow.getAllWindows()) {
+  for (const win of appWindows()) {
     if (typeof win.setTitleBarOverlay === "function") {
       win.setTitleBarOverlay({ color, symbolColor, height: 36 });
     }
@@ -497,12 +507,34 @@ app.whenReady().then(async () => {
   process.env.CONVEX_URL = convexUrl();
 
   createWindow();
+  // Follows the Day Recorder settings; it starts nothing until the recorder is turned on.
+  try {
+    const recorder = startDayRecorder({
+      convexUrl: convexUrl(),
+      capturePage: { devServerUrl, file: CAPTURE_FILE },
+      // On macOS the app outlives its windows, so the menu bar may have none to bring up.
+      showApp: () => void (focusAppWindow() || createWindow()),
+      keyStore: assistantKeys,
+      linearKeyStore: linearKeys,
+    });
+    dayRecorder = recorder;
+    // The view, not the service: the windows must not flash the passing `off` either.
+    forwardStatus({ service: recorder.view, windows: appWindows });
+    forwardCallPrompt({ recorder, windows: appWindows });
+    holdQuitForDayRecorder = createQuitHold({
+      stop: () => recorder.stop(),
+      quit: () => app.quit(),
+      log: (message) => console.error(message),
+    });
+  } catch (err) {
+    console.error("Day Recorder could not start", err);
+  }
   // Warm the knowledge connector (connect + tools/list only — no quota used).
   prewarmKnowledge().catch(() => {});
   // Warm the reader connector (spawns aib-reader-mcp + tools/list).
   prewarmReader().catch(() => {});
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (appWindows().length === 0) createWindow();
   });
 });
 
@@ -514,6 +546,34 @@ app.on("window-all-closed", () => {
 // `convex dev` we merely attached to). before-quit can fire before async work
 // settles, so defer the real quit until SIGTERM completes.
 let shuttingDown = false;
+// Kept for the process-exit kill, even while (and after) the recorder is stopping.
+let dayRecorder = null;
+let holdQuitForDayRecorder = null;
+
+/**
+ * The app's own windows, without the Day Recorder's hidden mic window. WHY: several lookups
+ * here take "the first window" as the app window, and the capture window must never be it.
+ */
+function appWindows() {
+  return BrowserWindow.getAllWindows().filter((w) => !dayRecorder?.isCaptureWindow(w));
+}
+// Registered before the recorder exists: until it starts, or if it failed to, they say so.
+registerDayRecorderIpc({ handle, recorder: () => dayRecorder });
+// The assistant's API key (plan PR 6a, spec F4): Keychain-encrypted, owner-only, write-only from
+// the page. Kept beside the recorder's logs.
+const assistantKeys = createKeyStore({
+  file: path.join(app.getPath("appData"), "Geekspace", "assistant-key.bin"),
+  safeStorage,
+  fs,
+});
+registerAssistantIpc({ handle, keyStore: assistantKeys, assistant: () => dayRecorder?.assistant ?? null });
+// The Linear key (plan PR 6b), kept the same way; a draft is sent only by approving it.
+const linearKeys = createKeyStore({
+  file: path.join(app.getPath("appData"), "Geekspace", "linear-key.bin"),
+  safeStorage,
+  fs,
+});
+registerLinearIpc({ handle, keyStore: linearKeys, drafts: () => dayRecorder?.linear ?? null });
 app.on("before-quit", (event) => {
   // The recording guard runs first: saving needs the backend still up. While the save
   // handshake runs, a second quit is held back too (the recorder is idle by then).
@@ -521,17 +581,23 @@ app.on("before-quit", (event) => {
     event.preventDefault();
     return;
   }
-  const win = BrowserWindow.getAllWindows()[0];
+  const win = appWindows()[0];
   if (recordingActive && !leaveApproved && win) {
     event.preventDefault();
     void confirmLeaveWhileRecording(win);
     return;
   }
+  // Before the backend: SIGTERM finalizes the open segment, and its row needs the backend.
+  // Every quit is held until that stop finishes, then one quit goes through.
+  if (holdQuitForDayRecorder?.(event)) return;
   if (shuttingDown || !convexManaged()) return;
   event.preventDefault();
   shuttingDown = true;
   stopConvex().finally(() => app.quit());
 });
 
-// Last resort: never leak the backend if the parent dies unexpectedly.
-process.on("exit", killBackendSync);
+// Last resort: never leak the backend or a capturing helper if the parent dies unexpectedly.
+process.on("exit", () => {
+  dayRecorder?.killSync();
+  killBackendSync();
+});

@@ -1,0 +1,30 @@
+{
+  "execPath": "<repo>/release/mac-arm64/Geekspace.app/Contents/MacOS/Geekspace",
+  "helper": "<repo>/release/mac-arm64/Geekspace.app/Contents/Resources/gs-capture",
+  "runs": {
+    "apps": {
+      "status": 0,
+      "lines": 51,
+      "last": "{\"bundle\":\"com.apple.loginwindow\",\"pid\":526}",
+      "stderr": ""
+    },
+    "shot": {
+      "status": 0,
+      "lines": 1,
+      "last": "{\"bytes\":114878,\"captureMs\":114.59699999999999,\"excludedApps\":0,\"height\":270,\"out\":\"\\/var\\/folders\\/p9\\/9tv23ktx57v4p0dt1qz29nlh0000gn\\/T\\/gs-spike\\/signed-shot.png\",\"width\":480}",
+      "stderr": ""
+    },
+    "audio": {
+      "status": 0,
+      "lines": 23,
+      "last": "{\"dbfs\":-999,\"event\":\"summary\",\"excludedApps\":0,\"peak\":0,\"rms\":0,\"samples\":101760,\"seconds\":2.1200000000000001}",
+      "stderr": ""
+    },
+    "procwatch": {
+      "status": 0,
+      "lines": 3,
+      "last": "{\"event\":\"done\",\"t\":1792333294629.1599}",
+      "stderr": ""
+    }
+  }
+}

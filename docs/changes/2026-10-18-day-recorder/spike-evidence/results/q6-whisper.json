@@ -1,0 +1,42 @@
+{
+  "audioSec": 54.27,
+  "words": 155,
+  "models": {
+    "clean:ggml-base.en.bin": {
+      "wallSec": 0.99,
+      "cpuSec": 0.98,
+      "realtimeFactor": 0.018,
+      "cpuSecPerAudioHour": 65.01,
+      "peakRssMB": 398.07,
+      "wer": 0.0452,
+      "werNumbersNormalised": 0.0129
+    },
+    "clean:ggml-small.en.bin": {
+      "wallSec": 1.62,
+      "cpuSec": 1.18,
+      "realtimeFactor": 0.03,
+      "cpuSecPerAudioHour": 78.28,
+      "peakRssMB": 896.93,
+      "wer": 0.0323,
+      "werNumbersNormalised": 0
+    },
+    "noisy:ggml-base.en.bin": {
+      "wallSec": 0.93,
+      "cpuSec": 0.78,
+      "realtimeFactor": 0.017,
+      "cpuSecPerAudioHour": 51.74,
+      "peakRssMB": 390.22,
+      "wer": 0.0323,
+      "werNumbersNormalised": 0.0194
+    },
+    "noisy:ggml-small.en.bin": {
+      "wallSec": 1.55,
+      "cpuSec": 1.12,
+      "realtimeFactor": 0.029,
+      "cpuSecPerAudioHour": 74.3,
+      "peakRssMB": 892.72,
+      "wer": 0.0323,
+      "werNumbersNormalised": 0
+    }
+  }
+}

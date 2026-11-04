@@ -68,6 +68,39 @@ describe("search.searchAll", () => {
 
   it("returns the same shape for an empty query", async () => {
     const t = convexTest(schema, modules);
-    expect(await t.query(api.search.searchAll, { q: "  " })).toEqual({ pages: [], rows: [], docs: [] });
+    expect(await t.query(api.search.searchAll, { q: "  " })).toEqual({
+      pages: [],
+      rows: [],
+      docs: [],
+      transcripts: [],
+      screenshots: [],
+    });
+  });
+
+  // Day Recorder archive search (spec R15). SYNTHETIC text.
+  it("finds Day Recorder transcripts and screenshot OCR text, including purged media", async () => {
+    const t = convexTest(schema, modules);
+    const start = Date.UTC(2026, 9, 18, 15);
+    const segmentId = await t.mutation(api.dayRecorder.addSegment, {
+      day: "2026-10-18",
+      kind: "mic",
+      path: "2026-10-18/mic-1500.webm",
+      start,
+      end: start + 300_000,
+    });
+    await t.mutation(api.dayRecorder.addTranscript, { segmentId, start, end: start + 300_000, text: "Send the quarterly deck by Thursday" });
+    const shotId = await t.mutation(api.dayRecorder.addScreenshot, {
+      day: "2026-10-18",
+      path: "2026-10-18/shot-1500.heic",
+      takenAt: start,
+      appBundleId: "com.apple.Keynote",
+      ocrText: "Quarterly deck — draft 3",
+    });
+    // Text outlives the media: a purged screenshot is still found by its OCR text.
+    await t.run((ctx) => ctx.db.patch(shotId, { purgedAt: start }));
+    const result = await t.query(api.search.searchAll, { q: "quarterly deck" });
+    expect(result.transcripts.map((r) => r.segmentId)).toEqual([segmentId]);
+    expect(result.screenshots.map((r) => r._id)).toEqual([shotId]);
+    expect(result.screenshots[0].purged).toBe(true);
   });
 });

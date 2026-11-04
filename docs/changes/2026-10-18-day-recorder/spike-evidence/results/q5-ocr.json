@@ -1,0 +1,424 @@
+{
+  "canvasPoints": "1920x1080",
+  "coldFirstRequestMs": 338.53,
+  "summary": {
+    "1x-accurate": {
+      "meanMs": 110.21,
+      "maxMs": 143.76,
+      "pooledWordRecall": 0.917,
+      "worstFixture": {
+        "scale": 1,
+        "level": "accurate",
+        "fixture": "09-settings-lowcontrast",
+        "ms": 40.51,
+        "hits": 0,
+        "truthWords": 18,
+        "wordRecall": 0
+      }
+    },
+    "1x-fast": {
+      "meanMs": 15.85,
+      "maxMs": 18.55,
+      "pooledWordRecall": 0.837,
+      "worstFixture": {
+        "scale": 1,
+        "level": "fast",
+        "fixture": "09-settings-lowcontrast",
+        "ms": 16.236,
+        "hits": 7,
+        "truthWords": 18,
+        "wordRecall": 0.389
+      }
+    },
+    "2x-accurate": {
+      "meanMs": 133.76,
+      "maxMs": 167.81,
+      "pooledWordRecall": 0.93,
+      "worstFixture": {
+        "scale": 2,
+        "level": "accurate",
+        "fixture": "09-settings-lowcontrast",
+        "ms": 63.083,
+        "hits": 0,
+        "truthWords": 18,
+        "wordRecall": 0
+      }
+    },
+    "2x-fast": {
+      "meanMs": 34.19,
+      "maxMs": 38.07,
+      "pooledWordRecall": 0.937,
+      "worstFixture": {
+        "scale": 2,
+        "level": "fast",
+        "fixture": "06-spreadsheet",
+        "ms": 34.846,
+        "hits": 12,
+        "truthWords": 22,
+        "wordRecall": 0.545
+      }
+    }
+  },
+  "rows": [
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "01-inbox",
+      "ms": 119.109,
+      "hits": 40,
+      "truthWords": 40,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "02-code-dark",
+      "ms": 139.44,
+      "hits": 15,
+      "truthWords": 21,
+      "wordRecall": 0.714
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "03-chat",
+      "ms": 79.598,
+      "hits": 46,
+      "truthWords": 46,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "04-calendar",
+      "ms": 126.835,
+      "hits": 31,
+      "truthWords": 31,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "05-terminal",
+      "ms": 81.976,
+      "hits": 26,
+      "truthWords": 26,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "06-spreadsheet",
+      "ms": 137.969,
+      "hits": 21,
+      "truthWords": 22,
+      "wordRecall": 0.955
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "07-document",
+      "ms": 143.761,
+      "hits": 49,
+      "truthWords": 49,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "08-slide",
+      "ms": 100.072,
+      "hits": 10,
+      "truthWords": 10,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 40.51,
+      "hits": 0,
+      "truthWords": 18,
+      "wordRecall": 0
+    },
+    {
+      "scale": 1,
+      "level": "accurate",
+      "fixture": "10-article",
+      "ms": 132.847,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "01-inbox",
+      "ms": 15.573,
+      "hits": 34,
+      "truthWords": 40,
+      "wordRecall": 0.85
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "02-code-dark",
+      "ms": 14.561,
+      "hits": 12,
+      "truthWords": 21,
+      "wordRecall": 0.571
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "03-chat",
+      "ms": 14.818,
+      "hits": 45,
+      "truthWords": 46,
+      "wordRecall": 0.978
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "04-calendar",
+      "ms": 15.833,
+      "hits": 25,
+      "truthWords": 31,
+      "wordRecall": 0.806
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "05-terminal",
+      "ms": 15.325,
+      "hits": 21,
+      "truthWords": 26,
+      "wordRecall": 0.808
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "06-spreadsheet",
+      "ms": 15.786,
+      "hits": 14,
+      "truthWords": 22,
+      "wordRecall": 0.636
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "07-document",
+      "ms": 18.548,
+      "hits": 48,
+      "truthWords": 49,
+      "wordRecall": 0.98
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "08-slide",
+      "ms": 13.719,
+      "hits": 8,
+      "truthWords": 10,
+      "wordRecall": 0.8
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 16.236,
+      "hits": 7,
+      "truthWords": 18,
+      "wordRecall": 0.389
+    },
+    {
+      "scale": 1,
+      "level": "fast",
+      "fixture": "10-article",
+      "ms": 18.061,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "01-inbox",
+      "ms": 132.94,
+      "hits": 40,
+      "truthWords": 40,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "02-code-dark",
+      "ms": 151.336,
+      "hits": 18,
+      "truthWords": 21,
+      "wordRecall": 0.857
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "03-chat",
+      "ms": 141.8,
+      "hits": 46,
+      "truthWords": 46,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "04-calendar",
+      "ms": 131.064,
+      "hits": 31,
+      "truthWords": 31,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "05-terminal",
+      "ms": 133.537,
+      "hits": 26,
+      "truthWords": 26,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "06-spreadsheet",
+      "ms": 138.899,
+      "hits": 22,
+      "truthWords": 22,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "07-document",
+      "ms": 150.566,
+      "hits": 49,
+      "truthWords": 49,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "08-slide",
+      "ms": 126.583,
+      "hits": 10,
+      "truthWords": 10,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 63.083,
+      "hits": 0,
+      "truthWords": 18,
+      "wordRecall": 0
+    },
+    {
+      "scale": 2,
+      "level": "accurate",
+      "fixture": "10-article",
+      "ms": 167.814,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "01-inbox",
+      "ms": 32.102,
+      "hits": 40,
+      "truthWords": 40,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "02-code-dark",
+      "ms": 35.736,
+      "hits": 17,
+      "truthWords": 21,
+      "wordRecall": 0.81
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "03-chat",
+      "ms": 33.273,
+      "hits": 46,
+      "truthWords": 46,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "04-calendar",
+      "ms": 32.607,
+      "hits": 31,
+      "truthWords": 31,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "05-terminal",
+      "ms": 32.609,
+      "hits": 23,
+      "truthWords": 26,
+      "wordRecall": 0.885
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "06-spreadsheet",
+      "ms": 34.846,
+      "hits": 12,
+      "truthWords": 22,
+      "wordRecall": 0.545
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "07-document",
+      "ms": 38.074,
+      "hits": 49,
+      "truthWords": 49,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "08-slide",
+      "ms": 36.678,
+      "hits": 8,
+      "truthWords": 10,
+      "wordRecall": 0.8
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "09-settings-lowcontrast",
+      "ms": 30.652,
+      "hits": 18,
+      "truthWords": 18,
+      "wordRecall": 1
+    },
+    {
+      "scale": 2,
+      "level": "fast",
+      "fixture": "10-article",
+      "ms": 35.319,
+      "hits": 38,
+      "truthWords": 38,
+      "wordRecall": 1
+    }
+  ]
+}

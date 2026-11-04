@@ -4,6 +4,7 @@ import {
   BookOpen,
   Bot,
   CalendarDays,
+  ClipboardList,
   Database,
   FileText,
   Folder,
@@ -17,6 +18,7 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
+import { RecorderIndicator } from "../dayRecorder/RecorderIndicator";
 import { SidebarRecordingDot } from "../meetings/RecorderWidget";
 import { api } from "../../../convex/_generated/api";
 import type { Doc, Id } from "../../../convex/_generated/dataModel";
@@ -83,6 +85,7 @@ export function Sidebar() {
         </div>
         <span className="text-[14px] font-bold tracking-tight">Geekspace</span>
       </div>
+      <RecorderIndicator />
 
       {/* Primary nav */}
       <div className="px-2">
@@ -122,6 +125,12 @@ export function Sidebar() {
           label="Knowledge"
           active={nav.kind === "knowledge"}
           onClick={() => navigate({ kind: "knowledge" })}
+        />
+        <NavButton
+          icon={ClipboardList}
+          label="Day record"
+          active={nav.kind === "dayRecord"}
+          onClick={() => navigate({ kind: "dayRecord" })}
         />
         <NavButton
           icon={Rss}

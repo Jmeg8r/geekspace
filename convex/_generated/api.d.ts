@@ -8,11 +8,14 @@
  * @module
  */
 
+import type * as assistant from "../assistant.js";
 import type * as calendarData from "../calendarData.js";
 import type * as databases from "../databases.js";
+import type * as dayRecorder from "../dayRecorder.js";
 import type * as docs from "../docs.js";
 import type * as events from "../events.js";
 import type * as files from "../files.js";
+import type * as lib_dayRecorder from "../lib/dayRecorder.js";
 import type * as lib_defaults from "../lib/defaults.js";
 import type * as lib_pageLookup from "../lib/pageLookup.js";
 import type * as lib_pageTree from "../lib/pageTree.js";
@@ -41,11 +44,14 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  assistant: typeof assistant;
   calendarData: typeof calendarData;
   databases: typeof databases;
+  dayRecorder: typeof dayRecorder;
   docs: typeof docs;
   events: typeof events;
   files: typeof files;
+  "lib/dayRecorder": typeof lib_dayRecorder;
   "lib/defaults": typeof lib_defaults;
   "lib/pageLookup": typeof lib_pageLookup;
   "lib/pageTree": typeof lib_pageTree;

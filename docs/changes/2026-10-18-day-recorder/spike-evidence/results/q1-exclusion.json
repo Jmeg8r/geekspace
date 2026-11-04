@@ -1,0 +1,60 @@
+{
+  "textedit-front": {
+    "frontmost": "com.apple.TextEdit",
+    "window": {
+      "x": 213,
+      "y": 78,
+      "w": 656,
+      "h": 422
+    },
+    "control": {
+      "excludedApps": 0,
+      "captureMs": 141.255,
+      "canaryLinesInFrame": 3
+    },
+    "excluded": {
+      "excludedApps": 1,
+      "captureMs": 139.607,
+      "canaryLinesInFrame": 0
+    }
+  },
+  "textedit-background": {
+    "frontmost": "com.apple.finder",
+    "window": {
+      "x": 213,
+      "y": 78,
+      "w": 656,
+      "h": 422
+    },
+    "control": {
+      "excludedApps": 0,
+      "captureMs": 142.98,
+      "canaryLinesInFrame": 3
+    },
+    "excluded": {
+      "excludedApps": 1,
+      "captureMs": 138.077,
+      "canaryLinesInFrame": 0
+    }
+  },
+  "stage": {
+    "rect": [
+      93,
+      -42,
+      896,
+      662
+    ],
+    "control": {
+      "out": "$GS_SPIKE_DIR/q1-stage-control.png",
+      "canaryLines": 3,
+      "backdropSeen": true,
+      "excludedApps": 18
+    },
+    "excluded": {
+      "out": "$GS_SPIKE_DIR/q1-stage-excluded.png",
+      "canaryLines": 0,
+      "backdropSeen": true,
+      "excludedApps": 19
+    }
+  }
+}

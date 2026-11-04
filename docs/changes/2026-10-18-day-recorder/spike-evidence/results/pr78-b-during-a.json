@@ -1,0 +1,276 @@
+{
+  "proof": "B lives and exits entirely during A's slow judgement",
+  "command": "GS_TRANSIENT=b-during-a node scripts/spike-day-recorder.mjs tap-transient-instance",
+  "runs": [
+    {
+      "label": "control-previous-binary",
+      "recordedInCommit": "b746be6",
+      "sourceFile": "pr3b2-transient-b-during-a-old-control.json",
+      "helperBinary": "d00a65d",
+      "result": {
+        "listen": true,
+        "capped": true,
+        "pollMs": 700,
+        "holdMs": 1500,
+        "tapExtra": [
+          "--classify-delay-ms",
+          2200
+        ],
+        "first": {
+          "startT": 1792449043839.28,
+          "stopT": 1792449054334.516,
+          "pid": 58284
+        },
+        "second": {
+          "startT": 1792449044924.7861,
+          "stopT": 1792449045032.788,
+          "pid": 58321
+        },
+        "controlTone": {
+          "startT": 1792449047865.291,
+          "stopT": 1792449048925.941,
+          "pid": 58341,
+          "capturedWindows100ms": 11
+        },
+        "controlTail": [],
+        "exitedMsBeforeNextPoll": 443,
+        "leakedWindows100ms": 2,
+        "leakedDetail": [
+          {
+            "rms": 0.10180245726757793,
+            "msAfterSecondStart": 65
+          },
+          {
+            "rms": 0.14007857844681926,
+            "msAfterSecondStart": 161
+          }
+        ],
+        "rebuilds": [],
+        "tailDrops": [],
+        "summary": {
+          "dbfs": -22.255,
+          "droppedWindows": 0,
+          "event": "summary",
+          "excludedProcesses": 1,
+          "peak": 0.26952069997787476,
+          "rms": 0.07713609307104911,
+          "samples": 575488
+        },
+        "silentA": {
+          "startT": 1792449044330.3289,
+          "bExitedMsAfterAStart": 703
+        }
+      }
+    },
+    {
+      "label": "fixed-1",
+      "recordedInCommit": "25d958e",
+      "sourceFile": "pr3b2-transient-b-during-a-new-1.json",
+      "result": {
+        "listen": true,
+        "capped": true,
+        "pollMs": 700,
+        "holdMs": 1500,
+        "tapExtra": [
+          "--classify-delay-ms",
+          2200
+        ],
+        "first": {
+          "startT": 1792461573929.029,
+          "stopT": 1792461584433.888,
+          "pid": 8086
+        },
+        "second": {
+          "startT": 1792461575104.964,
+          "stopT": 1792461575218.877,
+          "pid": 8113
+        },
+        "controlTone": {
+          "startT": 1792461577969.2612,
+          "stopT": 1792461579025.6638,
+          "pid": 8154,
+          "capturedWindows100ms": 2
+        },
+        "controlTail": [],
+        "secondLivedMs": 114,
+        "pollRebuildsSeeingSecond": 0,
+        "leakedWindows100ms": 0,
+        "leakedDetail": [],
+        "rebuilds": [
+          {
+            "addedBundles": [],
+            "addedProcesses": 0,
+            "arrivedBundles": [
+              "dev.geekspace.spike.tone"
+            ],
+            "droppedMaxRms": 0.17677661214705626,
+            "droppedWindows": 45,
+            "event": "tapRebuilt",
+            "excludedPids": [
+              8086
+            ],
+            "excludedProcesses": 1,
+            "pollDue": false,
+            "rebuildMs": 102.514,
+            "t": 1792461578896.979,
+            "trigger": "listener"
+          }
+        ],
+        "tailDrops": [],
+        "summary": {
+          "dbfs": -22.616,
+          "droppedWindows": 45,
+          "event": "summary",
+          "excludedProcesses": 1,
+          "peak": 0.26846426725387573,
+          "rms": 0.07399772372160711,
+          "samples": 566272
+        },
+        "silentA": {
+          "startT": 1792461574464.8042,
+          "bExitedMsAfterAStart": 754
+        }
+      }
+    },
+    {
+      "label": "fixed-2",
+      "recordedInCommit": "25d958e",
+      "sourceFile": "pr3b2-transient-b-during-a-new-2.json",
+      "result": {
+        "listen": true,
+        "capped": true,
+        "pollMs": 700,
+        "holdMs": 1500,
+        "tapExtra": [
+          "--classify-delay-ms",
+          2200
+        ],
+        "first": {
+          "startT": 1792461585382.139,
+          "stopT": 1792461595888.222,
+          "pid": 8288
+        },
+        "second": {
+          "startT": 1792461586607.685,
+          "stopT": 1792461586714.757,
+          "pid": 8317
+        },
+        "controlTone": {
+          "startT": 1792461589495.1282,
+          "stopT": 1792461590554.099,
+          "pid": 8337,
+          "capturedWindows100ms": 2
+        },
+        "controlTail": [],
+        "secondLivedMs": 107,
+        "pollRebuildsSeeingSecond": 0,
+        "leakedWindows100ms": 0,
+        "leakedDetail": [],
+        "rebuilds": [
+          {
+            "addedBundles": [],
+            "addedProcesses": 0,
+            "arrivedBundles": [
+              "dev.geekspace.spike.tone"
+            ],
+            "droppedMaxRms": 0.17677668215260145,
+            "droppedWindows": 46,
+            "event": "tapRebuilt",
+            "excludedPids": [
+              8288
+            ],
+            "excludedProcesses": 1,
+            "pollDue": false,
+            "rebuildMs": 110.605,
+            "t": 1792461590415.822,
+            "trigger": "listener"
+          }
+        ],
+        "tailDrops": [],
+        "summary": {
+          "dbfs": -22.653,
+          "droppedWindows": 46,
+          "event": "summary",
+          "excludedProcesses": 1,
+          "peak": 0.269186407327652,
+          "rms": 0.07368213569003074,
+          "samples": 565248
+        },
+        "silentA": {
+          "startT": 1792461585949.825,
+          "bExitedMsAfterAStart": 765
+        }
+      }
+    },
+    {
+      "label": "fixed-3",
+      "recordedInCommit": "25d958e",
+      "sourceFile": "pr3b2-transient-b-during-a-new-3.json",
+      "result": {
+        "listen": true,
+        "capped": true,
+        "pollMs": 700,
+        "holdMs": 1500,
+        "tapExtra": [
+          "--classify-delay-ms",
+          2200
+        ],
+        "first": {
+          "startT": 1792461596869.519,
+          "stopT": 1792461607374.4001,
+          "pid": 8463
+        },
+        "second": {
+          "startT": 1792461598102.525,
+          "stopT": 1792461598212.933,
+          "pid": 8492
+        },
+        "controlTone": {
+          "startT": 1792461600959.4421,
+          "stopT": 1792461602008.607,
+          "pid": 8541,
+          "capturedWindows100ms": 2
+        },
+        "controlTail": [],
+        "secondLivedMs": 111,
+        "pollRebuildsSeeingSecond": 0,
+        "leakedWindows100ms": 0,
+        "leakedDetail": [],
+        "rebuilds": [
+          {
+            "addedBundles": [],
+            "addedProcesses": 0,
+            "arrivedBundles": [
+              "dev.geekspace.spike.tone"
+            ],
+            "droppedMaxRms": 0.17677657977996414,
+            "droppedWindows": 45,
+            "event": "tapRebuilt",
+            "excludedPids": [
+              8463
+            ],
+            "excludedProcesses": 1,
+            "pollDue": false,
+            "rebuildMs": 86.583,
+            "t": 1792461601866.657,
+            "trigger": "listener"
+          }
+        ],
+        "tailDrops": [],
+        "summary": {
+          "dbfs": -22.623,
+          "droppedWindows": 45,
+          "event": "summary",
+          "excludedProcesses": 1,
+          "peak": 0.26947689056396484,
+          "rms": 0.07393395495918646,
+          "samples": 567296
+        },
+        "silentA": {
+          "startT": 1792461597446.7002,
+          "bExitedMsAfterAStart": 766
+        }
+      }
+    }
+  ]
+}

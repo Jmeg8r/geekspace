@@ -68,14 +68,19 @@ async function postJson(endpoint, body, timeoutMs = 20000) {
   }
 }
 
-async function waitHealthy(child, deadlineMs = 30000) {
+// WHY throw, not die(): process.exit would skip main()'s finally, leaving the
+// backend running and the secret-bearing work dir on disk.
+async function waitHealthy(child, spawnError, deadlineMs = 30000) {
   const start = Date.now();
   while (Date.now() - start < deadlineMs) {
     if (await isHealthy()) return;
-    if (child.exitCode !== null) die(`backend exited early (code ${child.exitCode})`);
+    // Checked before exitCode: a failed spawn also sets exitCode (to -errno) when it emits "error".
+    // Rethrown as a plain message: the original carries spawnargs, which hold the instance secret.
+    if (spawnError()) throw new Error(`backend failed to start: ${spawnError().code ?? spawnError().message}`);
+    if (child.exitCode !== null) throw new Error(`backend exited early (code ${child.exitCode})`);
     await new Promise((r) => setTimeout(r, 400));
   }
-  die("backend did not become healthy in 30s");
+  throw new Error("backend did not become healthy in 30s");
 }
 
 async function main() {
@@ -137,10 +142,17 @@ async function main() {
     ],
     { cwd: WORK, stdio: ["ignore", logFile, logFile] }
   );
+  // WHY a listener: without one, a failed spawn (EACCES, ENOENT) is an unhandled "error" event
+  // that kills Node with spawnargs (the instance secret) printed and the work dir left behind.
+  let startError = null;
+  child.on("error", (err) => {
+    startError = err;
+  });
 
+  let baked = false;
   try {
     console.log("• starting throwaway backend…");
-    await waitHealthy(child);
+    await waitHealthy(child, () => startError);
 
     console.log("• building the deploy payload (convex deploy --write-push-request)…");
     // WHY write the payload instead of letting the CLI push: the packaged app replays this
@@ -223,20 +235,27 @@ async function main() {
       throw new Error("seed produced no pages");
     }
     console.log(`• seeded ${count} top-level pages`);
+    baked = true;
   } finally {
-    // Clean stop so SQLite checkpoints its WAL into the snapshot.
-    child.kill("SIGTERM");
-    await new Promise((resolve) => {
-      const t = setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch {}
-        resolve();
-      }, 5000);
-      child.on("exit", () => { clearTimeout(t); resolve(); });
-    });
+    // A child that never spawned has no process to signal and never emits "exit".
+    if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+      // Clean stop so SQLite checkpoints its WAL into the snapshot.
+      child.kill("SIGTERM");
+      await new Promise((resolve) => {
+        const t = setTimeout(() => {
+          try { child.kill("SIGKILL"); } catch {}
+          resolve();
+        }, 5000);
+        child.on("exit", () => { clearTimeout(t); resolve(); });
+      });
+    }
     // WHY: NTFS refuses to rmSync a directory containing a file with an open
     // handle. The backend's log file (opened above) is still held until we
-    // close it here, before the WORK dir is removed below.
+    // close it here, before the WORK dir is removed.
     fs.closeSync(logFile);
+    // WHY remove on failure: WORK holds selfhosted.env and config.json (admin key,
+    // instance secret); nothing in it is worth keeping once the bake has failed.
+    if (!baked) fs.rmSync(WORK, { recursive: true, force: true });
   }
 
   // --- capture the snapshot (only the files the runtime needs) ---

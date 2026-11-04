@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { proposal } from "./lib/assistantProposal";
 
 // WHAT: Geekspace data model — Notion-style pages/databases/rows/views plus
 // calendar events and engine-managed time blocks.
@@ -124,6 +125,18 @@ export default defineSchema({
     ollamaModel: v.optional(v.string()),
     micDeviceId: v.optional(v.string()),
     micDeviceLabel: v.optional(v.string()),
+    // Day Recorder (docs/changes/2026-10-18-day-recorder/). Read through
+    // dayRecorder.getSettings, which supplies the defaults.
+    dayRecorderEnabled: v.optional(v.boolean()),
+    // Saved, not runtime-only, so a paused recorder stays paused across a relaunch or crash.
+    dayRecorderPaused: v.optional(v.boolean()),
+    dayRecorderDenylist: v.optional(v.array(v.string())), // app bundle ids
+    dayRecorderShotSec: v.optional(v.number()),
+    assistantBatchMin: v.optional(v.number()),
+    assistantDailyCapUsd: v.optional(v.number()), // unset = the assistant does not run
+    // Where the assistant's last batch ended (plan PR 6a): text after it is new.
+    // Where the assistant starts reading: the local midnight of the day it first ran.
+    assistantSince: v.optional(v.number()),
   }).index("by_key", ["key"]),
 
   schedulerState: defineTable({
@@ -177,4 +190,194 @@ export default defineSchema({
     generatedContent: v.optional(v.string()), // what the app last wrote to that page; a mismatch means you edited it
     eventId: v.optional(v.id("events")), // linked calendar event
   }).index("by_startedAt", ["startedAt"]),
+
+  // ---- Day Recorder (docs/changes/2026-10-18-day-recorder/) ----
+  // Raw media lives on disk under the media root; these tables hold the index and the text.
+  // `path` is always "<day>/<file>", relative to the media root (convex/lib/dayRecorder.ts).
+
+  captureSegments: defineTable({
+    day: v.string(), // YYYY-MM-DD, local
+    kind: v.union(v.literal("mic"), v.literal("system"), v.literal("call")),
+    path: v.string(),
+    start: v.number(),
+    end: v.number(),
+    status: v.union(v.literal("closed"), v.literal("transcribed"), v.literal("failed"), v.literal("purged")),
+    noticeEventId: v.optional(v.id("recorderEvents")), // required for kind "call"
+    purgedAt: v.optional(v.number()),
+  })
+    .index("by_day", ["day"])
+    // Retention reads only unpurged rows: purgedAt undefined, oldest first.
+    .index("by_purged_start", ["purgedAt", "start"])
+    // Transcription reads closed segments, oldest first (plan PR 5).
+    .index("by_status_start", ["status", "start"]),
+
+  transcripts: defineTable({
+    segmentId: v.id("captureSegments"),
+    start: v.number(),
+    end: v.number(),
+    text: v.string(),
+    // When the assistant read it: set in the same write that records the call's cost.
+    readAt: v.optional(v.number()),
+    // How much of a long text has been read so far, in characters (Codex review of PR 6a).
+    readChars: v.optional(v.number()),
+  })
+    .index("by_segment", ["segmentId"])
+    // The Day Record view's day (plan PR 6c).
+    .index("by_start", ["start"])
+    // What the assistant has not read yet, oldest first (plan PR 6a, Codex review round 1).
+    .index("by_read_start", ["readAt", "start"])
+    .searchIndex("search_text", { searchField: "text" }),
+
+  screenshots: defineTable({
+    day: v.string(),
+    path: v.string(),
+    takenAt: v.number(),
+    // Absent when unknown: the helper names no app while a denylisted one owned the menu bar
+    // or the owner changed during the capture (protocol.md).
+    appBundleId: v.optional(v.string()),
+    ocrText: v.string(),
+    purgedAt: v.optional(v.number()), // image deleted; the OCR text is kept
+    // When the assistant read its text (plan PR 6a); purged images' text is read too.
+    readAt: v.optional(v.number()),
+    readChars: v.optional(v.number()),
+  })
+    .index("by_purged_takenAt", ["purgedAt", "takenAt"])
+    .index("by_takenAt", ["takenAt"])
+    .index("by_read_takenAt", ["readAt", "takenAt"])
+    .searchIndex("search_ocr", { searchField: "ocrText" }),
+
+  recorderEvents: defineTable({
+    at: v.number(),
+    kind: v.union(
+      v.literal("noticeGiven"),
+      v.literal("noticeDeclined"),
+      v.literal("imageSent"),
+      v.literal("capError"),
+      v.literal("purged"),
+      v.literal("capPaused")
+    ),
+    detail: v.optional(v.string()),
+    count: v.optional(v.number()),
+    screenshotId: v.optional(v.id("screenshots")),
+  }).index("by_at", ["at"]),
+
+  // One row per effect the assistant had inside Geekspace. Effects of one proposal share a
+  // groupId (the id of the row or draft at its root), and undo reverses the whole group.
+  // WHY a union, not before/after blobs: v1 actions only create, so undo needs exactly what
+  // was created plus what it looked like then, and a typed shape keeps that checkable.
+  assistantActions: defineTable(
+    v.union(
+      v.object({
+        kind: v.literal("createTask"),
+        at: v.number(),
+        groupId: v.string(),
+        rowId: v.id("rows"),
+        // The row as created (title, properties, content). WHY not updatedAt: two writes in
+        // the same millisecond would look unchanged. See rowFingerprint().
+        rowFingerprint: v.string(),
+        sourceSegmentId: v.optional(v.id("captureSegments")),
+        sourceScreenshotId: v.optional(v.id("screenshots")),
+        undoneAt: v.optional(v.number()),
+      }),
+      v.object({
+        kind: v.literal("createBlock"),
+        at: v.number(),
+        groupId: v.string(),
+        blockId: v.id("timeBlocks"),
+        taskRowId: v.id("rows"),
+        start: v.number(),
+        end: v.number(),
+        sourceSegmentId: v.optional(v.id("captureSegments")),
+        sourceScreenshotId: v.optional(v.id("screenshots")),
+        undoneAt: v.optional(v.number()),
+      }),
+      v.object({
+        kind: v.literal("draftLinear"),
+        at: v.number(),
+        groupId: v.string(),
+        draftId: v.id("externalDrafts"),
+        sourceSegmentId: v.optional(v.id("captureSegments")),
+        sourceScreenshotId: v.optional(v.id("screenshots")),
+        undoneAt: v.optional(v.number()),
+      })
+    )
+  )
+    .index("by_at", ["at"])
+    .index("by_group", ["groupId"]),
+
+  // Anything that would leave Geekspace. Nothing is sent until James approves it.
+  externalDrafts: defineTable({
+    target: v.literal("linear"),
+    issueRef: v.string(),
+    body: v.string(),
+    status: v.union(v.literal("pending"), v.literal("approved"), v.literal("sent"), v.literal("discarded")),
+    // The id the Linear comment is created under, fixed at the first claim, so a send that is
+    // tried again can't post a second comment (Codex review of PR 6b, round 1).
+    commentId: v.optional(v.string()),
+    // A send failed after the comment request left: whether Linear has it is not known, so
+    // the next approval asks Linear first. Cleared only by sending.
+    deliveryUnknown: v.optional(v.boolean()),
+    // The claim that holds an approved draft: only it may release the draft or mark it sent, so
+    // a late write from a claim that was taken over changes nothing (Codex 6b r3).
+    claimId: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_status", ["status"]),
+
+  // One call to Claude (plan PR 6a, Codex review round 1). Made only after its worst case is
+  // reserved against the day's cap; settled with its real cost, the items it read and its
+  // proposals in one write; its proposals applied one by one, each once.
+  assistantRequests: defineTable({
+    day: v.string(),
+    at: v.number(),
+    status: v.union(v.literal("inFlight"), v.literal("settled"), v.literal("done")),
+    reservedUsd: v.number(),
+    transcriptIds: v.array(v.id("transcripts")),
+    screenshotIds: v.array(v.id("screenshots")),
+    // The call's own usage once settled (spec R8: every call logged with tokens and cost).
+    costUsd: v.optional(v.number()),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    // Cached input, written and read; absent on calls settled before they were kept.
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
+    // Where each item's part ends, in characters; absent: the whole item.
+    transcriptEnds: v.optional(v.array(v.number())),
+    screenshotEnds: v.optional(v.array(v.number())),
+    proposals: v.optional(
+      v.array(
+        v.object({
+          proposal,
+          state: v.union(v.literal("pending"), v.literal("applied"), v.literal("refused")),
+        })
+      )
+    ),
+  })
+    .index("by_status", ["status"])
+    .index("by_day_status", ["day", "status"]),
+
+  // The end-of-day summary James asked for (plan PR 6c, spec R13): each item links to its
+  // source. A day keeps every summary made; the view shows the newest.
+  daySummaries: defineTable({
+    day: v.string(),
+    at: v.number(),
+    items: v.array(
+      v.object({
+        text: v.string(),
+        sourceSegmentId: v.optional(v.id("captureSegments")),
+        sourceScreenshotId: v.optional(v.id("screenshots")),
+      })
+    ),
+    // What it could not cover: lines with no source, items that didn't fit, items cut short.
+    omitted: v.optional(v.object({ unsourced: v.number(), leftOut: v.number(), truncated: v.number() })),
+  }).index("by_day_at", ["day", "at"]),
+
+  assistantUsage: defineTable({
+    day: v.string(),
+    inputTokens: v.number(),
+    outputTokens: v.number(),
+    cacheWriteTokens: v.optional(v.number()),
+    cacheReadTokens: v.optional(v.number()),
+    costUsd: v.number(),
+  }).index("by_day", ["day"]),
 });
