@@ -1765,3 +1765,26 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     stepping and loading state. The view was not run against live data, because running
     `convex dev` from the branch would deploy its functions to James's local deployment. The
     tests cover the queries, the summary and the view's logic.
+- **2026-11-03, PRs 4-6, F5 security gates on the merged range `4514d5a..ac43da0`** (#93-#99).
+  They ran after merge, so this entry records them; no code changed.
+  - **`security-review`:** no findings at or above its confidence bar. It considered and
+    rejected forged Convex rows driving file operations (the 4016f9d6 class: new readers go
+    through `resolveMediaPath`, and the writers `addSegment` and `addScreenshot` check
+    `assertMediaPath`), argv injection (`sips` via `execFile` with an argv array and an
+    absolute path), a forged draft driving a Linear send, forged rows driving Anthropic sends
+    or undo, key handling, IPC exposure, XSS and prompt injection from captured text.
+  - **`gstack-cso`** (run `1793763482168-5aee4f6eb4f07883`, `--code --diff --base 4514d5a`):
+    finished as **partial**, 0 supported findings. It was static only (no qualified scanner or
+    runtime profile). STRIDE was not assessed within the 10-minute budget, and the Swift
+    helper sources in the range were not read through the helper. Through the helper it
+    confirmed that `approve()` in `electron/linearDrafts.mjs`, reached only from
+    `gs:linear:approve`, is the one path that calls Linear; nothing resends approved drafts
+    on startup.
+  - **Hardening notes, not findings:**
+    - `setDraftStatus` is a public mutation, so any local process can move a draft from
+      pending to approved. That only lists it under interrupted sends; nothing leaves
+      without a click.
+    - A local process can raise `dailyCapUsd`. That costs money, but it gains nothing it
+      could not already read from the unauthenticated local backend.
+    - `FILE_RE` allows a leading `-`. Every consumer gets an absolute path, so it is
+      harmless today.
