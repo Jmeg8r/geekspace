@@ -14,7 +14,7 @@ type IpcEventStub = { sender: string };
 type DayRecorderEvent = { type: "status"; status: { status: string } };
 type IpcListener = (event: IpcEventStub, data: DayRecorderEvent) => void;
 type IpcReply = { ok: boolean };
-type PreloadArg = boolean | string | ((event: DayRecorderEvent) => void);
+type PreloadArg = boolean | string | number | ((event: DayRecorderEvent) => void);
 type PreloadFn = (...args: PreloadArg[]) => Promise<IpcReply> | (() => void);
 type Namespaces = Record<string, Record<string, PreloadFn>>;
 
@@ -118,7 +118,9 @@ describe("preload assistant namespace", () => {
     const fakeRequire = () => ({ contextBridge, ipcRenderer });
     vm.runInNewContext(fs.readFileSync(PRELOAD, "utf8"), { require: fakeRequire, process: { platform: "darwin" } });
     const assistant = exposed.geekspace.assistant;
-    expect(Object.keys(assistant).sort()).toEqual(["clearApiKey", "hasApiKey", "requestImage", "setApiKey"]);
+    expect(Object.keys(assistant).sort()).toEqual(["clearApiKey", "hasApiKey", "requestImage", "setApiKey", "summarize"]);
+    await assistant.summarize("2026-11-02", 1, 2);
+    expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:assistant:summarize", { day: "2026-11-02", from: 1, to: 2 });
     await assistant.requestImage("shot-1");
     expect(ipcRenderer.invoke).toHaveBeenCalledWith("gs:assistant:requestImage", { screenshotId: "shot-1" });
     await assistant.setApiKey("sk-ant-SYNTHETIC");

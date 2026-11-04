@@ -14,6 +14,7 @@ import {
   assertDay,
   assertDraftBody,
   assertIssueRef,
+  assertText,
   assertTime,
   assertTitle,
   rowFingerprint,
@@ -711,3 +712,209 @@ export const refuseProposal = mutation({
   args: { requestId: v.id("assistantRequests"), index: v.number() },
   handler: (ctx, { requestId, index }) => resolveProposal(ctx, requestId, index, "refused"),
 });
+
+// The Day Record view (plan PR 6c, spec R12, R13): one day of what was captured, what the
+// assistant did with it, what waits for approval, and the summary James asked for.
+
+// A local day is 23 to 25 hours; a little more is allowed, and nothing like two days.
+const MAX_DAY_MS = 25 * 60 * 60_000;
+const MAX_DAY_ROWS = 500;
+const MAX_SUMMARY_ITEMS = 50;
+const MAX_SUMMARY_TEXT = 2000;
+
+function assertDayWindow(from: number, to: number) {
+  assertTime("from", from);
+  assertTime("to", to);
+  if (!(to > from) || to - from > MAX_DAY_MS) throw new Error("The window must be one day, start before end");
+}
+
+/** One local day's transcripts and screens, oldest first, at most MAX_DAY_ROWS of each. */
+export const dayRecord = query({
+  args: { from: v.number(), to: v.number() },
+  handler: async (ctx, { from, to }) => {
+    assertDayWindow(from, to);
+    const transcripts = await ctx.db
+      .query("transcripts")
+      .withIndex("by_start", (q) => q.gte("start", from).lt("start", to))
+      .take(MAX_DAY_ROWS + 1);
+    const screenshots = await ctx.db
+      .query("screenshots")
+      .withIndex("by_takenAt", (q) => q.gte("takenAt", from).lt("takenAt", to))
+      .take(MAX_DAY_ROWS + 1);
+    return {
+      transcripts: transcripts.slice(0, MAX_DAY_ROWS).map((r) => ({ _id: r._id, segmentId: r.segmentId, start: r.start, end: r.end, text: r.text })),
+      screenshots: screenshots.slice(0, MAX_DAY_ROWS).map((r) => ({
+        _id: r._id,
+        takenAt: r.takenAt,
+        ocrText: r.ocrText,
+        purged: r.purgedAt !== undefined,
+        ...(r.appBundleId !== undefined && { appBundleId: r.appBundleId }),
+      })),
+      more: { transcripts: transcripts.length > MAX_DAY_ROWS, screenshots: screenshots.length > MAX_DAY_ROWS },
+    };
+  },
+});
+
+/** The day's assistant actions, a page at a time, oldest first, each with what it names: a
+ * task's title, a block's times, a draft's issue. Undo takes a whole group (convex undo). Paged
+ * so a long day reaches every action (Codex review of PR 6c, round 2). */
+export const dayActions = query({
+  args: { from: v.number(), to: v.number(), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { from, to, paginationOpts }) => {
+    assertDayWindow(from, to);
+    assertPage(paginationOpts);
+    const result = await ctx.db
+      .query("assistantActions")
+      .withIndex("by_at", (q) => q.gte("at", from).lt("at", to))
+      .paginate(paginationOpts);
+    const out = [];
+    for (const a of result.page) {
+      const base = {
+        _id: a._id,
+        kind: a.kind,
+        at: a.at,
+        groupId: a.groupId,
+        ...(a.undoneAt !== undefined && { undoneAt: a.undoneAt }),
+        ...(a.sourceSegmentId !== undefined && { sourceSegmentId: a.sourceSegmentId }),
+        ...(a.sourceScreenshotId !== undefined && { sourceScreenshotId: a.sourceScreenshotId }),
+      };
+      // Each branch names its own kind, so the result is a union a caller can narrow by kind.
+      if (a.kind === "createTask") out.push({ ...base, kind: a.kind, title: (await ctx.db.get(a.rowId))?.title ?? null });
+      else if (a.kind === "createBlock") out.push({ ...base, kind: a.kind, start: a.start, end: a.end });
+      else out.push({ ...base, kind: a.kind, issueRef: (await ctx.db.get(a.draftId))?.issueRef ?? null });
+    }
+    return { ...result, page: out };
+  },
+});
+
+/**
+ * Where a summary line or an action came from, found by id wherever it is in the day (Codex
+ * review of PR 6c, round 2: the view lists only a day's first rows). Null once it is gone.
+ */
+export const source = query({
+  args: { sourceSegmentId: v.optional(v.id("captureSegments")), sourceScreenshotId: v.optional(v.id("screenshots")) },
+  handler: async (ctx, { sourceSegmentId, sourceScreenshotId }) => {
+    if ((sourceSegmentId === undefined) === (sourceScreenshotId === undefined)) throw new Error("Name exactly one source");
+    if (sourceSegmentId !== undefined) {
+      const t = await ctx.db
+        .query("transcripts")
+        .withIndex("by_segment", (q) => q.eq("segmentId", sourceSegmentId))
+        .first();
+      return t ? { kind: "said" as const, at: t.start, text: t.text } : null;
+    }
+    if (sourceScreenshotId === undefined) return null;
+    const s = await ctx.db.get(sourceScreenshotId);
+    return s ? { kind: "screen" as const, at: s.takenAt, text: s.ocrText, ...(s.appBundleId !== undefined && { appBundleId: s.appBundleId }) } : null;
+  },
+});
+
+/**
+ * Drafts for James, a page at a time, in the order they were made (Codex 6c r3: a backlog past
+ * one page stays reachable). "pending" are waiting for approval; "approved" are sends that were
+ * cut off (a crash, a failed write), with when their claim lapses and they can be sent again
+ * (Codex review of PR 6c, round 2).
+ */
+export const reviewQueue = query({
+  args: { status: v.union(v.literal("pending"), v.literal("approved")), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { status, paginationOpts }) => {
+    assertPage(paginationOpts);
+    const result = await ctx.db
+      .query("externalDrafts")
+      .withIndex("by_status", (q) => q.eq("status", status))
+      .paginate(paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((d) => ({
+        _id: d._id,
+        issueRef: d.issueRef,
+        body: d.body,
+        createdAt: d.createdAt,
+        status: d.status,
+        deliveryUnknown: d.deliveryUnknown === true,
+        ...(d.status === "approved" && { retryAfter: d.updatedAt + CLAIM_LEASE_MS }),
+      })),
+    };
+  },
+});
+
+const summaryItem = v.object({
+  text: v.string(),
+  sourceSegmentId: v.optional(v.id("captureSegments")),
+  sourceScreenshotId: v.optional(v.id("screenshots")),
+});
+
+/**
+ * One page of a day's transcripts, oldest first: how a summary reads the whole day (Codex
+ * review of PR 6c, round 1), where the view shows only its first MAX_DAY_ROWS.
+ */
+export const dayTranscripts = query({
+  args: { from: v.number(), to: v.number(), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { from, to, paginationOpts }) => {
+    assertDayWindow(from, to);
+    assertPage(paginationOpts);
+    const result = await ctx.db
+      .query("transcripts")
+      .withIndex("by_start", (q) => q.gte("start", from).lt("start", to))
+      .paginate(paginationOpts);
+    return { ...result, page: result.page.map((r) => ({ _id: r._id, segmentId: r.segmentId, start: r.start, end: r.end, text: r.text })) };
+  },
+});
+
+/** One page of a day's screens, oldest first: the summary's read of them (see dayTranscripts). */
+export const dayScreens = query({
+  args: { from: v.number(), to: v.number(), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { from, to, paginationOpts }) => {
+    assertDayWindow(from, to);
+    assertPage(paginationOpts);
+    const result = await ctx.db
+      .query("screenshots")
+      .withIndex("by_takenAt", (q) => q.gte("takenAt", from).lt("takenAt", to))
+      .paginate(paginationOpts);
+    return {
+      ...result,
+      page: result.page.map((r) => ({
+        _id: r._id,
+        takenAt: r.takenAt,
+        ocrText: r.ocrText,
+        purged: r.purgedAt !== undefined,
+        ...(r.appBundleId !== undefined && { appBundleId: r.appBundleId }),
+      })),
+    };
+  },
+});
+
+// What a summary could not cover (Codex review of PR 6c, round 2), kept so its note survives.
+const summaryOmitted = v.object({ unsourced: v.number(), leftOut: v.number(), truncated: v.number() });
+
+/** Keep a summary of a day (electron/dayAssistant.mjs summarize). Every item names exactly one
+ * source that exists (spec R13; Codex review of PR 6c, round 1). */
+export const saveSummary = mutation({
+  args: { day: v.string(), items: v.array(summaryItem), omitted: v.optional(summaryOmitted) },
+  handler: async (ctx, { day, items, omitted }) => {
+    assertDay(day);
+    if (omitted) for (const [name, n] of Object.entries(omitted)) assertCount(`omitted ${name}`, n);
+    if (items.length > MAX_SUMMARY_ITEMS) throw new Error(`At most ${MAX_SUMMARY_ITEMS} summary items`);
+    for (const item of items) {
+      if (!item.text.trim()) throw new Error("A summary item is empty");
+      assertText("Summary item", item.text, MAX_SUMMARY_TEXT);
+      const sources = [item.sourceSegmentId, item.sourceScreenshotId].filter((s) => s !== undefined);
+      if (sources.length !== 1) throw new Error("A summary item must name exactly one source");
+      if (!(await ctx.db.get(sources[0]))) throw new Error("A summary item names a source that does not exist");
+    }
+    return ctx.db.insert("daySummaries", { day, at: Date.now(), items, ...(omitted && { omitted }) });
+  },
+});
+
+/** The newest summary of a day, or null. */
+export const daySummary = query({
+  args: { day: v.string() },
+  handler: async (ctx, { day }) => {
+    assertDay(day);
+    return ctx.db
+      .query("daySummaries")
+      .withIndex("by_day_at", (q) => q.eq("day", day))
+      .order("desc")
+      .first();
+  },
+});
+

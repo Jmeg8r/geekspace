@@ -35,6 +35,9 @@ const ReaderPage = lazy(() => import("./components/reader/ReaderPage").then((m) 
 const AgentPanel = lazy(() => import("./components/agent/AgentPanel").then((m) => ({ default: m.AgentPanel })));
 const TemplatesModal = lazy(() => import("./components/templates/TemplatesModal").then((m) => ({ default: m.TemplatesModal })));
 const DocsPage = lazy(() => import("./components/docs/DocsPage").then((m) => ({ default: m.DocsPage })));
+const DayRecordView = lazy(() =>
+  import("./components/dayRecorder/DayRecordView").then((m) => ({ default: m.DayRecordView }))
+);
 const PageView = lazy(() => import("./components/page/PageView").then((m) => ({ default: m.PageView })));
 const CommandPalette = lazy(() => import("./components/search/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const SettingsModal = lazy(() => import("./components/settings/SettingsModal").then((m) => ({ default: m.SettingsModal })));
@@ -210,6 +213,7 @@ export default function App() {
                 {nav.kind === "knowledge" && <KnowledgePage />}
                 {nav.kind === "reader" && <ReaderPage />}
                 {nav.kind === "docs" && <DocsPage />}
+                {nav.kind === "dayRecord" && <DayRecordView />}
                 {nav.kind === "page" && (
                   <PageView key={nav.pageId} pageId={nav.pageId as Id<"pages">} />
                 )}

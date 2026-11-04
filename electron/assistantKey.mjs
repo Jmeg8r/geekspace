@@ -33,6 +33,9 @@ export function createKeyStore({ file, safeStorage, fs }) {
   };
 }
 
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+// A local day is 23 to 25 hours (convex/assistant.ts dayRecord).
+const MAX_DAY_MS = 25 * 60 * 60_000;
 // A Convex document id: letters and digits only, so a page can't pass a path or anything else.
 const SCREENSHOT_ID_RE = /^[a-z0-9]{1,64}$/i;
 
@@ -56,5 +59,12 @@ export function registerAssistantIpc({ handle, keyStore, assistant }) {
     const running = assistant();
     if (!running) return { ok: false, reason: "The Day Recorder isn't running" };
     return running.requestImage(screenshotId);
+  });
+  handle("gs:assistant:summarize", ({ day, from, to }) => {
+    const window = Number.isSafeInteger(from) && Number.isSafeInteger(to) && to > from && to - from <= MAX_DAY_MS;
+    if (typeof day !== "string" || !DAY_RE.test(day) || !window) throw new Error("That is not a day to summarize");
+    const running = assistant();
+    if (!running) return { ok: false, reason: "The Day Recorder isn't running" };
+    return running.summarize(day, from, to);
   });
 }

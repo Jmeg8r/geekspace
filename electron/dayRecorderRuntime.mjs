@@ -21,7 +21,7 @@ import { ensureMediaRoot, purgeExpired, resolveMediaPath } from "./dayRecorderMe
 import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
 import { createLinearDrafts } from "./linearDrafts.mjs";
-import { assistantClient, createDayAssistant, screenshotJpeg, sweepImageWork } from "./dayAssistant.mjs";
+import { SUMMARY_PAGE_ROWS, assistantClient, createDayAssistant, screenshotJpeg, sweepImageWork } from "./dayAssistant.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -241,6 +241,12 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       refuseProposal: (args) => client.mutation(api.assistant.refuseProposal, args),
       logEvent: (event) => logEvent(event),
       screenshot: (screenshotId) => client.query(api.assistant.screenshot, { screenshotId }),
+      dayPage: async ({ from, to, kind, cursor }) => {
+        const fn = kind === "transcripts" ? api.assistant.dayTranscripts : api.assistant.dayScreens;
+        const page = await client.query(fn, { from, to, paginationOpts: { numItems: SUMMARY_PAGE_ROWS, cursor } });
+        return { rows: page.page, done: page.isDone, cursor: page.continueCursor };
+      },
+      saveSummary: (args) => client.mutation(api.assistant.saveSummary, args),
     },
     resolvePath: (rel) => resolveMediaPath(mediaRoot, rel),
     toJpeg: (file) => screenshotJpeg(file, imageWork),
@@ -311,6 +317,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     linear,
     assistant: {
       requestImage: (screenshotId) => assistant.sendImage(logImageSent, screenshotId),
+      summarize: (day, from, to) => assistant.summarize(day, from, to),
     },
     service,
     view,
