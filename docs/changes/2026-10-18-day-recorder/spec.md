@@ -336,7 +336,9 @@ These seed plan.md's Proof section.
 
 ## Open questions
 
-- **Daily spend cap** in dollars. *Answered by:* James.
+- ~~**Daily spend cap** in dollars.~~ **Answered by James (2026-11-06): $10 a day** to start,
+  set in Assistant settings. Re-check it against the first full day's `assistantUsage` row
+  (plan.md, Deviations, 2026-11-06).
 - **Model per job.** Proposed: Haiku for batch extraction and Sonnet for the end-of-day
   summary. *Answered by:* James, with costs measured in the spike.
 - **Denylist match on window title or browser profile** in addition to bundle ID.

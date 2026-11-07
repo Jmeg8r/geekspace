@@ -1788,3 +1788,15 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
       could not already read from the unauthenticated local backend.
     - `FILE_RE` allows a leading `-`. Every consumer gets an absolute path, so it is
       harmless today.
+- **2026-11-06, the daily cap is $10 (James).** It is a setting (`assistantDailyCapUsd`,
+  Assistant settings), not code, so no code changed.
+  - **Why $10:** an estimate, not a measurement. All jobs run on `claude-opus-5-5`
+    ($4 in / $20 out per MTok). A 15-minute batch holds about 19 kept frames of OCR text
+    (75 kept per hour at `SHOT_SEC` 30, spike-findings.md) plus speech: roughly 20k tokens in
+    and 1.5k out, about $0.11. That is ~$3.50 for 32 batches in 8 hours, and ~$4-6 with the
+    summary.
+  - **Headroom:** the cap is checked against each call's worst-case reservation (`fitBytes`).
+    That is about $0.70 for an Opus batch, and more for a summary that reads the whole day.
+    $10 leaves room for both at the end of a busy day.
+  - **Re-check:** compare the first full day's `assistantUsage` row with this estimate. If
+    batches move to Haiku (the open model-per-job question), the cap can drop.
