@@ -231,6 +231,39 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
 - `tests/linearDrafts.test.ts`: no request to `api.linear.app` before approval.
 - `security-review` and `gstack-cso` run on this PR (F5), along with Codex.
 
+### PR 7 — Auto-stop (`feat/day-recorder-auto-stop`)
+
+Added 2026-11-07, from James's answer to the spec's open question on hours: auto-stop,
+never auto-start.
+
+**Rules (James, 2026-11-07):**
+- An optional end time, set in Day Recorder settings. With none set, nothing stops capture.
+- With an end time set, a recorder that is on when that time or local midnight comes turns
+  off. Midnight is there so a late, deliberate start (after the end time) runs until the day
+  ends, not all night.
+- Only time spent on counts: turning the recorder on starts the window afresh, so a start
+  after the end time is not stopped at once.
+- Waking from sleep past a stop moment stops it at wake.
+- The schedule never turns capture on.
+
+**Files:**
+- `convex/schema.ts`, `convex/dayRecorder.ts`: `dayRecorderStopAtMin` (minutes after local
+  midnight, 0–1439, whole) or absent; `updateSettings` takes `stopAtMin` (a number, or null
+  to clear), validated at the boundary; `getSettings` returns it; event kind `autoStopped`.
+- `electron/dayRecorderAutoStop.mjs`: the rule as a pure function of the end time, the last
+  check and now, in local time.
+- `electron/dayRecorderRuntime.mjs`: a 60-second check and a check on `powerMonitor`
+  resume. When it fires: `enabled: false`, an `autoStopped` event and a system notification.
+- `src/components/dayRecorder/DayRecorderSettings.tsx`: an end-time field with "None".
+
+**Tests:**
+- The rule: crossing the end time, waking past it, a late start stopped at midnight, a day
+  with a DST change, and no end time.
+- Convex: valid, out-of-range and fractional values, and null clearing it.
+- Runtime, with a fake clock: it turns capture off and never on.
+- Live: in the dev app, an end time a minute ahead turns capture off, with the notice and the
+  event.
+
 ## Files that change (summary)
 
 - **New:** `native/gs-capture/`, `scripts/build-gs-capture.mjs`,
