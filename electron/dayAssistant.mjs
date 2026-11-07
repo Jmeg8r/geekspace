@@ -23,9 +23,10 @@ import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { localDay } from "./dayRecorderMedia.mjs";
 
-// The current default model (claude-api skill). James's open question, "Haiku for batches,
-// Sonnet for the summary" (spec), is his to answer; this is the one place to change it.
-export const MODEL = "claude-opus-5-5";
+// A model per job (James, 2026-11-07): the batches and images, which only propose actions that
+// Undo reverses, run on Haiku; the one summary a day runs on Opus.
+export const BATCH_MODEL = "claude-haiku-5-5";
+export const SUMMARY_MODEL = "claude-opus-5-5";
 const EFFORT = "medium";
 const MAX_TOKENS = 16_000;
 // Below this there is no room for a useful reply: the call is not made.
@@ -64,24 +65,36 @@ const SIPS_TIMEOUT_MS = 30_000;
 const ABANDONED_WORK_MS = 10 * 60_000;
 
 // USD per million tokens (claude-api skill, cached 2026-10-06). Cache writes are 1.25x input.
+// Haiku 5.5 bills a whole request at `long` prices once its prompt (input, cache writes and
+// cache reads together) is over `over` tokens (platform pricing page, read 2026-11-07).
 export const PRICES = {
   "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2 },
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
-  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, long: { over: 100_000, input: 0.5, output: 2.5, cacheRead: 0.05 } },
   "claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25 },
   "claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5 },
 };
 const CACHE_WRITE = 1.25;
 const PER_TOKEN = 1 / 1_000_000;
-const DEAREST = Object.values(PRICES).reduce((a, p) => ({
-  input: Math.max(a.input, p.input),
-  output: Math.max(a.output, p.output),
-  cacheRead: Math.max(a.cacheRead, p.cacheRead),
-}));
+const DEAREST = Object.values(PRICES)
+  .flatMap((p) => (p.long ? [p, p.long] : [p]))
+  .reduce((a, p) => ({
+    input: Math.max(a.input, p.input),
+    output: Math.max(a.output, p.output),
+    cacheRead: Math.max(a.cacheRead, p.cacheRead),
+  }));
+
+/** The rates a request with a prompt of `promptTokens` pays: the dearest known for an unknown model. */
+function priceFor(model, promptTokens) {
+  const p = PRICES[model];
+  if (!p) return DEAREST;
+  return p.long && promptTokens > p.long.over ? p.long : p;
+}
 
 /** What a call cost, in USD. An unknown model is priced at the dearest known rate. */
 export function costOf(usage, model) {
-  const p = PRICES[model] ?? DEAREST;
+  const prompt = (usage.input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0);
+  const p = priceFor(model, prompt);
   return (
     ((usage.input_tokens ?? 0) * p.input +
       (usage.cache_creation_input_tokens ?? 0) * p.input * CACHE_WRITE +
@@ -359,8 +372,11 @@ function fit(text, leftUsd, model) {
 }
 
 function fitBytes(textBytes, leftUsd, model) {
-  const price = PRICES[model] ?? DEAREST;
-  const inputUsd = (FIXED_INPUT_BYTES + textBytes + INPUT_OVERHEAD_TOKENS) * price.input * CACHE_WRITE * PER_TOKEN;
+  const promptTokens = FIXED_INPUT_BYTES + textBytes + INPUT_OVERHEAD_TOKENS;
+  // Counted in bytes, the prompt is never smaller than in tokens, so one that may cross a
+  // long-prompt line is reserved at the long prices, output included.
+  const price = priceFor(model, promptTokens);
+  const inputUsd = promptTokens * price.input * CACHE_WRITE * PER_TOKEN;
   const perOutput = price.output * PER_TOKEN;
   const maxTokens = Math.min(MAX_TOKENS, Math.floor((leftUsd - inputUsd) / perOutput));
   if (maxTokens < MIN_OUTPUT_TOKENS) return null;
@@ -382,7 +398,7 @@ function replyActions(response) {
   }
 }
 
-export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, model = MODEL }) {
+export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, model = BATCH_MODEL, summaryModel = SUMMARY_MODEL }) {
   let running = null;
   let stopped = false;
   let capNoticeDay = null;
@@ -443,11 +459,11 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
    * call frees its reservation only when the API refused it before any work; a record that
    * failed is kept and written first next time.
    */
-  async function exchange(anthropic, { requestId, maxTokens, content, sources, job = PROPOSE }) {
+  async function exchange(anthropic, { requestId, maxTokens, content, sources, job = PROPOSE, callModel = model }) {
     let response;
     try {
       response = await anthropic.messages.create({
-        model,
+        model: callModel,
         max_tokens: maxTokens,
         output_config: { effort: EFFORT, format: job.format },
         system: [{ type: "text", text: job.system, cache_control: { type: "ephemeral" } }],
@@ -470,7 +486,7 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
     }
     // Priced as it was reserved: with no fallback, the model asked for is the one that answered
     // (a dated id in response.model would price at the dearest rate, past the reservation).
-    const costUsd = costOf(response.usage, model);
+    const costUsd = costOf(response.usage, callModel);
     const { proposals, value } = job.read(response, sources, log);
     const settle = {
       requestId,
@@ -669,7 +685,7 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
           // short (Codex 6c r2: a batch's 8,000-character parts would drop a long row's end).
           const length = (kind === "transcripts" ? row.text : row.ocrText).length;
           const sizes = [length, ...PART_CHARS.filter((chars) => chars < length)];
-          const chosen = sizes.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, model));
+          const chosen = sizes.find((chars) => fitBytes(bytes + utf8Bytes(itemLine(kind, row, key, chars).line) + LINE_SLACK_BYTES, left, summaryModel));
           if (chosen === undefined) {
             skipped += 1;
             continue;
@@ -685,13 +701,13 @@ export function createDayAssistant({ client, convex, log, resolvePath, toJpeg, m
     if (seen === 0) return no("Nothing was captured that day");
     if (skipped || truncated) log(`assistant: for the cap, ${skipped} item(s) left out of the summary and ${truncated} cut short`);
     const made = material(input, now);
-    const sized = input.transcripts.length + input.screenshots.length > 0 ? fit(made.text, left, model) : null;
+    const sized = input.transcripts.length + input.screenshots.length > 0 ? fit(made.text, left, summaryModel) : null;
     const requestId = sized && (await convex.beginRequest({ day: today, reservedUsd: sized.reservedUsd, transcriptIds: [], screenshotIds: [] }));
     if (!requestId) {
       await capPaused(today, `what is left of the daily cap of $${cap.capUsd} can't cover a summary`);
       return no("What is left of today's cap can't cover a summary");
     }
-    const outcome = await exchange(anthropic, { requestId, maxTokens: sized.maxTokens, content: made.text, sources: made.sources, job: SUMMARIZE });
+    const outcome = await exchange(anthropic, { requestId, maxTokens: sized.maxTokens, content: made.text, sources: made.sources, job: SUMMARIZE, callModel: summaryModel });
     if (outcome.status === "failed") return no("Claude couldn't be reached; no summary was made");
     if (outcome.value === null) return no("Claude's answer wasn't a summary; it was paid for, and nothing was saved");
     const { items, unsourced } = outcome.value;

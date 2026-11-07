@@ -1,7 +1,9 @@
 // WHAT: types for the Day Recorder assistant, so tests/ can import it.
 
-export const MODEL: string;
-export const PRICES: Record<string, { input: number; output: number; cacheRead: number }>;
+export const BATCH_MODEL: string;
+export const SUMMARY_MODEL: string;
+type Rates = { input: number; output: number; cacheRead: number };
+export const PRICES: Record<string, Rates & { long?: Rates & { over: number } }>;
 
 export type Usage = {
   input_tokens: number;
@@ -137,4 +139,5 @@ export function createDayAssistant(options: {
   /** A screenshot as JPEG bytes: screenshotJpeg with the media root's work folder. */
   toJpeg: (file: string) => Promise<Buffer>;
   model?: string;
+  summaryModel?: string;
 }): DayAssistant;

@@ -1755,8 +1755,8 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     it gives the renderer no file access.
   - **The summary is made only when asked.** It is one call, reserved against the cap like a
     batch, with its own instructions and output format. Each line keeps the segment or
-    screenshot it names, and nothing is proposed or marked read. It uses the batch model
-    until James answers the open question on a model per job.
+    screenshot it names, and nothing is proposed or marked read. It runs on its own model,
+    `SUMMARY_MODEL` (Opus; Deviations, 2026-11-07).
   - **A screen's image goes to Claude only from that screen's own button** (spec R9). It is
     not offered for a screenshot whose image was deleted after 30 days.
   - **exchange() takes the job** (instructions, format, how the reply is read), so batches,
@@ -1800,3 +1800,25 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
     $10 leaves room for both at the end of a busy day.
   - **Re-check:** compare the first full day's `assistantUsage` row with this estimate. If
     batches move to Haiku (the open model-per-job question), the cap can drop.
+- **2026-11-07, a model per job: Haiku for batches, Opus for the summary (James).** The spec
+  proposed Sonnet for the summary. James chose Opus, because the summary runs once a day and
+  is the job where quality shows most. `MODEL` is now two constants in
+  `electron/dayAssistant.mjs`: `BATCH_MODEL` (`claude-haiku-5-5`) and `SUMMARY_MODEL`
+  (`claude-opus-5-5`). `createDayAssistant` takes both, and each call is reserved and priced
+  at the model it uses.
+  - **Images go with the batches.** An image send proposes actions with the batch's
+    schema, so it runs on `BATCH_MODEL`. Haiku is cheap enough here, and Undo still covers
+    whatever it proposes.
+  - **Haiku has a long-prompt price.** A Haiku 5.5 request whose prompt is over 100,000 tokens
+    (input, cache writes and cache reads together) is billed 5x on every rate, output
+    included (platform pricing page, read 2026-11-07). A full batch of 200 rows can pass the
+    line. `PRICES` carries the long tier, `costOf` applies it from the usage, and `fitBytes`
+    reserves at it whenever the prompt counted in bytes is over the line. Bytes are never
+    fewer than tokens, so a call that crosses the line is never under-reserved.
+  - **Cost estimate (no measurement yet):** a 20k-token batch on Haiku is about $0.003, or
+    about $0.10 for 32 batches. The day's spend is now mostly the summary: a whole day read
+    once on Opus is roughly $2-3. The $10 cap stays until the first full day's
+    `assistantUsage` row shows real numbers.
+  - **Tests:** two scan tests used a $0.05 cap sized for Opus prices. They now scale it by
+    the Haiku/Opus price ratio (`TIGHT_CAP_USD`), so a long row stays just as far out of
+    reach as it was.
