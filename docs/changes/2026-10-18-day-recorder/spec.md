@@ -342,10 +342,14 @@ These seed plan.md's Proof section.
 - ~~**Model per job.**~~ **Answered by James (2026-11-07): Haiku (`claude-haiku-5-5`) for
   batches and images, Opus (`claude-opus-5-5`) for the end-of-day summary.** The proposal was
   Sonnet for the summary. See plan.md, Deviations, 2026-11-07.
-- **Denylist match on window title or browser profile** in addition to bundle ID.
-  ScreenCaptureKit can filter windows, but a browser profile isn't a bundle ID. *Answered
-  by:* James. v1 proposes bundle ID only.
-- **Hours.** Should capture also stop outside set hours? *Answered by:* James.
+- ~~**Denylist match on window title or browser profile.**~~ **Answered by James (2026-11-07):
+  bundle ID only.** A title check runs after the frame is taken, so content can show before
+  the title changes, and audio is filtered per process, so titles cannot drop it. Chrome
+  profiles share one bundle ID and process. For private browsing, use a separate browser app
+  and denylist its bundle ID. R4 is unchanged.
+- ~~**Hours.**~~ **Answered by James (2026-11-07): auto-stop, never auto-start.** An optional
+  end time in Settings. If the recorder is still on then, it turns off and says so. Starting
+  is always James's own action. Not built yet (plan.md, Deviations, 2026-11-07).
 - **Call-app list for F3.** Proposed: FaceTime, Zoom, Teams, Slack, plus any browser
   holding the mic. *Spike (Q4):* Zoom is detected (`us.zoom.xos`, start and end). A Chromium
   app is detected through its `<id>.helper` process. FaceTime, Teams and Slack are not yet
