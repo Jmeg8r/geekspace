@@ -343,9 +343,11 @@ These seed plan.md's Proof section.
   batches and images, Opus (`claude-opus-5-5`) for the end-of-day summary.** The proposal was
   Sonnet for the summary. See plan.md, Deviations, 2026-11-07.
 - ~~**Denylist match on window title or browser profile.**~~ **Answered by James (2026-11-07):
-  bundle ID only.** A title check runs after the frame is taken, so content can show before
-  the title changes, and audio is filtered per process, so titles cannot drop it. Chrome
-  profiles share one bundle ID and process. For private browsing, use a separate browser app
+  bundle ID only.** The capture filter could drop windows by title before a frame is taken
+  (`Screen.swift` builds it from the current window list), but a title is read when the
+  windows are listed and can change before capture (a tab switch), pages set their own
+  titles, and excluding a window does not exclude its audio. Chrome profiles share one
+  bundle ID and process. For private browsing, use a separate browser app
   and denylist its bundle ID. R4 is unchanged.
 - ~~**Hours.**~~ **Answered by James (2026-11-07): auto-stop, never auto-start.** An optional
   end time in Settings. If the recorder is still on then, it turns off and says so. Starting
