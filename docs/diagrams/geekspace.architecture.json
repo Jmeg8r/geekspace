@@ -285,9 +285,9 @@
       "dot": "rose",
       "title": "The calendar schedules itself",
       "items": [
-        "convex/lib/scheduler.ts is a PURE engine, 21 unit tests, no UI coupling",
+        "convex/lib/scheduler.ts is a PURE engine, unit-tested in tests/scheduler*.test.ts, no UI coupling",
         "Schedule-affecting mutations call runReflow; it rewrites unlocked future blocks only",
-        "NOT every mutation on those tables reflows — setMicDevice deliberately skips it, and removeProperty/updateProperty/completeSprint currently do not"
+        "NOT every mutation on those tables reflows — setMicDevice deliberately skips it, and completeSprint currently does not; databases.updateProperty (deleting an option) and removeProperty reflow only when they touch a task-source database"
       ]
     }
   ]

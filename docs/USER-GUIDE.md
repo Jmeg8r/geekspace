@@ -145,7 +145,7 @@ Quota: 50 queries/day anonymous; set `ASTGL_API_KEY=<key>` in `.env.local` for 5
 
 **Agent** in the sidebar opens a chat with ARCHITECT — Geekspace's embedded workspace expert. It designs, creates, and configures your workspace on request ("set up a database for tracking podcast guests", "create a project for next week's article with a dependency chain") through the `geekspace-mcp` server. Its changes appear live, it can read your schedule and warnings, and it **cannot delete anything** by design.
 
-It runs **entirely on this Mac** — the Claude Agent SDK in Geekspace's main process, authenticated by your existing Claude Code sign-in (no API key, no external service). The only setup is being signed in to Claude Code on this machine (run `claude` once in a terminal if the panel says "Claude sign-in needed"). The agent needs the local Convex backend, which the app starts automatically (or `npm run dev` when developing from source).
+It runs in the app's main process and has two lanes sharing the same workspace tools, picked with the **Local / Claude** toggle in the panel header. **Local** (the default) runs free on your own Ollama: it needs `ollama serve` running (at `OLLAMA_URL`, default `http://127.0.0.1:11434`) with at least one usable chat model pulled. It prefers `qwen3-coder`, then `gpt-oss`, `qwen3`, `llama3.3`, `mistral`; set `GEEKSPACE_LOCAL_MODEL` in `.env.local` to pin one. **Claude** uses the Claude Agent SDK, authenticated by your existing Claude Code sign-in (no API key), but it bills the Agent SDK credit pool, so save it for complex design work; run `claude` once in a terminal if the panel says "Claude sign-in needed". If Ollama is unreachable the panel switches to the Claude lane when that is available. The agent needs the local Convex backend, which the app starts automatically (or `npm run dev` when developing from source).
 
 Because the workspace is exposed as a standard MCP server, you can also point Claude Code or Claude Desktop at it for the identical tools: `claude mcp add geekspace --env CONVEX_URL=http://127.0.0.1:3210 -- node ~/Projects/geekspace/mcp/index.mjs`.
 
@@ -183,7 +183,8 @@ right glyph for your platform.
 | Mail/Calendar "timed out" | Three causes, same symptom: ① the macOS permission dialog is blocking — it can hide **behind windows**; find it, approve once. ② The app is **unresponsive** — quit and reopen Mail/Calendar. ③ A very large mailbox/calendar — just Refresh and wait. |
 | "Calendar.app isn't running" | Open Calendar (sync needs it alive), or hit Sync now after opening it |
 | A task never gets scheduled | It needs both an **estimate** and ideally a due date; check the needs-attention badge |
-| Agent panel says "offline" | Start the ClaudeClaw daemon; "token missing" → add `CLAUDECLAW_TOKEN` to `.env.local` and restart |
+| Agent panel says "Ollama unavailable" / "Ollama isn't reachable" | The default Local lane can't reach Ollama: start `ollama serve`, or switch the panel to the Claude lane. If it says Ollama has no usable models, pull one (e.g. `ollama pull qwen3-coder:30b`) |
+| Agent panel says "Claude sign-in needed" (Claude lane only) | Run `claude` once in a terminal to sign in to Claude Code on this machine, then reopen the panel |
 | Knowledge search errors | The mcp-astgl-knowledge build may be stale (`npm run build` there) or the daily quota is spent |
 | Blocks an hour off after a DST switch | Any reflow self-corrects (open the app / hit Reflow) |
 | Meeting stuck in "Transcribing" after a crash | Open the meeting → **Re-run AI** (audio is always saved first) |
