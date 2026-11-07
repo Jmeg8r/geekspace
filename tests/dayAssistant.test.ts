@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MODEL,
+  BATCH_MODEL,
   PRICES,
+  SUMMARY_MODEL,
   STOP_GRACE_MS,
   assistantClient,
   costOf,
@@ -46,7 +47,7 @@ type Reply = {
 const reply = (actions: object[], usage: Reply["usage"] = { input_tokens: 2_000, output_tokens: 300 }): Reply => ({
   content: [{ type: "text", text: JSON.stringify({ actions }) }],
   stop_reason: "end_turn",
-  model: MODEL,
+  model: BATCH_MODEL,
   usage,
 });
 
@@ -63,9 +64,12 @@ const DAY_RECORD: DayRecord = {
 const summaryReply = (items: object[]): Reply => ({
   content: [{ type: "text", text: JSON.stringify({ items }) }],
   stop_reason: "end_turn",
-  model: MODEL,
+  model: SUMMARY_MODEL,
   usage: { input_tokens: 3_000, output_tokens: 400 },
 });
+// The $0.05 cap the scan tests were sized for on Opus, scaled to the batch model's prices (the
+// same ratio for input and output), so a long row is just as far out of reach.
+const TIGHT_CAP_USD = 0.05 * (PRICES[BATCH_MODEL].input / PRICES[SUMMARY_MODEL].input);
 const FROM = Date.now() - 86_400_000;
 const TO = Date.now();
 
@@ -179,10 +183,23 @@ function harness(
 
 describe("costOf", () => {
   it("prices input, output and cache tokens by the model that answered", () => {
-    expect(PRICES[MODEL]).toBeDefined();
-    const cost = costOf({ input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }, MODEL);
-    const p = PRICES[MODEL];
+    expect(PRICES[SUMMARY_MODEL]).toBeDefined();
+    const cost = costOf({ input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }, SUMMARY_MODEL);
+    const p = PRICES[SUMMARY_MODEL];
     expect(cost).toBeCloseTo(p.input + p.output + p.cacheRead + p.input * 1.25, 6);
+  });
+
+  // Haiku 5.5 bills a whole request at its long prices once the prompt is over 100,000 tokens,
+  // counting cache writes and reads; priced short, a big batch would be under-counted 5x.
+  it("prices a Haiku prompt over its long-prompt line at the long rates, output included", () => {
+    const p = PRICES[BATCH_MODEL];
+    const long = p.long ?? expect.unreachable("Haiku 5.5 has long-prompt prices");
+    const at = (usage: Parameters<typeof costOf>[0]) => costOf(usage, BATCH_MODEL);
+    expect(at({ input_tokens: long.over, output_tokens: 1_000_000 })).toBeCloseTo((long.over * p.input + 1_000_000 * p.output) / 1_000_000, 9);
+    expect(at({ input_tokens: long.over + 1, output_tokens: 1_000_000 })).toBeCloseTo(((long.over + 1) * long.input + 1_000_000 * long.output) / 1_000_000, 9);
+    // Cached tokens count toward the line too.
+    const cached = at({ input_tokens: 10, output_tokens: 0, cache_read_input_tokens: long.over });
+    expect(cached).toBeCloseTo((10 * long.input + long.over * long.cacheRead) / 1_000_000, 9);
   });
 
   it("prices an unknown model at the dearest known rate, so the cap is never under-counted", () => {
@@ -205,7 +222,7 @@ describe("createDayAssistant.runBatch", () => {
         outputTokens: 300,
         cacheWriteTokens: 0,
         cacheReadTokens: 0,
-        costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, MODEL),
+        costUsd: costOf({ input_tokens: 2_000, output_tokens: 300 }, BATCH_MODEL),
         proposals: [{ type: "createTask", title: "Send the deck to Dana", estimateMin: 30, sourceSegmentId: "seg1" }],
       },
     ]);
@@ -247,8 +264,27 @@ describe("createDayAssistant.runBatch", () => {
     expect(h.begun).toHaveLength(1);
     expect(h.begun[0].reservedUsd).toBeLessThanOrEqual(0.3 + 1e-9);
     // Priced at the model asked for: with no fallback, it is the one that answers.
-    const out = PRICES[MODEL].output / 1_000_000;
+    const out = PRICES[BATCH_MODEL].output / 1_000_000;
     expect(h.requests[0].max_tokens * out).toBeLessThan(h.begun[0].reservedUsd + 1e-9);
+  });
+
+  it("reserves a batch that may cross Haiku's long-prompt line at the long prices", async () => {
+    const long = PRICES[BATCH_MODEL].long ?? expect.unreachable("Haiku 5.5 has long-prompt prices");
+    const chars = 8_000;
+    const transcripts = Array.from({ length: 20 }, (_, i) => ({
+      _id: `tr${i}`,
+      segmentId: `seg${i}`,
+      start: Date.now() - 600_000,
+      end: Date.now() - 300_000,
+      text: "SYNTHETIC ".repeat(chars / 10),
+    }));
+    const h = harness({ input: { transcripts, screenshots: [] } });
+    await h.assistant.runBatch();
+    expect(h.requests[0].model).toBe(BATCH_MODEL);
+    const promptBytes = transcripts.length * chars;
+    expect(promptBytes).toBeGreaterThan(long.over);
+    expect(h.begun[0].reservedUsd).toBeGreaterThan((promptBytes * long.input * 1.25) / 1_000_000);
+    expect(h.requests[0].max_tokens * (long.output / 1_000_000)).toBeLessThan(h.begun[0].reservedUsd + 1e-9);
   });
 
   it("[P1] makes no call when what is left can't cover one, and says so", async () => {
@@ -287,7 +323,7 @@ describe("createDayAssistant.runBatch", () => {
   });
 
   it("[P1] a reply that isn't valid structured output is still paid for and settled, with no proposals", async () => {
-    const h = harness({ reply: { content: [{ type: "text", text: "not json" }], stop_reason: "end_turn", model: MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
+    const h = harness({ reply: { content: [{ type: "text", text: "not json" }], stop_reason: "end_turn", model: BATCH_MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
     await h.assistant.runBatch();
     expect(h.settled).toHaveLength(1);
     expect(h.settled[0].costUsd).toBeGreaterThan(0);
@@ -295,7 +331,7 @@ describe("createDayAssistant.runBatch", () => {
   });
 
   it("a refusal is settled too, with nothing applied", async () => {
-    const h = harness({ reply: { content: [], stop_reason: "refusal", model: MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
+    const h = harness({ reply: { content: [], stop_reason: "refusal", model: BATCH_MODEL, usage: { input_tokens: 100, output_tokens: 5 } } });
     await h.assistant.runBatch();
     expect(h.settled[0].proposals).toEqual([]);
   });
@@ -380,7 +416,7 @@ describe("createDayAssistant.runBatch", () => {
     const h = harness();
     await h.assistant.runBatch();
     expect(h.requests[0]).toMatchObject({
-      model: MODEL,
+      model: BATCH_MODEL,
       output_config: { effort: expect.any(String), format: { type: "json_schema", schema: expect.anything() } },
       max_tokens: expect.any(Number),
     });
@@ -481,7 +517,7 @@ describe("createDayAssistant.runBatch, round 4", () => {
   it("[P1] reads past a page of rows that can't fit, to one that can", async () => {
     const huge = Array.from({ length: 200 }, (_, i) => ({ _id: `big${i}`, takenAt: Date.now() - 900_000 + i, ocrText: "中".repeat(10_000) }));
     const h = harness({
-      cap: { capUsd: 0.05, spentUsd: 0, reached: false },
+      cap: { capUsd: TIGHT_CAP_USD, spentUsd: 0, reached: false },
       pages: [
         { transcripts: [], screenshots: huge, transcriptsDone: true, screenshotsDone: false, screenshotAfter: { at: huge[199].takenAt, ids: ["big199"] } },
         { transcripts: [], screenshots: [{ _id: "shot201", takenAt: Date.now() - 100_000, ocrText: "SYNTHETIC Send deck" }], transcriptsDone: true, screenshotsDone: true },
@@ -511,7 +547,7 @@ describe("createDayAssistant.runBatch, round 5", () => {
       ...Array.from({ length: 10 }, (_, p) => fullPage(p)),
       { transcripts: [], screenshots: [{ _id: "late", takenAt: 5_000, ocrText: "SYNTHETIC Send deck" }], transcriptsDone: true, screenshotsDone: true },
     ];
-    const h = harness({ cap: { capUsd: 0.05, spentUsd: 0, reached: false }, pages });
+    const h = harness({ cap: { capUsd: TIGHT_CAP_USD, spentUsd: 0, reached: false }, pages });
     await h.assistant.runBatch();
     expect(h.requests).toEqual([]);
     expect(h.unreadArgs).toHaveLength(10);
@@ -707,7 +743,7 @@ describe("sendImage", () => {
     const h = harness({ reply: reply([]) });
     await h.assistant.sendImage(logImageSent(h), "shot1");
     // At least the image tokens' worth, priced as cache writes (spec R8).
-    expect(h.begun[0].reservedUsd).toBeGreaterThan((5_000 * PRICES[MODEL].input * 1.25) / 1_000_000);
+    expect(h.begun[0].reservedUsd).toBeGreaterThan((5_000 * PRICES[BATCH_MODEL].input * 1.25) / 1_000_000);
     expect(h.begun[0]).toMatchObject({ transcriptIds: [], screenshotIds: [] });
 
     const full = harness({ cap: { capUsd: 1, spentUsd: 1, reached: true } });
@@ -798,6 +834,9 @@ describe("summarize", () => {
     expect(await h.assistant.summarize("2026-11-02", FROM, TO)).toEqual({ ok: true, items: 2, unsourced: 0, leftOut: 0, truncated: 0 });
     const sent = h.requests[0];
     expect(sent.system[0].text).toMatch(/summary/i);
+    // A model per job: the summary runs on its own model, not the batches' (James, 2026-11-07).
+    expect(sent.model).toBe(SUMMARY_MODEL);
+    expect(SUMMARY_MODEL).not.toBe(BATCH_MODEL);
     expect(sent.messages[0].content).toEqual(expect.stringContaining("SYNTHETIC: I'll send the deck by Thursday"));
     expect(h.summaries).toEqual([
       {
