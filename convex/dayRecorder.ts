@@ -15,6 +15,7 @@ import {
   assertMediaPath,
   assertShotSec,
   assertSpan,
+  assertStopAtMin,
   assertText,
   assertTime,
   retentionCutoff,
@@ -44,6 +45,8 @@ export const getSettings = query({
       dailyCapUsd: s?.assistantDailyCapUsd ?? null,
       batchMin: s?.assistantBatchMin ?? DEFAULT_BATCH_MIN,
       shotSec: s?.dayRecorderShotSec ?? DEFAULT_SHOT_SEC,
+      // No end time means nothing stops capture on a schedule (plan PR 7).
+      stopAtMin: s?.dayRecorderStopAtMin ?? null,
     };
   },
 });
@@ -58,12 +61,15 @@ export const updateSettings = mutation({
     dailyCapUsd: v.optional(v.number()),
     batchMin: v.optional(v.number()),
     shotSec: v.optional(v.number()),
+    // null clears the end time.
+    stopAtMin: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
     if (args.denylist) args.denylist.forEach(assertBundleId);
     if (args.dailyCapUsd !== undefined) assertDailyCap(args.dailyCapUsd);
     if (args.batchMin !== undefined) assertBatchMin(args.batchMin);
     if (args.shotSec !== undefined) assertShotSec(args.shotSec);
+    if (args.stopAtMin !== undefined && args.stopAtMin !== null) assertStopAtMin(args.stopAtMin);
     const patch = {
       ...(args.enabled !== undefined && { dayRecorderEnabled: args.enabled }),
       ...(args.paused !== undefined && { dayRecorderPaused: args.paused }),
@@ -71,6 +77,8 @@ export const updateSettings = mutation({
       ...(args.dailyCapUsd !== undefined && { assistantDailyCapUsd: args.dailyCapUsd }),
       ...(args.batchMin !== undefined && { assistantBatchMin: args.batchMin }),
       ...(args.shotSec !== undefined && { dayRecorderShotSec: args.shotSec }),
+      // Patching undefined removes the field: null from the page clears the end time.
+      ...(args.stopAtMin !== undefined && { dayRecorderStopAtMin: args.stopAtMin ?? undefined }),
     };
     const existing = await settingsDoc(ctx);
     if (existing) await ctx.db.patch(existing._id, patch);
@@ -113,7 +121,8 @@ export const logEvent = mutation({
       v.literal("noticeDeclined"),
       v.literal("imageSent"),
       v.literal("capError"),
-      v.literal("capPaused")
+      v.literal("capPaused"),
+      v.literal("autoStopped")
     ),
     detail: v.optional(v.string()),
     screenshotId: v.optional(v.id("screenshots")),

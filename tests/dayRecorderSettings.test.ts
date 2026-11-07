@@ -5,6 +5,8 @@ import {
   addBundleId,
   recorderSupported,
   shotSecError,
+  stopAtFromInput,
+  stopAtToInput,
 } from "../src/lib/dayRecorderSettings";
 
 // WHAT: the Day Recorder Settings section's rules (plan PR 3e-2). WHY tested: the denylist
@@ -69,5 +71,27 @@ describe("recorderSupported", () => {
     expect(recorderSupported("Win32", { status: "off" })).toBe(false);
     expect(recorderSupported("MacIntel", { status: "unsupported" })).toBe(false);
     expect(recorderSupported("MacIntel", null)).toBe(true);
+  });
+});
+
+// Plan PR 7: the end time is a time field on the page and minutes after midnight on the server.
+describe("end time", () => {
+  it("reads a time field as minutes after midnight, and an empty field as none", () => {
+    expect(stopAtFromInput("18:00")).toEqual({ ok: true, value: 1080 });
+    expect(stopAtFromInput("00:00")).toEqual({ ok: true, value: 0 });
+    expect(stopAtFromInput("23:59")).toEqual({ ok: true, value: 1439 });
+    expect(stopAtFromInput("")).toEqual({ ok: true, value: null });
+  });
+
+  it("refuses what isn't a time", () => {
+    expect(stopAtFromInput("6pm")).toEqual({ ok: false, error: "Enter a time like 18:00." });
+    expect(stopAtFromInput("24:00").ok).toBe(false);
+    expect(stopAtFromInput("18:60").ok).toBe(false);
+  });
+
+  it("writes minutes back as a time field's value", () => {
+    expect(stopAtToInput(1080)).toBe("18:00");
+    expect(stopAtToInput(5)).toBe("00:05");
+    expect(stopAtToInput(null)).toBe("");
   });
 });

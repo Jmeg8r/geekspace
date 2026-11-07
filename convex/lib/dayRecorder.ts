@@ -103,6 +103,15 @@ export function assertShotSec(value: number): void {
   }
 }
 
+// The end time is minutes after local midnight: 00:00 through 23:59.
+const MINUTES_PER_DAY = 1440;
+
+export function assertStopAtMin(value: number): void {
+  if (!Number.isInteger(value) || value < 0 || value >= MINUTES_PER_DAY) {
+    throw new Error(`End time must be a whole minute from 0 to ${MINUTES_PER_DAY - 1} after midnight, got ${value}`);
+  }
+}
+
 export function assertBatchMin(value: number): void {
   if (!Number.isInteger(value) || value < MIN_BATCH_MIN || value > MAX_BATCH_MIN) {
     throw new Error(`Assistant batch interval must be ${MIN_BATCH_MIN}–${MAX_BATCH_MIN} minutes, got ${value}`);

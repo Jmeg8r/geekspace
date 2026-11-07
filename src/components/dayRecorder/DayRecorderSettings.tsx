@@ -9,6 +9,8 @@ import {
   addBundleId,
   recorderSupported,
   shotSecError,
+  stopAtFromInput,
+  stopAtToInput,
 } from "../../lib/dayRecorderSettings";
 import { isMacLike } from "../../lib/utils";
 import { RecorderDot } from "./RecorderIndicator";
@@ -16,7 +18,8 @@ import { useRecorderStatus } from "./useRecorderStatus";
 
 // WHAT: the Day Recorder's Settings section (plan PR 3e-2): the switch, the current state
 // (which includes the FileVault and Time Machine gates' own copy), the denylist editor and the
-// screenshot interval. Turning it on first shows what macOS is about to ask.
+// screenshot interval and the end time (plan PR 7). Turning it on first shows what macOS is
+// about to ask.
 // WHY on/off goes through the bridge: it is the renderer's control path (3d-1), which also
 // clears a saved pause; the denylist and interval are plain settings, saved directly.
 
@@ -58,6 +61,10 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
 
   function saveShotSec(shotSec: number) {
     update({ shotSec }).then(() => setError(null), showError);
+  }
+
+  function saveStopAt(stopAtMin: number | null) {
+    update({ stopAtMin }).then(() => setError(null), showError);
   }
 
   return (
@@ -115,6 +122,7 @@ export function DayRecorderSettings({ section: Section }: { section: SectionComp
         onRemove={(id) => editDenylist(removeFromDenylist({ id }))}
       />
       <ShotInterval value={settings.shotSec} onSave={saveShotSec} />
+      <EndTime value={settings.stopAtMin} onSave={saveStopAt} />
     </Section>
   );
 }
@@ -241,6 +249,65 @@ function ShotInterval({ value, onSave }: { value: number; onSave: (v: number) =>
           <span className="w-8 text-[12px] text-ink">sec</span>
         </span>
       </div>
+      {error && (
+        <p id={errorId} role="alert" className="pt-1 text-[12px] text-[color:var(--recorder-error)]">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The optional end time (plan PR 7): capture turns off then, or at midnight after a late start. */
+function EndTime({ value, onSave }: { value: number | null; onSave: (v: number | null) => void }) {
+  const [draft, setDraft] = useState(stopAtToInput(value));
+  const [error, setError] = useState<string | null>(null);
+  const inputId = useId();
+  const hintId = useId();
+  const errorId = useId();
+  useEffect(() => setDraft(stopAtToInput(value)), [value]);
+
+  function commit(text: string) {
+    const r = stopAtFromInput(text);
+    setError(r.ok ? null : r.error);
+    if (r.ok && r.value !== value) onSave(r.value);
+  }
+
+  return (
+    <div className="py-1 text-[13px]">
+      <div className="flex items-center justify-between">
+        <label htmlFor={inputId} className="text-ink">
+          Stop recording at
+        </label>
+        <span className="flex items-center gap-1.5">
+          <input
+            id={inputId}
+            type="time"
+            value={draft}
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? `${hintId} ${errorId}` : hintId}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={(e) => commit(e.target.value)}
+            className={`${FIELD} w-28`}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setDraft("");
+              commit("");
+            }}
+            disabled={value === null}
+            className={BUTTON}
+          >
+            None
+          </button>
+        </span>
+      </div>
+      <p id={hintId} className="pt-1 text-[12px] text-ink">
+        {value === null
+          ? "No end time: recording runs until you turn it off."
+          : "Recording turns off at this time. Turn it on later and it runs until midnight. It never turns itself on."}
+      </p>
       {error && (
         <p id={errorId} role="alert" className="pt-1 text-[12px] text-[color:var(--recorder-error)]">
           {error}

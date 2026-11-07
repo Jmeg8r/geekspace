@@ -191,7 +191,26 @@ describe("dayRecorder settings", () => {
       dailyCapUsd: null,
       batchMin: 15,
       shotSec: 30,
+      stopAtMin: null,
     });
+  });
+
+  // Plan PR 7: an optional end time, in minutes after local midnight; null clears it.
+  it("saves an end time and clears it with null", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.updateSettings, { stopAtMin: 18 * 60 });
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ stopAtMin: 1080 });
+    await t.mutation(api.dayRecorder.updateSettings, { enabled: true });
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ stopAtMin: 1080 });
+    await t.mutation(api.dayRecorder.updateSettings, { stopAtMin: null });
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ stopAtMin: null });
+  });
+
+  it("logs an autoStopped event", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.logEvent, { at: Date.now(), kind: "autoStopped", detail: "end time 18:00" });
+    const events = await t.run((ctx) => ctx.db.query("recorderEvents").collect());
+    expect(events.map((e) => e.kind)).toEqual(["autoStopped"]);
   });
 
   it("saves valid values", async () => {
@@ -222,6 +241,9 @@ describe("dayRecorder settings", () => {
     [{ dailyCapUsd: -1 }, /cap/i],
     [{ shotSec: 1 }, /shot/i],
     [{ batchMin: 0 }, /batch/i],
+    [{ stopAtMin: 1440 }, /end time/i],
+    [{ stopAtMin: -1 }, /end time/i],
+    [{ stopAtMin: 600.5 }, /end time/i],
   ])("rejects %j", async (patch, message) => {
     const t = convexTest(schema, modules);
     await expect(t.mutation(api.dayRecorder.updateSettings, patch)).rejects.toThrow(message);

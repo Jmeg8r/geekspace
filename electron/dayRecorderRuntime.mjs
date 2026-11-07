@@ -7,7 +7,7 @@
 // way whether the change came from the renderer's controls (dayRecorderIpc.mjs) or not.
 // The mic runs in a hidden window of its own while the recorder is recording (plan PR 3d-2).
 // The menu bar shows the status view while the recorder is on, and ⌥⌘R pauses (plan PR 3e-1).
-import { app, globalShortcut, ipcMain, Menu, nativeImage, systemPreferences, Tray } from "electron";
+import { app, globalShortcut, ipcMain, Menu, nativeImage, Notification, powerMonitor, systemPreferences, Tray } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { ConvexClient } from "convex/browser";
@@ -22,6 +22,7 @@ import { transcribeFile } from "./meetingProcessor.mjs";
 import { createTranscriptionQueue } from "./transcriptionQueue.mjs";
 import { createLinearDrafts } from "./linearDrafts.mjs";
 import { SUMMARY_PAGE_ROWS, assistantClient, createDayAssistant, screenshotJpeg, sweepImageWork } from "./dayAssistant.mjs";
+import { createAutoStop } from "./dayRecorderAutoStop.mjs";
 import { createDayRecorderControls } from "./dayRecorderIpc.mjs";
 import { SEGMENT_SEC, createDayRecorderService } from "./dayRecorderService.mjs";
 import { createStatusView, startRecorderIndicator, trayImage } from "./dayRecorderTray.mjs";
@@ -33,6 +34,8 @@ import { createMicSegmentWriter } from "./micSegments.mjs";
 const GEEKSPACE_DIR = path.join(app.getPath("appData"), "Geekspace");
 // MediaRecorder's timeslice: how often a chunk crosses to the main process.
 const MIC_TIMESLICE_MS = 1000;
+// How often auto-stop looks at the clock; a wake from sleep also checks at once.
+const AUTO_STOP_CHECK_MS = 60_000;
 const REFUSED = { ok: false, error: "Refused: the request did not come from the mic capture window" };
 
 
@@ -277,12 +280,36 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     if (every > 0) batchTimer = setInterval(() => void assistant.runBatch(), every);
   };
 
+  // Auto-stop (plan PR 7): its only action turns the recorder off, the same write the switch
+  // makes; the schedule never turns it on.
+  const autoStop = createAutoStop({
+    now: Date.now,
+    stop: async (due) => {
+      await rows(api.dayRecorder.updateSettings)({ enabled: false });
+      const when = due.reason === "midnight" ? "at midnight" : `at ${new Date(due.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}, your end time`;
+      log(`auto-stop: recorder turned off (${due.reason})`);
+      // The switch is already off: a failed event or notice is logged, and the stop stands.
+      await logEvent({ kind: "autoStopped", detail: due.reason }).catch((err) =>
+        log(`could not record an autoStopped event (${err?.name ?? "Error"})`)
+      );
+      try {
+        if (Notification.isSupported()) new Notification({ title: "Day Recorder stopped", body: `Recording stopped ${when}.` }).show();
+      } catch (err) {
+        log(`could not show the auto-stop notice (${err?.name ?? "Error"})`);
+      }
+    },
+  });
+  const checkAutoStop = () => void autoStop.check().catch((err) => log(`auto-stop: the recorder could not be turned off (${err?.name ?? "Error"}); trying again next check`));
+  const autoStopTimer = setInterval(checkAutoStop, AUTO_STOP_CHECK_MS);
+  powerMonitor.on("resume", checkAutoStop);
+
   const unsubscribe = client.onUpdate(
     api.dayRecorder.getSettings,
     {},
     (s) => {
       void service.apply({ enabled: s.enabled, paused: s.paused, denylist: s.denylist, shotSec: s.shotSec });
       scheduleAssistant(s.enabled, s.batchMin);
+      autoStop.update({ enabled: s.enabled, stopAtMin: s.stopAtMin });
     },
     (err) => log(`could not read Day Recorder settings: ${err?.message ?? err}`)
   );
@@ -336,6 +363,8 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     isCaptureWindow: (win) => mic.isCaptureWindow(win),
     async stop() {
       clearInterval(batchTimer);
+      clearInterval(autoStopTimer);
+      powerMonitor.off("resume", checkAutoStop);
       unsubscribe();
       unsubscribePending();
       // Capture stops first and now; the segment being transcribed finishes meanwhile, and the
