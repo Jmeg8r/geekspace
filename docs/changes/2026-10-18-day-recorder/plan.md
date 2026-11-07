@@ -1822,3 +1822,17 @@ Chromium/Electron apps, and James re-planned system audio onto a CoreAudio tap (
   - **Tests:** two scan tests used a $0.05 cap sized for Opus prices. They now scale it by
     the Haiku/Opus price ratio (`TIGHT_CAP_USD`), so a long row stays just as far out of
     reach as it was.
+- **2026-11-07, the denylist stays on bundle IDs, and capture gets an auto-stop time
+  (James).** Both were open questions in the spec.
+  - **Denylist: bundle ID only.** Matching window titles or browser profiles was rejected.
+    The capture filter could drop windows by title before capture, but
+    a title can change between listing the windows and taking the frame (a tab switch),
+    pages set their own titles, and a window exclusion does not exclude audio. Chrome
+    profiles also share one bundle ID and one process. Each of these would weaken R4's
+    zero-frames guarantee without anyone noticing. For private browsing, use a separate
+    browser app and denylist its bundle ID. No code changes.
+  - **Hours: auto-stop, never auto-start.** This adds an optional end time to Day Recorder
+    settings. At that time a recorder still on turns itself off, logs an event, and shows a
+    notice. The schedule never turns capture on. Not built yet: it needs a settings field
+    validated in `convex/dayRecorder.ts`, a timer in the main process that survives sleep
+    and wake, a Settings control, and tests.
