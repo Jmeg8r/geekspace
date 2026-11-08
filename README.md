@@ -66,7 +66,7 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - Link recordings to calendar events; tool status + model selection in Settings
 
 ### 🎥 Day Recorder (macOS only, off by default)
-- Opt-in capture of the microphone, system audio and periodic screenshots (every 30 s by default) by the native `gs-capture` helper (`native/gs-capture`, Swift), supervised from `electron/dayRecorder.mjs`; a visible indicator and tray control show whether it is really recording, with an app denylist
+- Opt-in capture of the microphone, system audio and periodic screenshots (every 30 s by default) by the native `gs-capture` helper (`native/gs-capture`, Swift), supervised from `electron/dayRecorder.mjs`; a visible indicator and tray control show whether it is really recording, with an app denylist. An optional end time turns it off at that time (and at local midnight); nothing ever turns it on automatically
 - Transcription (whisper.cpp) and screenshot OCR run locally; the capture index lives in Convex (`convex/dayRecorder.ts`) and media older than 30 days is purged
 - The day assistant (`electron/dayAssistant.mjs`) sends transcript and OCR *text* to Claude with an API key held in the macOS Keychain (via Electron `safeStorage`), turns commitments into tasks and time blocks (undoable), and only drafts anything outside Geekspace. It does not run until you set a daily spend cap; a screenshot image is sent only when you ask for that one
 - The Windows build reports the recorder as unsupported; design and spec: `docs/changes/2026-10-18-day-recorder/`
