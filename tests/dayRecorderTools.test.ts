@@ -88,7 +88,13 @@ describe("judgeSoak", () => {
 // Codex re-check of #80: the formatter alone missed two paths. The Convex client logged the
 // backend's logLines itself before the handler ran, and a backend message starting "--" was
 // taken for the script's own error. So the real script runs against a fake backend here.
-describe("day-recorder-ctl, the real script against a fake backend", () => {
+// WHY a longer timeout than vitest's 5 s: each spawn is a cold Node that imports convex/browser,
+// whose Node entry also loads the WebSocket client (ws and a native bufferutil probe). That
+// took 1.4 to 2.7 s at load average 15 and passed 5 s at load average 40. Node alone starts in
+// under 0.1 s, so the import dominates the time, and the import scales with machine load.
+const CTL_SPAWN_TIMEOUT_MS = 30_000;
+
+describe("day-recorder-ctl, the real script against a fake backend", { timeout: CTL_SPAWN_TIMEOUT_MS }, () => {
   const SECRET = "com.example.private-one";
 
   async function runCtl(args: string[], respond: (path: string) => object) {
