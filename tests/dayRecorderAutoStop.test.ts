@@ -164,7 +164,7 @@ describe("createAutoStop", () => {
     const stops: { reason: string; session: number }[] = [];
     const autoStop = createAutoStop({
       now: () => clock,
-      stop: async (due, session) => {
+      stop: async (due, { session }) => {
         stops.push({ reason: due.reason, session });
         if (stops.length === 1) await new Promise<void>((resolve) => (release = resolve));
       },
@@ -195,13 +195,13 @@ describe("createAutoStop", () => {
     expect(h.stops).toEqual([]);
   });
 
-  it("names the session it is ending", async () => {
+  it("names the session it is ending and the end time it used", async () => {
     const stop = vi.fn(async () => undefined);
     let clock = at(2026, 11, 9, 17, 59);
     const autoStop = createAutoStop({ now: () => clock, stop });
     autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 7 });
     clock += MINUTE;
     await autoStop.check();
-    expect(stop).toHaveBeenCalledWith({ at: at(2026, 11, 9, 18, 0), reason: "endTime" }, 7);
+    expect(stop).toHaveBeenCalledWith({ at: at(2026, 11, 9, 18, 0), reason: "endTime" }, { session: 7, stopAtMin: SIX_PM });
   });
 });

@@ -9,4 +9,4 @@ export type AutoStop = {
   check: () => Promise<void>;
 };
 
-export function createAutoStop(options: { now: () => number; stop: (due: StopMoment, session: number) => Promise<void> }): AutoStop;
+export function createAutoStop(options: { now: () => number; stop: (due: StopMoment, target: { session: number; stopAtMin: number }) => Promise<void> }): AutoStop;

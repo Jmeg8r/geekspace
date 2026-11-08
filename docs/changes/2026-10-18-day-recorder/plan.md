@@ -1868,3 +1868,6 @@ never auto-start.
   returns whether it did; when it did not, there is no event and no notice.
   `createAutoStop` passes the session to `stop`, treats a new session as a fresh start, and
   clears the span after a stop only when the session has not changed.
+  - **Round 2: the end time too.** A late stop could still apply an end time James had since
+    cleared or moved. `autoStop` also takes the `stopAtMin` the stop was worked out from and
+    does nothing unless the stored end time is still that value.

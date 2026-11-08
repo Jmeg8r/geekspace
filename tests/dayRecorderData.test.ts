@@ -10,6 +10,7 @@ import { api } from "../convex/_generated/api";
 
 const modules = import.meta.glob("../convex/**/*.ts");
 const DAY_MS = 86_400_000;
+const SIX_PM = 18 * 60;
 const NOW = Date.UTC(2026, 9, 18, 15);
 
 const segment = (over: Partial<{ day: string; kind: "mic" | "system" | "call"; path: string; start: number }> = {}) => {
@@ -220,14 +221,15 @@ describe("dayRecorder settings", () => {
 
   it("auto-stops the session it names and leaves a newer one running", async () => {
     const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.updateSettings, { stopAtMin: SIX_PM });
     await t.mutation(api.dayRecorder.updateSettings, { enabled: true });
     await t.mutation(api.dayRecorder.updateSettings, { enabled: false });
     await t.mutation(api.dayRecorder.updateSettings, { enabled: true });
-    expect(await t.mutation(api.dayRecorder.autoStop, { session: 1 })).toBe(false);
+    expect(await t.mutation(api.dayRecorder.autoStop, { session: 1, stopAtMin: SIX_PM })).toBe(false);
     expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ enabled: true });
-    expect(await t.mutation(api.dayRecorder.autoStop, { session: 2 })).toBe(true);
+    expect(await t.mutation(api.dayRecorder.autoStop, { session: 2, stopAtMin: SIX_PM })).toBe(true);
     expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ enabled: false });
-    expect(await t.mutation(api.dayRecorder.autoStop, { session: 2 })).toBe(false);
+    expect(await t.mutation(api.dayRecorder.autoStop, { session: 2, stopAtMin: SIX_PM })).toBe(false);
   });
 
   it("auto-stops a recorder that was on before sessions were counted", async () => {
@@ -235,14 +237,30 @@ describe("dayRecorder settings", () => {
     await t.mutation(api.dayRecorder.updateSettings, { shotSec: 30 });
     await t.run(async (ctx) => {
       const s = await ctx.db.query("settings").first();
-      if (s) await ctx.db.patch(s._id, { dayRecorderEnabled: true });
+      if (s) await ctx.db.patch(s._id, { dayRecorderEnabled: true, dayRecorderStopAtMin: SIX_PM });
     });
-    expect(await t.mutation(api.dayRecorder.autoStop, { session: 0 })).toBe(true);
+    expect(await t.mutation(api.dayRecorder.autoStop, { session: 0, stopAtMin: SIX_PM })).toBe(true);
+  });
+
+  it("leaves the recorder on when the end time was cleared or moved after the stop was worked out", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(api.dayRecorder.updateSettings, { enabled: true, stopAtMin: SIX_PM });
+    await t.mutation(api.dayRecorder.updateSettings, { stopAtMin: null });
+    expect(await t.mutation(api.dayRecorder.autoStop, { session: 1, stopAtMin: SIX_PM })).toBe(false);
+    await t.mutation(api.dayRecorder.updateSettings, { stopAtMin: 22 * 60 });
+    expect(await t.mutation(api.dayRecorder.autoStop, { session: 1, stopAtMin: SIX_PM })).toBe(false);
+    expect(await t.query(api.dayRecorder.getSettings, {})).toMatchObject({ enabled: true });
+    expect(await t.mutation(api.dayRecorder.autoStop, { session: 1, stopAtMin: 22 * 60 })).toBe(true);
+  });
+
+  it("rejects an auto-stop end time out of range", async () => {
+    const t = convexTest(schema, modules);
+    await expect(t.mutation(api.dayRecorder.autoStop, { session: 0, stopAtMin: 1440 })).rejects.toThrow(/end time/i);
   });
 
   it.each([-1, 1.5])("rejects auto-stop session %j", async (session) => {
     const t = convexTest(schema, modules);
-    await expect(t.mutation(api.dayRecorder.autoStop, { session })).rejects.toThrow(/session/i);
+    await expect(t.mutation(api.dayRecorder.autoStop, { session, stopAtMin: SIX_PM })).rejects.toThrow(/session/i);
   });
 
   it("logs an autoStopped event", async () => {

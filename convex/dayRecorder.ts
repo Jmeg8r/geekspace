@@ -93,14 +93,17 @@ export const updateSettings = mutation({
 
 // WHY not updateSettings({ enabled: false }): a stop that lands late (slow, or queued while
 // the main process was offline) would end a session James started since, which should run
-// to midnight (Codex review of PR 7). This turns off only the session it names, in one
-// transaction, and returns whether it did.
+// to midnight, or apply an end time he has since cleared or moved (Codex review of PR 7).
+// This turns off only the session it names, and only under the end time it was worked out
+// from, in one transaction, and returns whether it did.
 export const autoStop = mutation({
-  args: { session: v.number() },
-  handler: async (ctx, { session }) => {
+  args: { session: v.number(), stopAtMin: v.number() },
+  handler: async (ctx, { session, stopAtMin }) => {
     assertSession(session);
+    assertStopAtMin(stopAtMin);
     const s = await settingsDoc(ctx);
     if (!s?.dayRecorderEnabled || (s.dayRecorderSession ?? 0) !== session) return false;
+    if (s.dayRecorderStopAtMin !== stopAtMin) return false;
     await ctx.db.patch(s._id, { dayRecorderEnabled: false });
     return true;
   },
