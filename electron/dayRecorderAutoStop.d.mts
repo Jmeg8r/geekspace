@@ -5,8 +5,8 @@ export type StopMoment = { at: number; reason: "endTime" | "midnight" };
 export function stopDue(args: { stopAtMin: number | null; since: number; now: number }): StopMoment | null;
 
 export type AutoStop = {
-  update: (settings: { enabled: boolean; stopAtMin: number | null }) => void;
+  update: (settings: { enabled: boolean; stopAtMin: number | null; session: number }) => void;
   check: () => Promise<void>;
 };
 
-export function createAutoStop(options: { now: () => number; stop: (due: StopMoment) => Promise<void> }): AutoStop;
+export function createAutoStop(options: { now: () => number; stop: (due: StopMoment, session: number) => Promise<void> }): AutoStop;

@@ -253,7 +253,8 @@ never auto-start.
 - `electron/dayRecorderAutoStop.mjs`: the rule as a pure function of the end time, the last
   check and now, in local time.
 - `electron/dayRecorderRuntime.mjs`: a 60-second check and a check on `powerMonitor`
-  resume. When it fires: `enabled: false`, an `autoStopped` event and a system notification.
+  resume. When it fires: `dayRecorder.autoStop` for the running session (Deviations,
+  2026-11-07), an `autoStopped` event and a system notification.
 - `src/components/dayRecorder/DayRecorderSettings.tsx`: an end-time field with "None".
 
 **Tests:**
@@ -1855,3 +1856,15 @@ never auto-start.
   - **Tests:** two scan tests used a $0.05 cap sized for Opus prices. They now scale it by
     the Haiku/Opus price ratio (`TIGHT_CAP_USD`), so a long row stays just as far out of
     reach as it was.
+- **2026-11-07, auto-stop ends only the session it names (Codex review of PR 7).** The plan
+  had the stop write `enabled: false` through `updateSettings`. Codex found two ways a late
+  stop could end a session James started after the stop moment, one that should run to
+  midnight: the stop's mutation finishing after a restart (the in-memory span was cleared
+  for the new session), and a stop queued while the main process was offline landing after
+  a restart from a window. Settings now carry `dayRecorderSession`, counted up on each
+  off-to-on turn, and `getSettings` returns it as `session` (0 for a recorder that was on
+  before sessions were counted). The stop calls a new `dayRecorder.autoStop({ session })`,
+  which turns the recorder off only when that session is still on, in one transaction, and
+  returns whether it did; when it did not, there is no event and no notice.
+  `createAutoStop` passes the session to `stop`, treats a new session as a fresh start, and
+  clears the span after a stop only when the session has not changed.

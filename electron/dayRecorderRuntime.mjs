@@ -280,12 +280,16 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     if (every > 0) batchTimer = setInterval(() => void assistant.runBatch(), every);
   };
 
-  // Auto-stop (plan PR 7): its only action turns the recorder off, the same write the switch
-  // makes; the schedule never turns it on.
+  // Auto-stop (plan PR 7): its only action turns the recorder off; the schedule never turns
+  // it on.
   const autoStop = createAutoStop({
     now: Date.now,
-    stop: async (due) => {
-      await rows(api.dayRecorder.updateSettings)({ enabled: false });
+    stop: async (due, session) => {
+      // Ends only the session that ran past its stop moment, never one started since.
+      if (!(await client.mutation(api.dayRecorder.autoStop, { session }))) {
+        log(`auto-stop: nothing to stop (${due.reason}); the recorder was already off or restarted`);
+        return;
+      }
       const when = due.reason === "midnight" ? "at midnight" : `at ${new Date(due.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}, your end time`;
       log(`auto-stop: recorder turned off (${due.reason})`);
       // The switch is already off: a failed event or notice is logged, and the stop stands.
@@ -309,7 +313,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
     (s) => {
       void service.apply({ enabled: s.enabled, paused: s.paused, denylist: s.denylist, shotSec: s.shotSec });
       scheduleAssistant(s.enabled, s.batchMin);
-      autoStop.update({ enabled: s.enabled, stopAtMin: s.stopAtMin });
+      autoStop.update({ enabled: s.enabled, stopAtMin: s.stopAtMin, session: s.session });
     },
     (err) => log(`could not read Day Recorder settings: ${err?.message ?? err}`)
   );

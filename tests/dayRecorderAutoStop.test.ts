@@ -87,7 +87,7 @@ describe("createAutoStop", () => {
 
   it("stops a running recorder when the end time comes, once", async () => {
     const h = harness(at(2026, 11, 9, 17, 58));
-    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM });
+    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
     h.advance(MINUTE);
     await h.autoStop.check();
     expect(h.stops).toEqual([]);
@@ -100,10 +100,10 @@ describe("createAutoStop", () => {
 
   it("counts only time spent on: turning it on after the end time starts afresh", async () => {
     const h = harness(at(2026, 11, 9, 9, 0));
-    h.autoStop.update({ enabled: false, stopAtMin: SIX_PM });
+    h.autoStop.update({ enabled: false, stopAtMin: SIX_PM, session: 1 });
     h.advance(10 * 60 * MINUTE);
     await h.autoStop.check();
-    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM });
+    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
     h.advance(MINUTE);
     await h.autoStop.check();
     expect(h.stops).toEqual([]);
@@ -111,7 +111,7 @@ describe("createAutoStop", () => {
 
   it("stops at wake when sleep crossed the end time", async () => {
     const h = harness(at(2026, 11, 9, 17, 0));
-    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM });
+    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
     h.advance(4 * 60 * MINUTE);
     await h.autoStop.check();
     expect(h.stops.map((s) => s.reason)).toEqual(["endTime"]);
@@ -119,10 +119,10 @@ describe("createAutoStop", () => {
 
   it("does nothing while off or without an end time", async () => {
     const h = harness(at(2026, 11, 9, 17, 0));
-    h.autoStop.update({ enabled: true, stopAtMin: null });
+    h.autoStop.update({ enabled: true, stopAtMin: null, session: 1 });
     h.advance(8 * 60 * MINUTE);
     await h.autoStop.check();
-    h.autoStop.update({ enabled: false, stopAtMin: SIX_PM });
+    h.autoStop.update({ enabled: false, stopAtMin: SIX_PM, session: 1 });
     h.advance(24 * 60 * MINUTE);
     await h.autoStop.check();
     expect(h.stops).toEqual([]);
@@ -132,7 +132,7 @@ describe("createAutoStop", () => {
     const stop = vi.fn(async () => undefined);
     let clock = at(2026, 11, 9, 17, 59);
     const autoStop = createAutoStop({ now: () => clock, stop });
-    autoStop.update({ enabled: true, stopAtMin: SIX_PM });
+    autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
     clock += MINUTE;
     await autoStop.check();
     expect(stop).toHaveBeenCalledTimes(1);
@@ -150,11 +150,58 @@ describe("createAutoStop", () => {
         stops.push(due.at);
       },
     });
-    autoStop.update({ enabled: true, stopAtMin: SIX_PM });
+    autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
     clock += MINUTE;
     await expect(autoStop.check()).rejects.toThrow(/unreachable/);
     clock += MINUTE;
     await autoStop.check();
     expect(stops).toEqual([at(2026, 11, 9, 18, 0)]);
+  });
+  // Codex review of PR 7: a stop still in flight when James restarts must not end the new session.
+  it("keeps a restart made while a stop is in flight, and stops it at midnight", async () => {
+    let clock = at(2026, 11, 9, 23, 58);
+    let release = () => {};
+    const stops: { reason: string; session: number }[] = [];
+    const autoStop = createAutoStop({
+      now: () => clock,
+      stop: async (due, session) => {
+        stops.push({ reason: due.reason, session });
+        if (stops.length === 1) await new Promise<void>((resolve) => (release = resolve));
+      },
+    });
+    autoStop.update({ enabled: true, stopAtMin: 23 * 60 + 59, session: 1 });
+    clock = at(2026, 11, 9, 23, 59);
+    const first = autoStop.check();
+    autoStop.update({ enabled: false, stopAtMin: 23 * 60 + 59, session: 1 });
+    clock += 10_000;
+    autoStop.update({ enabled: true, stopAtMin: 23 * 60 + 59, session: 2 });
+    release();
+    await first;
+    clock = at(2026, 11, 10, 0, 1);
+    await autoStop.check();
+    expect(stops).toEqual([
+      { reason: "endTime", session: 1 },
+      { reason: "midnight", session: 2 },
+    ]);
+  });
+
+  it("treats a new session as a fresh start even when the off never arrived", async () => {
+    const h = harness(at(2026, 11, 9, 17, 0));
+    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
+    h.advance(2 * 60 * MINUTE);
+    h.autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 2 });
+    h.advance(MINUTE);
+    await h.autoStop.check();
+    expect(h.stops).toEqual([]);
+  });
+
+  it("names the session it is ending", async () => {
+    const stop = vi.fn(async () => undefined);
+    let clock = at(2026, 11, 9, 17, 59);
+    const autoStop = createAutoStop({ now: () => clock, stop });
+    autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 7 });
+    clock += MINUTE;
+    await autoStop.check();
+    expect(stop).toHaveBeenCalledWith({ at: at(2026, 11, 9, 18, 0), reason: "endTime" }, 7);
   });
 });

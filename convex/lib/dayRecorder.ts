@@ -112,6 +112,12 @@ export function assertStopAtMin(value: number): void {
   }
 }
 
+export function assertSession(value: number): void {
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Day Recorder session must be a whole number from 0, got ${value}`);
+  }
+}
+
 export function assertBatchMin(value: number): void {
   if (!Number.isInteger(value) || value < MIN_BATCH_MIN || value > MAX_BATCH_MIN) {
     throw new Error(`Assistant batch interval must be ${MIN_BATCH_MIN}–${MAX_BATCH_MIN} minutes, got ${value}`);
