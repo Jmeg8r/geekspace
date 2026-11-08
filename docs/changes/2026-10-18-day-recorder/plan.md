@@ -1871,3 +1871,6 @@ never auto-start.
   - **Round 2: the end time too.** A late stop could still apply an end time James had since
     cleared or moved. `autoStop` also takes the `stopAtMin` the stop was worked out from and
     does nothing unless the stored end time is still that value.
+  - **Round 3: a turned-down stop keeps the span.** `stop` now returns whether it stopped.
+    When `autoStop` turns it down, `check` leaves the span unchecked, so the next check
+    weighs it against the end time as it is now (a moved end time still stops on time).

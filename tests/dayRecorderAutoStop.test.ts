@@ -18,7 +18,7 @@ afterAll(() => {
   else process.env.TZ = savedTz;
 });
 
-const at = (y: number, m: number, d: number, h: number, min = 0) => new Date(y, m - 1, d, h, min).getTime();
+const at = (y: number, m: number, d: number, h: number, min = 0, sec = 0) => new Date(y, m - 1, d, h, min, sec).getTime();
 const SIX_PM = 18 * 60;
 const MINUTE = 60_000;
 
@@ -75,7 +75,7 @@ describe("createAutoStop", () => {
   function harness(start: number) {
     let clock = start;
     const stops: { at: number; reason: string }[] = [];
-    const autoStop = createAutoStop({ now: () => clock, stop: async (due) => void stops.push(due) });
+    const autoStop = createAutoStop({ now: () => clock, stop: async (due) => (stops.push(due), true) });
     return {
       autoStop,
       stops,
@@ -129,7 +129,7 @@ describe("createAutoStop", () => {
   });
 
   it("only ever stops: its one action is the stop it was given", async () => {
-    const stop = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => true);
     let clock = at(2026, 11, 9, 17, 59);
     const autoStop = createAutoStop({ now: () => clock, stop });
     autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
@@ -148,6 +148,7 @@ describe("createAutoStop", () => {
       stop: async (due) => {
         if (fails-- > 0) throw new Error("SYNTHETIC: Convex unreachable");
         stops.push(due.at);
+        return true;
       },
     });
     autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
@@ -167,6 +168,7 @@ describe("createAutoStop", () => {
       stop: async (due, { session }) => {
         stops.push({ reason: due.reason, session });
         if (stops.length === 1) await new Promise<void>((resolve) => (release = resolve));
+        return true;
       },
     });
     autoStop.update({ enabled: true, stopAtMin: 23 * 60 + 59, session: 1 });
@@ -196,12 +198,39 @@ describe("createAutoStop", () => {
   });
 
   it("names the session it is ending and the end time it used", async () => {
-    const stop = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => true);
     let clock = at(2026, 11, 9, 17, 59);
     const autoStop = createAutoStop({ now: () => clock, stop });
     autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 7 });
     clock += MINUTE;
     await autoStop.check();
     expect(stop).toHaveBeenCalledWith({ at: at(2026, 11, 9, 18, 0), reason: "endTime" }, { session: 7, stopAtMin: SIX_PM });
+  });
+
+  // Codex review of PR 7, round 3: a stop the server turned down (the end time moved while it
+  // was out) must leave the span unchecked, so the new end time is still caught.
+  it("keeps the span when the stop is turned down, and stops at the moved end time", async () => {
+    let clock = at(2026, 11, 9, 17, 59, 30);
+    const stops: { at: number; stopAtMin: number }[] = [];
+    const autoStop = createAutoStop({
+      now: () => clock,
+      stop: async (due, target) => {
+        stops.push({ at: due.at, stopAtMin: target.stopAtMin });
+        if (stops.length === 1) {
+          autoStop.update({ enabled: true, stopAtMin: SIX_PM + 1, session: 1 });
+          return false;
+        }
+        return true;
+      },
+    });
+    autoStop.update({ enabled: true, stopAtMin: SIX_PM, session: 1 });
+    clock = at(2026, 11, 9, 18, 0, 30);
+    await autoStop.check();
+    clock = at(2026, 11, 9, 18, 1, 30);
+    await autoStop.check();
+    expect(stops).toEqual([
+      { at: at(2026, 11, 9, 18, 0), stopAtMin: SIX_PM },
+      { at: at(2026, 11, 9, 18, 1), stopAtMin: SIX_PM + 1 },
+    ]);
   });
 });

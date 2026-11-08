@@ -289,7 +289,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       // out from: never one started since, nor after the end time was cleared or moved.
       if (!(await client.mutation(api.dayRecorder.autoStop, { session, stopAtMin }))) {
         log(`auto-stop: nothing to stop (${due.reason}); the recorder was off or restarted, or the end time changed`);
-        return;
+        return false;
       }
       const when = due.reason === "midnight" ? "at midnight" : `at ${new Date(due.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}, your end time`;
       log(`auto-stop: recorder turned off (${due.reason})`);
@@ -302,6 +302,7 @@ export function startDayRecorder({ convexUrl, capturePage, showApp, keyStore, li
       } catch (err) {
         log(`could not show the auto-stop notice (${err?.name ?? "Error"})`);
       }
+      return true;
     },
   });
   const checkAutoStop = () => void autoStop.check().catch((err) => log(`auto-stop: the recorder could not be turned off (${err?.name ?? "Error"}); trying again next check`));

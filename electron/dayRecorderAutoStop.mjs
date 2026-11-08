@@ -36,8 +36,8 @@ export function stopDue({ stopAtMin, since, now }) {
 /**
  * Tracks the recorder's on time and stops it when a stop moment passes. `update` takes each
  * settings change; `check` runs on a timer and on wake. `stop` is given the session it is to
- * end and the end time the stop was worked out from. A stop that throws leaves the span as
- * it was, so the next check tries again.
+ * end and the end time the stop was worked out from, and says whether it stopped. A stop that
+ * throws or is turned down leaves the span as it was, so the next check tries again.
  */
 export function createAutoStop({ now, stop }) {
   let enabled = false;
@@ -72,7 +72,9 @@ export function createAutoStop({ now, stop }) {
         return;
       }
       const target = { session, stopAtMin };
-      await stop(due, target);
+      // Turned down (off, restarted or the end time changed meanwhile): the span stays
+      // unchecked, so the next check weighs it against the settings as they are now.
+      if (!(await stop(due, target))) return;
       // A restart while the stop was out is a new session with its own on time: keep it.
       if (session === target.session) since = null;
     } finally {
