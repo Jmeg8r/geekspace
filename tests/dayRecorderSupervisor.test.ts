@@ -252,12 +252,26 @@ describe("Day Recorder supervisor", () => {
   it("waits for the final segment's row before a clean stop returns", async () => {
     // Codex #80 r1: the helper announces its last segment during SIGTERM; the backend stops
     // right after this returns, so an unfinished write would leave that file unindexed.
+    // WHY the write ends on the helper's close, not after a timer: the write has to outlive the
+    // helper, the point where a stop that skipped the drain would return. A 200 ms delay made
+    // that order depend on machine load; the close event fixes it. Our listener is attached
+    // before the supervisor's, and setImmediate runs after stop()'s own continuation would.
+    let helperClosed!: Promise<void>;
     let finished = false;
     const h = started(
       harness("finalSegment", {
+        spawnImpl: (cmd, args, opts) => {
+          const proc = spawn(cmd, args, opts);
+          helperClosed = new Promise((r) => proc.once("close", () => r()));
+          return proc;
+        },
         sink: {
           addScreenshot: async () => {},
-          addSegment: () => new Promise((r) => setTimeout(() => ((finished = true), r()), 200)),
+          addSegment: async () => {
+            await helperClosed;
+            await new Promise((r) => setImmediate(r));
+            finished = true;
+          },
         },
       })
     );
