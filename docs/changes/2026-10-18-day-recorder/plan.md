@@ -1856,6 +1856,19 @@ never auto-start.
   - **Tests:** two scan tests used a $0.05 cap sized for Opus prices. They now scale it by
     the Haiku/Opus price ratio (`TIGHT_CAP_USD`), so a long row stays just as far out of
     reach as it was.
+- **2026-11-07, the denylist stays on bundle IDs, and capture gets an auto-stop time
+  (James).** Both were open questions in the spec.
+  - **Denylist: bundle ID only.** Matching window titles or browser profiles was rejected.
+    The capture filter could drop windows by title before capture, but
+    a title can change between listing the windows and taking the frame (a tab switch),
+    pages set their own titles, and a window exclusion does not exclude audio. Chrome
+    profiles also share one bundle ID and one process. Each of these would weaken R4's
+    zero-frames guarantee without anyone noticing. For private browsing, use a separate
+    browser app and denylist its bundle ID. No code changes.
+  - **Hours: auto-stop, never auto-start.** This adds an optional end time to Day Recorder
+    settings. At that time a recorder still on turns itself off, logs an event, and shows a
+    notice. The schedule never turns capture on. Built as PR 7 (see "PR 7 — Auto-stop"
+    above, and the entry below).
 - **2026-11-07, auto-stop ends only the session it names (Codex review of PR 7).** The plan
   had the stop write `enabled: false` through `updateSettings`. Codex found two ways a late
   stop could end a session James started after the stop moment, one that should run to
