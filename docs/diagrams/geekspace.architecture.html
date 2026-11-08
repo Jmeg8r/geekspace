@@ -5428,9 +5428,9 @@
           <h3>The calendar schedules itself</h3>
         </div>
         <ul>
-          <li>&bull; convex/lib/scheduler.ts is a PURE engine, 21 unit tests, no UI coupling</li>
+          <li>&bull; convex/lib/scheduler.ts is a PURE engine, unit-tested in tests/scheduler*.test.ts, no UI coupling</li>
           <li>&bull; Schedule-affecting mutations call runReflow; it rewrites unlocked future blocks only</li>
-          <li>&bull; NOT every mutation on those tables reflows — setMicDevice deliberately skips it, and removeProperty/updateProperty/completeSprint currently do not</li>
+          <li>&bull; NOT every mutation on those tables reflows — setMicDevice deliberately skips it, and completeSprint currently does not; databases.updateProperty (deleting an option) and removeProperty reflow only when they touch a task-source database</li>
         </ul>
       </div>
     </div>

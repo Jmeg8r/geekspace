@@ -65,6 +65,12 @@ The headline feature, modeled on Notion Calendar + Motion/Reclaim:
 - Auto-generated, searchable notes page per meeting; action items become tasks in one click; audio replay + full transcript kept; failed AI runs are re-runnable (audio is saved first)
 - Link recordings to calendar events; tool status + model selection in Settings
 
+### 🎥 Day Recorder (macOS only, off by default)
+- Opt-in capture of the microphone, system audio and periodic screenshots (every 30 s by default) by the native `gs-capture` helper (`native/gs-capture`, Swift), supervised from `electron/dayRecorder.mjs`; a visible indicator and tray control show whether it is really recording, with an app denylist. An optional end time turns it off at that time (and at local midnight); nothing ever turns it on automatically
+- Transcription (whisper.cpp) and screenshot OCR run locally; the capture index lives in Convex (`convex/dayRecorder.ts`) and media older than 30 days is purged
+- The day assistant (`electron/dayAssistant.mjs`) sends transcript and OCR *text* to Claude with an API key held in the macOS Keychain (via Electron `safeStorage`), turns commitments into tasks and time blocks (undoable), and only drafts anything outside Geekspace. It does not run until you set a daily spend cap; a screenshot image is sent only when you ask for that one
+- The Windows build reports the recorder as unsupported; design and spec: `docs/changes/2026-10-18-day-recorder/`
+
 ### 🍎 macOS integrations (desktop app)
 - **Calendar sync**: pick your Calendar.app calendars and they mirror into Geekspace (read-only, dotted edge) — and become fixed busy time the auto-scheduler plans around. Syncs at launch, on focus, and every 5 minutes
 - **Mail inbox on Home**: recent Mail.app messages with unread dots, open-in-Mail deep links, and one-click **email → task** (the task links back to the message)
@@ -101,8 +107,8 @@ flowchart TD
 |---|---|
 | Convex **anonymous local** deployment | No account, no auth, data stays on this machine, still fully reactive (dev: repo `.convex/`; packaged: `~/Library/Application Support/Geekspace/` on macOS, `%APPDATA%\Geekspace\` on Windows) |
 | Electron owns the backend lifecycle (packaged) | The app spawns the bundled `convex-local-backend` on launch and stops it on quit — self-contained, no terminal |
-| Pure scheduler module shared by server + tests | Deterministic, 21 unit tests, no UI coupling |
-| Reflow inside the schedule-affecting mutations | The cascade can never be forgotten; UI updates reactively for free. **Not every** mutation that touches those tables reflows — `setMicDevice` deliberately does not (picking a microphone has nothing to do with the schedule, and reflow is unconditional), and `removeProperty`, `updateProperty` and `completeSprint` currently do not either |
+| Pure scheduler module shared by server + tests | Deterministic, unit-tested (`tests/scheduler.test.ts`, `tests/schedulerCorrectness.test.ts`), no UI coupling |
+| Reflow inside the schedule-affecting mutations | The cascade can never be forgotten; UI updates reactively for free. **Not every** mutation that touches those tables reflows — `setMicDevice` deliberately does not (picking a microphone has nothing to do with the schedule, and reflow is unconditional), and `completeSprint` currently does not either; in `convex/databases.ts`, `updateProperty` reflows only when it deletes a select, status or multiSelect option on a task-source database, and `removeProperty` only when it touches a task-source database |
 | Drag = lock | Matches Motion/Reclaim mental model: a manual placement is a promise the engine must respect |
 | Date-only values stored as UTC-midnight calendar dates | Timezone-proof dates (like Notion); timed values are real epochs |
 | Fixed tz-offset scheduling with constant reflow | Near-term blocks always correct; DST drift self-heals on every reflow |
@@ -158,9 +164,10 @@ Other scripts:
 | Script | What |
 |---|---|
 | `npm run dev:web` | backend + browser dev (no Electron) |
-| `npm run test` | scheduler engine test suite (vitest) |
-| `npm run verify` | typecheck + tests |
-| `npm run package` | build self-contained `Geekspace.app` + `.dmg` into `release/` |
+| `npm run test` | full vitest suite (scheduler, Convex handlers, Electron main-process modules) |
+| `npm run lint` | oxlint |
+| `npm run verify` | oxlint + typecheck + tests (what CI runs) |
+| `npm run package` | build + prebake seed + build `gs-capture`, then self-contained `Geekspace.app` + `.dmg` into `release/` |
 | `npm run package:win` | build self-contained `Geekspace Setup 0.1.0.exe` (NSIS) into `release/` |
 | `npm run migrate:local-data` | copy your dev `.convex` workspace into the packaged app |
 | `npm run deploy:local` | push function changes onto the running standalone app |
@@ -183,9 +190,12 @@ src/
   components/       # sidebar, page editor, database views, calendar, home
   lib/              # view filter/sort logic, dates, theme palette
   state/            # zustand UI state, theme provider
-electron/           # main.mjs, preload.cjs, convexBackend.mjs (backend lifecycle) — no build step
-scripts/            # prebake-seed, migrate-local-data, deploy-local, afterPack
-tests/              # scheduler test suite
+electron/           # main.mjs, preload.cjs, convexBackend.mjs (backend lifecycle), ARCHITECT lanes, meeting + Day Recorder services — no build step
+mcp/                # geekspace-mcp server (index.mjs)
+native/gs-capture/  # Swift capture helper for the Day Recorder (macOS)
+scripts/            # prebake-seed, migrate-local-data, deploy-local, afterPack, probes
+tests/              # vitest suite (scheduler, Convex handlers, Electron modules)
+docs/               # USER-GUIDE, change records (docs/changes/), diagrams/
 ```
 
 ## Known limits (v1.1)

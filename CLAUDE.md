@@ -12,9 +12,10 @@ calendar that auto-schedules itself around task dependencies. Built on the ASTGL
 npm run dev        # Convex + Vite + Electron together
 npm run dev:web    # Convex + Vite (no Electron)
 npm test           # vitest run
+npm run verify     # oxlint + tsc -b --noEmit + vitest run (what CI runs)
 npm run build      # tsc -b && vite build
-npm run package    # build + electron-builder --mac
-npm run package:win  # build + electron-builder --win (NSIS installer)
+npm run package    # build + prebake + build:gs-capture + electron-builder --mac
+npm run package:win  # build + prebake + electron-builder --win (NSIS installer)
 ```
 
 ## Review standards

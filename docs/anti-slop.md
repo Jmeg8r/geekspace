@@ -51,15 +51,13 @@ Don't do a dedicated sweep. Re-run `npx oxlint` periodically to track the count;
 it's small enough to review in one sitting, promote the rule to `error` in
 `oxlint.config.ts`.
 
-## Pre-commit hook: not wired yet
+## Pre-commit hook: oxlint not wired yet
 
-`npm run verify` (and therefore `oxlint`) runs in CI on every PR. It is **not** yet
-wired into a local pre-commit hook — this repo has no `lefthook.yml`/`.husky/` on
-`main` today. A `chore/track-gate-kit` branch already carries a full `lefthook.yml`
-(gitleaks, shell/YAML linting, etc.) that isn't merged yet; adding a fresh
-`lefthook.yml` here would fork that file and conflict at merge time. Once
-`chore/track-gate-kit` lands, add a staged-file-scoped `oxlint {staged_files}`
-command to its pre-commit block instead of creating a second one.
+`npm run verify` (and therefore `oxlint`) runs in CI on every PR
+(`.forgejo/workflows/ci.yml`). `lefthook.yml` is on `main` now, but its `pre-commit` block
+has no `oxlint` command — the pre-push `tests-node` job runs `npm test`, not `npm run verify`.
+When adding it, put a staged-file-scoped `oxlint {staged_files}` command in the existing
+`pre-commit` block rather than creating a second `lefthook.yml`.
 
 ## Fleet rollout
 

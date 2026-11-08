@@ -10,7 +10,7 @@
 
 ## Local gates
 
-<!-- Filled automatically by bin/ship.sh — leave as-is if you ran it. -->
+<!-- Tick each gate you ran. TODO(james): bin/ship.sh (which used to fill this in) is not in the repo. -->
 
 - [ ] `lefthook run pre-commit` clean
 - [ ] `lefthook run pre-push` clean
