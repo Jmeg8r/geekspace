@@ -132,6 +132,10 @@ export default defineSchema({
     dayRecorderPaused: v.optional(v.boolean()),
     dayRecorderDenylist: v.optional(v.array(v.string())), // app bundle ids
     dayRecorderShotSec: v.optional(v.number()),
+    // Minutes after local midnight; at that time a running recorder turns off (plan PR 7).
+    dayRecorderStopAtMin: v.optional(v.number()),
+    // Counts each off-to-on turn, so an auto-stop can name the session it is ending.
+    dayRecorderSession: v.optional(v.number()),
     assistantBatchMin: v.optional(v.number()),
     assistantDailyCapUsd: v.optional(v.number()), // unset = the assistant does not run
     // Where the assistant's last batch ended (plan PR 6a): text after it is new.
@@ -254,7 +258,8 @@ export default defineSchema({
       v.literal("imageSent"),
       v.literal("capError"),
       v.literal("purged"),
-      v.literal("capPaused")
+      v.literal("capPaused"),
+      v.literal("autoStopped")
     ),
     detail: v.optional(v.string()),
     count: v.optional(v.number()),

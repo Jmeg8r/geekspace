@@ -13,8 +13,10 @@ import {
   assertDailyCap,
   assertDay,
   assertMediaPath,
+  assertSession,
   assertShotSec,
   assertSpan,
+  assertStopAtMin,
   assertText,
   assertTime,
   retentionCutoff,
@@ -44,6 +46,10 @@ export const getSettings = query({
       dailyCapUsd: s?.assistantDailyCapUsd ?? null,
       batchMin: s?.assistantBatchMin ?? DEFAULT_BATCH_MIN,
       shotSec: s?.dayRecorderShotSec ?? DEFAULT_SHOT_SEC,
+      // No end time means nothing stops capture on a schedule (plan PR 7).
+      stopAtMin: s?.dayRecorderStopAtMin ?? null,
+      // 0 before the first start, and for a recorder already on before sessions were counted.
+      session: s?.dayRecorderSession ?? 0,
     };
   },
 });
@@ -58,23 +64,48 @@ export const updateSettings = mutation({
     dailyCapUsd: v.optional(v.number()),
     batchMin: v.optional(v.number()),
     shotSec: v.optional(v.number()),
+    // null clears the end time.
+    stopAtMin: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
     if (args.denylist) args.denylist.forEach(assertBundleId);
     if (args.dailyCapUsd !== undefined) assertDailyCap(args.dailyCapUsd);
     if (args.batchMin !== undefined) assertBatchMin(args.batchMin);
     if (args.shotSec !== undefined) assertShotSec(args.shotSec);
+    if (args.stopAtMin !== undefined && args.stopAtMin !== null) assertStopAtMin(args.stopAtMin);
+    const existing = await settingsDoc(ctx);
+    const turningOn = args.enabled === true && !(existing?.dayRecorderEnabled ?? false);
     const patch = {
       ...(args.enabled !== undefined && { dayRecorderEnabled: args.enabled }),
+      ...(turningOn && { dayRecorderSession: (existing?.dayRecorderSession ?? 0) + 1 }),
       ...(args.paused !== undefined && { dayRecorderPaused: args.paused }),
       ...(args.denylist !== undefined && { dayRecorderDenylist: [...new Set(args.denylist)] }),
       ...(args.dailyCapUsd !== undefined && { assistantDailyCapUsd: args.dailyCapUsd }),
       ...(args.batchMin !== undefined && { assistantBatchMin: args.batchMin }),
       ...(args.shotSec !== undefined && { dayRecorderShotSec: args.shotSec }),
+      // Patching undefined removes the field: null from the page clears the end time.
+      ...(args.stopAtMin !== undefined && { dayRecorderStopAtMin: args.stopAtMin ?? undefined }),
     };
-    const existing = await settingsDoc(ctx);
     if (existing) await ctx.db.patch(existing._id, patch);
     else await ctx.db.insert("settings", { ...DEFAULT_SETTINGS, ...patch });
+  },
+});
+
+// WHY not updateSettings({ enabled: false }): a stop that lands late (slow, or queued while
+// the main process was offline) would end a session James started since, which should run
+// to midnight, or apply an end time he has since cleared or moved (Codex review of PR 7).
+// This turns off only the session it names, and only under the end time it was worked out
+// from, in one transaction, and returns whether it did.
+export const autoStop = mutation({
+  args: { session: v.number(), stopAtMin: v.number() },
+  handler: async (ctx, { session, stopAtMin }) => {
+    assertSession(session);
+    assertStopAtMin(stopAtMin);
+    const s = await settingsDoc(ctx);
+    if (!s?.dayRecorderEnabled || (s.dayRecorderSession ?? 0) !== session) return false;
+    if (s.dayRecorderStopAtMin !== stopAtMin) return false;
+    await ctx.db.patch(s._id, { dayRecorderEnabled: false });
+    return true;
   },
 });
 
@@ -113,7 +144,8 @@ export const logEvent = mutation({
       v.literal("noticeDeclined"),
       v.literal("imageSent"),
       v.literal("capError"),
-      v.literal("capPaused")
+      v.literal("capPaused"),
+      v.literal("autoStopped")
     ),
     detail: v.optional(v.string()),
     screenshotId: v.optional(v.id("screenshots")),
