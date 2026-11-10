@@ -18,6 +18,11 @@ npm run package    # build + prebake + build:gs-capture + electron-builder --mac
 npm run package:win  # build + prebake + electron-builder --win (NSIS installer)
 ```
 
+## Codex review
+
+- **`codex review` runs one at a time, in the foreground.** Never start two in parallel and
+  never background one; wait for each run to finish before starting the next.
+
 ## Review standards
 
 Checked by the forge's local AI review gate (`.forgejo/workflows/ai-review.yml`) on every PR.
