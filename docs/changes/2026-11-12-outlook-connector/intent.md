@@ -6,7 +6,7 @@ risk: high
 risk_reason: adds an OAuth sign-in and stores Microsoft Graph refresh tokens on the user's machine; a leak exposes the user's whole Outlook.com mail and calendar
 author: james
 accepted_by: james
-linear: pending
+linear: ASTGL-80
 source: conversation
 ---
 # Intent: the Windows build reads Outlook.com calendar and mail over Microsoft Graph
@@ -116,4 +116,3 @@ All on the Alienware with the packaged Windows build, unless stated.
 - Which Outlook calendars sync: all of them, or a chosen list like the Mac's calendar names
   setting.
 - How often Windows syncs, and whether it uses the Mac mirror's window setting as-is.
-- Whether the Linear project for geekspace should carry this change (`linear: pending`).
