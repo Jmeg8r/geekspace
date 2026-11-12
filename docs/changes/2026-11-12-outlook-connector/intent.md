@@ -1,11 +1,11 @@
 ---
 change: 2026-11-12-outlook-connector
-status: draft
+status: accepted
 track: T3
 risk: high
 risk_reason: adds an OAuth sign-in and stores Microsoft Graph refresh tokens on the user's machine; a leak exposes the user's whole Outlook.com mail and calendar
 author: james
-accepted_by:
+accepted_by: james
 linear: pending
 source: conversation
 ---
