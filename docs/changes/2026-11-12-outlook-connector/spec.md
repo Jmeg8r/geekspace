@@ -1,9 +1,9 @@
 ---
 change: 2026-11-12-outlook-connector
-status: draft
+status: accepted
 track: T3
 intent: ./intent.md
-accepted_by:
+accepted_by: james
 linear: ASTGL-80
 skills_in_force: [design:ux-copy, design:accessibility-review]
 claude_config_sha: 58442fe
