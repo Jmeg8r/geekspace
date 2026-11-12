@@ -3,6 +3,8 @@
 export const REQUEST_FILE: string;
 export const MANIFEST_FILE: string;
 export const MARKER_FILE: string;
+/** Longest backend detail kept in an error message (and so in the log). */
+export const MAX_DETAIL_CHARS: number;
 
 export class SyncError extends Error {
   constructor(message: string, options?: { tableName?: string });

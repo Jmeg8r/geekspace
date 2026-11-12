@@ -22,7 +22,7 @@ const SCHEMA_POLL_MS = 10_000;
 // something is wrong and the user should hear about it rather than stare at no window.
 const DEFAULT_DEADLINE_MS = 120_000;
 // Enough of a backend error body to diagnose from the log without dumping a whole page.
-const MAX_DETAIL_CHARS = 500;
+export const MAX_DETAIL_CHARS = 500;
 const HASH_PREFIX_CHARS = 12;
 
 export class SyncError extends Error {
@@ -139,6 +139,16 @@ export function recordExternalDeploy(dataDir, ordinal, options) {
   writeMarker(dataDir, { hash: null, ordinal }, options);
 }
 
+/**
+ * The first line of a wait_for_schema failure: document ID, table, and the field at fault.
+ * WHY only that line: the rest is the offending document and the whole validator (the
+ * user's page, content included), and the next failure shape may dump a value elsewhere.
+ */
+function schemaFailureDetail(error) {
+  if (typeof error !== "string" || !error.trim()) return "no detail from the backend";
+  return error.trim().split("\n", 1)[0].trim().slice(0, MAX_DETAIL_CHARS);
+}
+
 async function post(fetchImpl, url, adminKey, endpoint, body, signal) {
   const res = await fetchImpl(`${url}${endpoint}`, {
     method: "POST",
@@ -186,7 +196,7 @@ export async function pushFunctions({ url, adminKey, request, fetch: fetchImpl =
       if (status.type === "complete") break;
       if (status.type === "failed") {
         const where = status.tableName ? ` (table "${status.tableName}")` : "";
-        throw new SyncError(`Schema validation failed${where}: ${status.error}`, { tableName: status.tableName });
+        throw new SyncError(`Schema validation failed${where}: ${schemaFailureDetail(status.error)}`, { tableName: status.tableName });
       }
       if (status.type === "raceDetected") throw new SyncError("Schema was overwritten by another push");
       if (status.type !== "inProgress") throw new SyncError(`Unexpected schema status: ${JSON.stringify(status).slice(0, MAX_DETAIL_CHARS)}`);
