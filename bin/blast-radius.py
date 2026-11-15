@@ -67,12 +67,8 @@ Usage:
                                                # compiled viewer as a declared exclusion
   bin/blast-radius.py --jsonl-digest BASE HEAD DECL < path/status pairs (NUL-separated)
                                                # review-pr.sh 1c: declared ledgers' digests
-  bin/blast-radius.py --not-applicable VERDICT N < standards (a JSON array)
-                                               # review-pr.sh 5: judge and render a verdict's
-                                               # per-standard not-applicable reasons
-  bin/blast-radius.py --unmatched VERDICT REQUEST
-                                               # review-pr.sh 5: re-judge and render findings
-                                               # that name no supplied file (CLAUDE.md 4.8)
+
+The verdict judges that review-pr.sh section 5 calls live in bin/gate-judge.py.
 """
 from __future__ import annotations
 
@@ -271,21 +267,9 @@ def literal_tokens(rel: str, basename_counts: dict[str, int]) -> list[str]:
     toks = {rel}
     if basename_counts.get(p.name, 0) == 1:
         toks.add(p.name)
-    # DOTTED module forms stay literal tokens; only the BARE stem left. The flood was
-    # always the stem -- "bench" matching "benchmark" in a .gitignore -- never
-    # "benchmark.ollama-perf.bench", which is specific enough to be safe as a substring.
-    # And dropping the dotted forms entirely broke every module reference that never
-    # reaches an AST: `python -m plugins.foo` in a workflow YAML, an
-    # importlib.import_module("plugins.foo") string, an import inside a .pyi (not parsed
-    # as .py), and any source using syntax newer than the scanner's own Python, where
-    # ast.parse fails and literal matching is the only remaining signal. Measured: a
-    # fixture with those callers went from three dependents to ZERO -- an empty blast
-    # radius on a breaking change, the exact failure this tool exists to prevent
-    # (Codex [P1] on PR #54).
-    #
-    # Only forms containing a dot: the bare last component is the stem, which is the one
-    # that floods. A suffix like "plugins.foo" also lets a `python -m plugins.foo` match
-    # a file at src/plugins/foo.py, where the full path form would not.
+    # Dotted module forms stay literal tokens; only the bare stem is dropped (dropping them
+    # emptied the blast radius of every non-AST module reference).
+    # Why: sovereign-forge docs/blast-radius-rationale.md#dotted-module-forms.
     toks |= {f for f in module_dotted_forms(rel) if "." in f}
     return [t for t in toks if len(t) > 2]
 
@@ -356,25 +340,9 @@ def word_token(rel: str) -> str | None:
     if not parts:
         return None
     name = parts[-1]
-    # The >2 minimum is the same one literal_tokens applies, and for the same reason: a
-    # 1-2 character name is a WORD in ordinary prose, so even boundary-matched it floods.
-    # Measured: a 1-char a.py matched 15 of 17 tracked files in this repo, which under
-    # the broker's 120-file cap would displace the genuine callers it was meant to find
-    # (Codex [P2], round 3). Such a module is not left unresolved -- AST matching finds
-    # `import a` exactly, and that path has no length floor. What is given up is only the
-    # NON-AST reference to a 1-2 char module (a bare `python -m a` in a YAML), where a
-    # text search for that name could never have been trustworthy anyway.
-    #
-    # KNOWINGLY NOT EXCLUDED: names that shadow an already-imported stdlib module. A repo
-    # file named io.py does not really shadow `io`, which is in sys.modules before any
-    # repo code runs, so its importers are arguably phantoms (Codex [P2], round 2). An
-    # earlier revision excluded them via frozenset(sys.modules) and had to be reverted:
-    # that set is VERSION-DEPENDENT -- `io` is preloaded on Python 3.9, 3.12 and 3.13 but
-    # NOT on 3.14 -- so the same PR resolved a different blast radius depending on which
-    # interpreter CI happened to install. review-broker.py requires a merge gate to return
-    # the same verdict for the same head_sha, and a resolver whose answers move with the
-    # runtime cannot deliver that. Over-reporting is also the safe direction here: a
-    # phantom dependent is reviewable noise, a missed one is a silent breaking change.
+    # Names of 1-2 characters are not text-searched. Names shadowing stdlib modules are
+    # knowingly KEPT: sys.modules varies by Python version, which would break same-sha verdicts.
+    # Why: sovereign-forge docs/blast-radius-rationale.md#short-module-names.
     if len(name) <= 2:
         return None
     return name
@@ -1114,21 +1082,9 @@ def positive_control(root: Path) -> tuple[bool, str]:
     control fails, the sweep is broken, not the repo.
     """
     gi = root / ".gitignore"
-    # is_symlink BEFORE is_file, because is_file() FOLLOWS the link. The control reads
-    # its needle out of this file and then prints that needle into its own message, and
-    # the gate job runs with BROKER_TOKEN and a forge token in its environment -- so a
-    # .gitignore symlinked at a credential-bearing path (.git/config, /proc/self/environ,
-    # an .env) puts the target's longest line straight into the CI log. Demonstrated,
-    # not theorised: a fixture symlinking .gitignore to a file containing
-    # BROKER_TOKEN=... printed that line verbatim as "control '<token>' found in 2
-    # file(s)" and exited 0.
-    #
-    # Reachable here through owner ACCIDENT rather than a malicious PR -- this is a
-    # single-owner repo and every consumer runs the gate on `pull_request`, not
-    # `pull_request_target` -- but the cost of the accident is a secret in a log, which
-    # is not a class this project trades against convenience. A symlinked control source
-    # is UNKNOWN, not usable. Ported from the claude-memory deployed copy alongside the
-    # readable_others hardening it shipped with.
+    # is_symlink BEFORE is_file (is_file follows links): a .gitignore symlinked at a secret
+    # would print the secret's line into the CI log. A symlinked control source is UNKNOWN.
+    # Why: sovereign-forge docs/blast-radius-rationale.md#control-symlink.
     try:
         if gi.is_symlink() or not gi.is_file():
             return False, "no regular-file .gitignore to use as a control"
@@ -1144,23 +1100,8 @@ def positive_control(root: Path) -> tuple[bool, str]:
     if not needle:
         return False, ".gitignore has no usable control token"
 
-    # TWO independent claims, both required, because the token search alone is
-    # SELF-SATISFYING: the needle comes FROM .gitignore, so it matches .gitignore itself
-    # even when every other tracked file has become invisible to the walk. A sweep that
-    # could read nothing else still reported "control found in 1 file(s)", passed, and
-    # went on to report a clean empty blast radius — the control certifying only its own
-    # source, which is the precise failure this whole function exists to prevent, sitting
-    # inside the thing meant to prevent it. Measured on a fixture whose only other
-    # tracked file is a skipped binary: exit 0, "found in 1 file(s)".
-    #
-    # So also require that the walk actually READ something else: visibility of the tree,
-    # proven independently of the token's own source. Ported from the claude-memory
-    # deployed copy, which fixed this after a Codex review on 2026-08-22 and has been
-    # carrying it alone since; its pre-push tests are what caught the source of truth
-    # still shipping the weak version.
-    #
-    # isinstance, not truthiness: an EMPTY tracked file is readable and proves visibility
-    # just as well, but "" is falsy and would not have counted.
+    # Two claims, both required: the token is found AND the walk read some other file.
+    # Why: sovereign-forge docs/blast-radius-rationale.md#control-visibility.
     hits = 0
     readable_others = 0
     for f in tracked_files(root):
@@ -1260,7 +1201,7 @@ def changed_files(root: Path, base: str) -> tuple[list[str], list[tuple[str, str
 # applies every condition, and reports each path it did NOT digest and why; review-pr.sh
 # only sends and discloses what comes back. It lives in this file because
 # review-pr.sh must stay under the per-file cap that reviews its own install PR, and every
-# consumer's workflow already copies exactly these two scripts. It reads committed blobs
+# consumer's workflow already copies the kit's scripts. It reads committed blobs
 # only, never the working tree, and shares nothing with the resolver above. It must never
 # name a real path, the declaration's included (review-pr.sh passes it): see the note on
 # example paths in the module docstring.
@@ -1487,185 +1428,19 @@ def ledger_digest_cli(args: list[str]) -> int:
     return 0
 
 
-# review-pr.sh section 5's fourth zero-standards exception (CLAUDE.md section 4.7; geekspace
-# forge PR #84, TOML and shell reviewed against rules about Electron and Convex). It lives
-# here, not in review-pr.sh, for the reason the digest above does: review-pr.sh must stay
-# under the per-file cap that reviews its own install PR (selftest case 19).
-# The bounds must match review-broker.py's NA_REASON_MIN_CHARS/MAX_CHARS by inspection.
-NA_REASON_MIN_CHARS = 12
-NA_REASON_MAX_CHARS = 300
-# How many standards are NAMED in the comment, as review-pr.sh's STD_LABEL_CAP; the rest
-# are counted. Each label keeps this many characters of the standard's text.
-NA_LABEL_CAP = 200
-NA_LABEL_CHARS = 100
-# Every control character and Unicode line separator becomes a space, so a label or reason
-# stays one blockquote line and cannot forge a line forge-pr parses.
-_NA_BREAKS = {c: " " for c in [*range(32), 127, 133, 0x2028, 0x2029]}
-
-
-def _na_text(value: object) -> str:
-    return str(value).translate(_NA_BREAKS)
-
-
-def not_applicable_problem(rows: object, n: int) -> str | None:
-    """Why `rows` does NOT say, for every one of `n` standards, that it does not apply and
-    why; None when it does. The broker applies the same rules (_not_applicable_problem); this
-    copy is the client's, so a broker field is never trusted. Each standard 1..n exactly
-    once, `applies` exactly false, a reason NA_REASON_MIN..MAX characters once trimmed, and
-    no reason shared by two standards once case and whitespace are folded: one sentence
-    pasted onto every rule is not a judgement about any of them."""
-    if not isinstance(rows, list) or not rows:
-        return "the verdict carries no standards_not_applicable list"
-    if n <= 0 or len(rows) != n:
-        return f"the list answers {len(rows)} standard(s) of {n}"
-    seen: set = set()
-    reasons: set = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            return "an entry is not an object"
-        num, reason = row.get("standard"), row.get("reason")
-        if isinstance(num, bool) or not isinstance(num, int) or not 1 <= num <= n or num in seen:
-            return f"standard number {num!r} is out of range or repeated"
-        seen.add(num)
-        if row.get("applies") is not False:
-            return f"standard {num} is not marked as not applicable"
-        if not isinstance(reason, str):
-            return f"standard {num}: the reason is not text"
-        text = reason.strip()
-        if not NA_REASON_MIN_CHARS <= len(text) <= NA_REASON_MAX_CHARS:
-            return (f"standard {num}: a reason of {len(text)} character(s), expected "
-                    f"{NA_REASON_MIN_CHARS}..{NA_REASON_MAX_CHARS}")
-        folded = " ".join(text.casefold().split())
-        if folded in reasons:
-            return f"standard {num}: the same reason is given for another standard"
-        reasons.add(folded)
-    return None
-
-
-def not_applicable_cli(args: list[str]) -> int:
-    """--not-applicable VERDICT N, the standards this client sent on stdin as a JSON array.
-    Exit 0 with the comment's blockquote on stdout when VERDICT's standards_not_applicable
-    is acceptable; exit 1 with the reason on stderr when it is not; 2 on bad usage."""
-    if len(args) != 2 or not args[1].isdigit():
-        sys.stderr.write("--not-applicable needs VERDICT N, the standards on stdin\n")
-        return 2
-    n = int(args[1])
-    try:
-        standards = json.loads(sys.stdin.read())
-        verdict = json.loads(Path(args[0]).read_text())
-    except (OSError, ValueError) as e:
-        sys.stderr.write(f"   not-applicable list: unreadable ({e})\n")
-        return 1
-    if not isinstance(standards, list) or len(standards) != n or not isinstance(verdict, dict):
-        sys.stderr.write(f"   not-applicable list: expected {n} standards and a verdict object\n")
-        return 1
-    rows = verdict.get("standards_not_applicable")
-    problem = not_applicable_problem(rows, n)
-    if problem is not None:
-        why = verdict.get("standards_applicability_problem")
-        sys.stderr.write(f"   not-applicable list refused: {problem}"
-                         + (f" (broker: {_na_text(why)[:300]})" if why else "") + "\n")
-        return 1
-    labels = [f"> > - ({r['standard']}) {_na_text(standards[r['standard'] - 1])[:NA_LABEL_CHARS]}"
-              f" → {_na_text(r['reason']).strip()}"
-              for r in sorted(rows, key=lambda r: r["standard"])[:NA_LABEL_CAP]]
-    if n > NA_LABEL_CAP:
-        labels.append(f"> > - …and {n - NA_LABEL_CAP} more, not listed here")
-    sys.stdout.write(
-        "> ℹ️ No standard applies: **no project standard was applied**. The model named "
-        f"none of the {n} standards as checked, and when asked about each one it judged it "
-        "not applicable to this change, for the reason given. This pass means the change "
-        "was read and nothing was flagged. It is not a rule check: read the reasons.\n>\n"
-        + "\n".join(labels) + "\n\n")
-    return 0
-
-
-def _json_type(v: object) -> str:
-    """The value's JSON type, named as jq's `type` names it."""
-    if v is None:
-        return "null"
-    if isinstance(v, bool):
-        return "boolean"
-    if isinstance(v, (int, float)):
-        return "number"
-    return {str: "string", list: "array", dict: "object"}.get(type(v), type(v).__name__)
-
-
-def _one_line(v: object) -> str:
-    return (v if isinstance(v, str) else json.dumps(v)).replace("\n", " ").replace("`", "'")
-
-
-def unmatched_cli(args: list[str]) -> int:
-    """--unmatched VERDICT REQUEST: the findings the broker marked `unmatched_file`, whose
-    `file` is no changed or blast-radius path of REQUEST, are kept out of the verdict
-    (CLAUDE.md section 4.8). Exit 0 with the comment's disclosure of them on stdout (empty
-    when there are none); exit 1 when `findings` is not a list of objects, or when a mark
-    sits on a path REQUEST did supply, because then the verdict left a real finding out and
-    cannot be trusted; 2 on bad usage."""
-    if len(args) != 2:
-        sys.stderr.write("--unmatched needs VERDICT REQUEST\n")
-        return 2
-    try:
-        verdict, req = (json.loads(Path(a).read_text()) for a in args)
-        supplied = {str(f["path"]) for key in ("changed", "context")
-                    for f in req.get(key) or [] if isinstance(f, dict) and f.get("path")}
-        findings = verdict.get("findings")
-        # The gate's only check of the findings shape; review-pr.sh calls this before jq
-        # counts them, because jq's length reads a missing or null findings as 0 and a
-        # string as its character count (geekspace #102, comment 29377). Here, not in
-        # review-pr.sh, because that script is at its own DIFF_CAP (selftest
-        # "installability"). A non-object entry is refused too, never skipped.
-        if "findings" not in verdict:
-            problem = "findings absent"
-        elif not isinstance(findings, list):
-            problem = f"findings is {_json_type(findings)}"
-        else:
-            problem = next((f"findings has an entry of type {_json_type(f)}" for f in findings
-                            if not isinstance(f, dict)), None)
-        if problem:
-            sys.stderr.write(f"   broker verdict malformed: {problem}, expected a list of "
-                             "finding objects\n")
-            return 1
-    except (OSError, ValueError, AttributeError) as e:
-        sys.stderr.write(f"   unmatched findings: unreadable ({e})\n")
-        return 1
-    marked = [f for f in findings if f.get("unmatched_file") is True]
-    wrong = sorted({f["file"] for f in marked if isinstance(f.get("file"), str)
-                    and f["file"] in supplied})
-    if wrong:
-        sys.stderr.write(f"   broker marked a finding on {', '.join(wrong)} as naming no "
-                         "supplied file, but this request supplied it: the verdict left it "
-                         "out, so it cannot be trusted\n")
-        return 1
-    stale = sum(1 for f in findings if f.get("unmatched_file") is not True
-                and not (isinstance(f.get("file"), str) and f["file"] in supplied))
-    if stale:
-        sys.stderr.write(f"   NOTE: {stale} finding(s) name no supplied file but are unmarked "
-                         "and counted: the broker predates CLAUDE.md 4.8\n")
-    if not marked:
-        return 0
-    sys.stderr.write(f"   unmatched findings: {len(marked)}, shown apart and not counted\n")
-    sys.stdout.write(
-        f"\n> **Not counted toward the verdict**: {len(marked)} finding(s) name no file this "
-        "review was given (neither a changed file nor a dependent), so they cannot describe "
-        "what this change did. Shown so nothing the model said is hidden:\n>\n"
-        + "\n".join(f"> - `{_one_line(f.get('file'))}` — {_one_line(f.get('severity'))} / "
-                     f"{_one_line(f.get('category'))}: {_one_line(f.get('summary'))}"
-                     for f in marked) + "\n")
-    return 0
-
-
 def main() -> int:
     args = sys.argv[1:]
     if args and args[0] == "--jsonl-digest":
         return ledger_digest_cli(args[1:])
-    if args and args[0] == "--not-applicable":
-        return not_applicable_cli(args[1:])
-    if args and args[0] == "--unmatched":
-        return unmatched_cli(args[1:])
     as_json = "--json" in args
     declare_generated = "--declare-generated" in args
     args = [a for a in args if a not in ("--json", "--declare-generated")]
+    # Any other option is a usage error, never a path to sweep. An older review-pr.sh still
+    # sends the verdict judges' modes here, and a sweep that exits 0 on them would let that
+    # gate accept the sweep's output as a judgement (docs/changes/2026-11-13-gate-judge-kit-file).
+    if args and args[0].startswith("--") and args[0] != "--changed-from":
+        sys.stderr.write(f"unknown option {args[0]}; the verdict judges are bin/gate-judge.py\n")
+        return 2
     root = repo_root()
 
     base = None
