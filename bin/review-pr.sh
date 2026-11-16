@@ -96,7 +96,33 @@ if [ "$POST" -eq 1 ] && [ -z "$FT" ]; then
 fi
 
 HEAD_SHA=$(git rev-parse HEAD)
-echo "── reviewing $REPO PR #$PR at ${HEAD_SHA:0:8} (base $BASE)"
+# The base is resolved ONCE, by full ref, to a commit id; nothing below gives git the short
+# name. git reads a short name as a tag before a branch, and `git fetch origin main:main`
+# writes the remote's TAG named main into the local branch, so a tag called like the base
+# would supply the standards and the diff base. Remote-tracking first: actions/checkout
+# writes it by full refspec, while the local branch is whatever a workflow's fetch wrote
+# (docs/changes/2026-11-15-base-full-refs).
+case "$BASE" in
+  refs/heads/*|refs/remotes/*) _cands=("$BASE") ;;
+  *) _cands=("refs/remotes/origin/$BASE" "refs/heads/$BASE") ;;
+esac
+BASE_REF=""; BASE_SHA=""
+for _r in "${_cands[@]}"; do
+  # show-ref --verify takes the name as an exact ref. rev-parse alone would not: for a
+  # full ref that is absent it goes on to try refs/tags/<that name>, so a tag called
+  # refs/remotes/origin/main would fill the gap; it also accepts suffixes such as ~1.
+  if git show-ref --verify -q "$_r" && _s=$(git rev-parse --verify -q "$_r^{commit}"); then
+    BASE_REF="$_r"; BASE_SHA="$_s"; break
+  fi
+done
+[ -n "$BASE_SHA" ] || die "base '$BASE' is not a branch here (tried ${_cands[*]}) — refusing to let git guess what a short name means"
+echo "── reviewing $REPO PR #$PR at ${HEAD_SHA:0:8} (base $BASE = $BASE_REF @ ${BASE_SHA:0:8})"
+# Routine in a hand run with a stale local branch; in CI it is the trace of a base fetch
+# that took a tag. Said, never refused: the local branch is not read.
+if [ "$BASE_REF" = "refs/remotes/origin/$BASE" ] && git show-ref --verify -q "refs/heads/$BASE" \
+  && _l=$(git rev-parse --verify -q "refs/heads/$BASE^{commit}") && [ "$_l" != "$BASE_SHA" ]; then
+  echo "   note: refs/heads/$BASE is at ${_l:0:8}, not the base; the review reads $BASE_REF"
+fi
 
 # ---- 1. changed files. An empty diff is UNKNOWN, never a pass. --------------------
 # NOT `git diff --name-only`: for a detected rename that prints only the DESTINATION,
@@ -137,7 +163,7 @@ echo "── reviewing $REPO PR #$PR at ${HEAD_SHA:0:8} (base $BASE)"
 # mid-record checks below cannot see that, and blast-radius.py's own diff only catches a
 # failure that repeats (viceroy #28; sovereign-forge PR #130).
 _NS=$(mktemp)
-git diff --name-status -z -M -C -l0 "$BASE...HEAD" > "$_NS" \
+git diff --name-status -z -M -C -l0 "$BASE_SHA...HEAD" > "$_NS" \
   || die "git diff --name-status failed — refusing to review a file list that may be partial"
 CHANGED=()
 CHANGED_STATUS=()
@@ -246,7 +272,7 @@ for _i in "${!CHANGED[@]}"; do
       ;;
   esac
   if [ "$_paired" -eq 1 ]; then
-    git diff "$BASE...HEAD" -- "$_f" > "$_GT"
+    git diff "$BASE_SHA...HEAD" -- "$_f" > "$_GT"
     GENERATED+=("$_f")
     GENERATED_SRC+=("$_src")
     GENERATED_BYTES+=("$(wc -c < "$_GT" | tr -d '[:space:]')")
@@ -289,7 +315,7 @@ printf '{"skipped": [], "digests": []}' > "$LEDGER_PLAN"
 for _f in "${CHANGED[@]}"; do
   case "$_f" in *.jsonl)
     for _i in "${!CHANGED[@]}"; do printf '%s\0%s\0' "${CHANGED[$_i]}" "${CHANGED_STATUS[$_i]}"; done \
-      | "${GATE_BIN:-bin}/blast-radius.py" --jsonl-digest "$BASE" "$HEAD_SHA" "$LEDGER_DECL" > "$LEDGER_PLAN" \
+      | "${GATE_BIN:-bin}/blast-radius.py" --jsonl-digest "$BASE_SHA" "$HEAD_SHA" "$LEDGER_DECL" > "$LEDGER_PLAN" \
       || die "blast-radius.py --jsonl-digest failed — which ledgers were digested is UNKNOWN, refusing"
     break ;;
   esac
@@ -324,7 +350,7 @@ RENDERER="${GATE_BIN:-bin}/gate-comment.jq"
 # after the base ref and so ignores it, where a leading unknown flag would be taken for
 # a file. It tells the resolver this gate can disclose an exclusion (see the
 # generated_excluded block below); without it the resolver excludes nothing.
-BR_JSON=$("${GATE_BIN:-bin}/blast-radius.py" --json --changed-from "$BASE" --declare-generated) \
+BR_JSON=$("${GATE_BIN:-bin}/blast-radius.py" --json --changed-from "$BASE_SHA" --declare-generated) \
   || die "blast-radius resolver failed its positive control — dependency scan is UNKNOWN, not empty"
 BR_COUNT=$(echo "$BR_JSON" | jq '.blast_radius | length')
 BR_SCANNED=$(echo "$BR_JSON" | jq '.files_scanned')
@@ -440,7 +466,7 @@ STANDARDS_END="${STANDARDS_END:-^## 4\\.}"
 # requirement and get an all-clear. A blank line, the next bullet, or the end marker
 # closes a bullet. Repos whose bullets are already one line (this one, mcp-techkb,
 # viceroy) are unaffected: measured, their extraction is byte-identical either way.
-_STD_SRC=$(git show "$BASE:CLAUDE.md" 2>/dev/null) \
+_STD_SRC=$(git show "$BASE_SHA:CLAUDE.md" 2>/dev/null) \
   || die "base $BASE has no CLAUDE.md — a bootstrap PR is merged by James in the UI"
 STANDARDS=$(printf '%s\n' "$_STD_SRC" \
             | awk -v b="$STANDARDS_BEGIN" -v e="$STANDARDS_END" '
@@ -494,7 +520,7 @@ DIFF_BYTES=0
       jq -j --argjson i "$_li" '.digests[$i].text' "$LEDGER_PLAN" > "$DTMP" \
         || die "$f: its ledger digest could not be read from the plan"
     else
-      git diff "$BASE...HEAD" -- "$f" > "$DTMP"
+      git diff "$BASE_SHA...HEAD" -- "$f" > "$DTMP"
     fi
     fsz=$(wc -c < "$DTMP" | tr -d '[:space:]')
     if [ -n "$_li" ] && [ "$fsz" -gt "$DIFF_CAP" ]; then
@@ -802,7 +828,7 @@ if [ "$DELETED_UNREAD" -eq 0 ]; then
           BINARY_UNREAD=$_short
           while IFS= read -r _p; do
             _k=0; for _c in "${CHANGED[@]}"; do [ "$_c" = "$_p" ] && _k=1 && break; done
-            _d=$(git diff "$BASE...$HEAD_SHA" -- ":(literal)$_p" 2>/dev/null)
+            _d=$(git diff "$BASE_SHA...$HEAD_SHA" -- ":(literal)$_p" 2>/dev/null)
             { printf '%s\n' "$_d" | grep -q '^Binary files ' && ! printf '%s\n' "$_d" | grep -qE '^(@@|\+|-)'; } || _k=0
             [ "$_k" -eq 1 ] || { BINARY_UNREAD=0; break; }
           done < <(printf '%s' "$_m" | jq -r '.[]')
@@ -873,7 +899,7 @@ DEP_JQ='if length == 1 and (.[0]|type) == "object"
 deps_only() {
   local _mb _i _f _base _head
   [ "${#CHANGED[@]}" -gt 0 ] || { echo "   not dependency-only: no changed paths"; return 1; }
-  _mb=$(git merge-base "$BASE" "$HEAD_SHA" 2>/dev/null) \
+  _mb=$(git merge-base "$BASE_SHA" "$HEAD_SHA" 2>/dev/null) \
     || { echo "   not dependency-only: no merge base with $BASE"; return 1; }
   for _i in "${!CHANGED[@]}"; do
     _f="${CHANGED[$_i]}"
