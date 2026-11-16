@@ -18,6 +18,9 @@ npm run package    # build + prebake + build:gs-capture + electron-builder --mac
 npm run package:win  # build + prebake + electron-builder --win (NSIS installer)
 ```
 
+**Windows packaging is proven only on a Windows machine** (the Alienware): run `npm run package:win`
+there, install, and launch. A build that passes on the Mac is not proof for win32.
+
 ## Codex review
 
 - **`codex review` runs one at a time, in the foreground.** Never start two in parallel and
