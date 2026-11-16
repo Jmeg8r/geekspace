@@ -24,7 +24,7 @@ const server = new McpServer(
   { name: "geekspace", version: "1.0.0" },
   {
     instructions:
-      "Operate James's Geekspace workspace (local Notion-style app). Call query_schema FIRST to learn databases, properties, and option values. Property values are passed BY NAME (e.g. {\"Status\": \"In progress\", \"Due\": \"2026-06-20\", \"Estimate (min)\": 60}). Dates are YYYY-MM-DD (calendar dates) or {start, end}. Relations take row ids from list_rows. Tasks with an estimate + due date are auto-scheduled onto the calendar; dependencies (Blocked by) delay blocked work. There are no delete tools — never promise deletion.",
+      "Operate James's Geekspace workspace (local Notion-style app). Call query_schema FIRST to learn databases, properties, and option values. Property values are passed BY NAME (e.g. {\"Status\": \"In progress\", \"Due\": \"2026-06-20\", \"Estimate (min)\": 60}). Dates are YYYY-MM-DD (calendar dates) or {start, end}. Relations take row ids from list_rows. Tasks with an estimate + due date are auto-scheduled onto the calendar; dependencies (Blocked by) delay blocked work. There are no delete tools — never promise deletion. To ground work in what was actually said or written, use list_meetings/get_meeting (AI meeting notes: summary, decisions, action items, transcript) and search_workspace (pages, rows, docs, Day Recorder transcripts, screenshot text).",
   }
 );
 
@@ -38,7 +38,10 @@ const fail = (message) => ({
 
 const READ_ONLY_TOOLS = new Set([
   "get_page", "list_rows", "my_tasks", "schedule_warnings", "list_templates",
+  "list_meetings", "get_meeting", "search_workspace",
 ]);
+const MEETINGS_DEFAULT_LIMIT = 20;
+const MEETINGS_MAX_LIMIT = 200;
 let schemaRead = false;
 
 function tool(name, description, shape, handler) {
@@ -394,6 +397,68 @@ tool(
       startDay: start,
     });
   }
+);
+
+// ---------- meetings + search (read-only context for specs and evals) ----------
+
+const isoOrNull = (ms) => (typeof ms === "number" ? new Date(ms).toISOString() : null);
+
+tool(
+  "list_meetings",
+  "List AI meeting notes, newest first: id, title, type, status, start/end time, duration, and the generated notes page id. Use get_meeting for the content.",
+  { limit: z.number().int().min(1).max(MEETINGS_MAX_LIMIT).default(MEETINGS_DEFAULT_LIMIT) },
+  async ({ limit }) => {
+    const meetings = await convex.query(api.meetings.list, {});
+    return meetings.slice(0, limit).map((m) => ({
+      meetingId: m._id,
+      title: m.title,
+      meetingType: m.meetingType ?? null,
+      status: m.status,
+      startedAt: isoOrNull(m.startedAt),
+      endedAt: isoOrNull(m.endedAt),
+      durationSec: m.durationSec ?? null,
+      notesPageId: m.pageId ?? null,
+    }));
+  }
+);
+
+tool(
+  "get_meeting",
+  "Get one meeting's notes: summary, key points, decisions, action items, and (unless includeTranscript is false) the full transcript.",
+  {
+    meetingId: z.string(),
+    includeTranscript: z.boolean().default(true).describe("Transcripts can be long; pass false for notes only"),
+  },
+  async ({ meetingId, includeTranscript }) => {
+    const m = await convex.query(api.meetings.get, { meetingId });
+    if (!m) throw new Error(`Meeting not found: ${meetingId}`);
+    // WHY an allowlist, not a spread: `get` also returns a signed audio URL and storage ids,
+    // which must not leave the machine through an agent.
+    const out = {
+      meetingId: m._id,
+      title: m.title,
+      meetingType: m.meetingType ?? null,
+      status: m.status,
+      startedAt: isoOrNull(m.startedAt),
+      endedAt: isoOrNull(m.endedAt),
+      durationSec: m.durationSec ?? null,
+      summary: m.summary ?? null,
+      keyPoints: m.keyPoints ?? [],
+      decisions: m.decisions ?? [],
+      actionItems: m.actionItems ?? [],
+      notesPageId: m.pageId ?? null,
+      error: m.error ?? null,
+    };
+    if (includeTranscript) out.transcript = m.transcript ?? null;
+    return out;
+  }
+);
+
+tool(
+  "search_workspace",
+  "Full-text search across pages, database rows, docs, Day Recorder transcripts, and screenshot OCR text. Returns ids and snippets; open pages with get_page and meetings with get_meeting.",
+  { query: z.string().trim().min(1) },
+  async ({ query }) => convex.query(api.search.searchAll, { q: query })
 );
 
 const transport = new StdioServerTransport();
